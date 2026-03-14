@@ -41,9 +41,7 @@ class Researcher:
         """Issue queries, fetch pages, and return de-duplicated source documents."""
         raise NotImplementedError
 
-    async def _synthesise(
-        self, sources: list[dict[str, str]], topic: str
-    ) -> str:
+    async def _synthesise(self, sources: list[dict[str, str]], topic: str) -> str:
         """Merge content across sources into a structured, logically organised text."""
         raise NotImplementedError
 

@@ -44,8 +44,6 @@ class ServerSettings(BaseSettings):
     log_level: LogLevel = LogLevel.INFO
 
 
-
-
 class LibrarianConfig(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)

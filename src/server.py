@@ -46,5 +46,3 @@ async def library_research(params: ResearchInput) -> ResearchOutput:
 async def start_server(config: LibrarianConfig) -> None:
     """Initialise services, connect to the database, and start the MCP server."""
     raise NotImplementedError
-
-

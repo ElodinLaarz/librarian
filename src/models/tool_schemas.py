@@ -5,6 +5,7 @@ from src.models.tome import Tome
 
 # ── library.search ──────────────────────────────────────────────────
 
+
 class SearchInput(BaseModel):
     query: str = Field(..., max_length=2000)
     top_k: int = Field(default=5, ge=1, le=20)
@@ -21,6 +22,7 @@ class SearchOutput(BaseModel):
 
 
 # ── library.ingest ──────────────────────────────────────────────────
+
 
 class IngestInput(BaseModel):
     content: str
@@ -42,6 +44,7 @@ class IngestOutput(BaseModel):
 
 
 # ── library.research ────────────────────────────────────────────────
+
 
 class ResearchInput(BaseModel):
     topic: str
