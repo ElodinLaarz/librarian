@@ -17,5 +17,5 @@ class ResearchJob(BaseModel):
     queries: list[str] = Field(default_factory=list)
     tome_ids: list[str] = Field(default_factory=list)
     error: str | None = None
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
