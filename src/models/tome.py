@@ -20,8 +20,8 @@ class Tome(BaseModel):
     source_type: Literal["agent_input", "researcher", "manual"]
     confidence: float = Field(..., ge=0.0, le=1.0)
     embedding: list[float]
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     version: int = 1
     superseded_by: str | None = None
     research_job: str | None = None
