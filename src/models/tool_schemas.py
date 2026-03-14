@@ -1,10 +1,10 @@
 from pydantic import BaseModel, Field
-
 from src.models.enums import IngestStatus, JobStatus, ResearchDepth
 from src.models.tome import Tome
 
 
 # ── library.search ──────────────────────────────────────────────────
+
 
 class SearchInput(BaseModel):
     query: str = Field(..., max_length=2000)
@@ -22,6 +22,7 @@ class SearchOutput(BaseModel):
 
 
 # ── library.ingest ──────────────────────────────────────────────────
+
 
 class IngestInput(BaseModel):
     content: str
@@ -43,6 +44,7 @@ class IngestOutput(BaseModel):
 
 
 # ── library.research ────────────────────────────────────────────────
+
 
 class ResearchInput(BaseModel):
     topic: str

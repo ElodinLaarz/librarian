@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from src.models.tome import Tome
 
@@ -17,7 +18,7 @@ class TomeRepository(ABC):
         ...
 
     @abstractmethod
-    async def update(self, tome_id: str, updates: dict) -> bool:
+    async def update(self, tome_id: str, updates: dict[str, Any]) -> bool:
         """Partially update a Tome by ID. Returns True if a document was modified."""
         ...
 

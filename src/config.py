@@ -44,8 +44,6 @@ class ServerSettings(BaseSettings):
     log_level: LogLevel = LogLevel.INFO
 
 
-
-
 class LibrarianConfig(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
@@ -57,4 +55,4 @@ class LibrarianConfig(BaseSettings):
     @classmethod
     def from_yaml(cls, path: Path) -> "LibrarianConfig":
         """Load configuration from a YAML file, with env-var overrides."""
-        ...
+        raise NotImplementedError

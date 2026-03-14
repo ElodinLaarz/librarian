@@ -28,16 +28,12 @@ class JobRepository(ABC):
         ...
 
     @abstractmethod
-    async def set_completed(
-        self, job_id: str, tome_ids: list[str], finished_at: datetime
-    ) -> None:
+    async def set_completed(self, job_id: str, tome_ids: list[str], finished_at: datetime) -> None:
         """Mark a job as completed with its produced Tome IDs."""
         ...
 
     @abstractmethod
-    async def set_failed(
-        self, job_id: str, error: str, finished_at: datetime
-    ) -> None:
+    async def set_failed(self, job_id: str, error: str, finished_at: datetime) -> None:
         """Mark a job as failed with an error message."""
         ...
 

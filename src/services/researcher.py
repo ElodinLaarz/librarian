@@ -25,28 +25,26 @@ class Researcher:
 
     async def research(self, params: ResearchInput) -> ResearchOutput:
         """Execute the full research pipeline: plan -> search -> extract -> synthesise -> ingest."""
-        ...
+        raise NotImplementedError
 
     async def poll_job(self, job_id: str) -> ResearchOutput:
         """Check the status of an async research job and return results if complete."""
-        ...
+        raise NotImplementedError
 
     async def _plan_queries(self, topic: str, context: str | None) -> list[str]:
         """Generate 3-6 focused search queries covering different facets of the topic."""
-        ...
+        raise NotImplementedError
 
     async def _search_and_collect(
         self, queries: list[str], max_sources_per_query: int
     ) -> list[dict[str, str]]:
         """Issue queries, fetch pages, and return de-duplicated source documents."""
-        ...
+        raise NotImplementedError
 
-    async def _synthesise(
-        self, sources: list[dict[str, str]], topic: str
-    ) -> str:
+    async def _synthesise(self, sources: list[dict[str, str]], topic: str) -> str:
         """Merge content across sources into a structured, logically organised text."""
-        ...
+        raise NotImplementedError
 
     def _source_count_for_depth(self, depth: str) -> int:
         """Return the number of sources to consult based on depth setting."""
-        ...
+        raise NotImplementedError
