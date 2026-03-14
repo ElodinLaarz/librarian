@@ -30,40 +30,19 @@ def _build_services(config: LibrarianConfig) -> dict:
 
 
 @mcp.tool()
-async def library_search(
-    query: str,
-    top_k: int = 5,
-    category: str | None = None,
-    min_confidence: float = 0.5,
-    include_summary: bool = False,
-) -> SearchOutput:
+async def library_search(params: SearchInput) -> SearchOutput:
     """Search the library for relevant Tomes using semantic vector search."""
     ...
 
 
 @mcp.tool()
-async def library_ingest(
-    content: str,
-    title: str | None = None,
-    category: str | None = None,
-    tags: list[str] | None = None,
-    source_url: str | None = None,
-    skip_verify: bool = False,
-    allow_update: bool = True,
-) -> IngestOutput:
+async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
     ...
 
 
 @mcp.tool()
-async def library_research(
-    topic: str,
-    context: str | None = None,
-    depth: str = "standard",
-    max_tomes: int = 10,
-    category: str | None = None,
-    async_mode: bool = False,
-) -> ResearchOutput:
+async def library_research(params: ResearchInput) -> ResearchOutput:
     """Dispatch a Researcher sub-agent to search the web and create new Tomes."""
     ...
 
