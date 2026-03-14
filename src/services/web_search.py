@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from pydantic import BaseModel
 
-@dataclass
-class WebSearchResult:
+
+class WebSearchResult(BaseModel):
     title: str
     url: str
     snippet: str

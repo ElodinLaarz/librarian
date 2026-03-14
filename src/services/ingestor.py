@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.config import LibrarianConfig
 from src.models.enums import SourceType
@@ -31,7 +31,7 @@ class Ingestor:
         category, tags = self._classify_and_tag(blob)
         title, summary = self._generate_title_and_summary(blob)
         embedding = await self._embedding_service.embed(blob)
-        timestamp = datetime.now(tz=timezone.utc)
+        timestamp = datetime.now(tz=UTC)
         tome = Tome(
             id=uuid.uuid4(),
             content=blob,

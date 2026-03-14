@@ -33,3 +33,4 @@ class EmbeddingService(ABC):
 
     def _cache_key(self, text: str) -> str:
         """Compute SHA-256 hash of text for cache lookup."""
+        raise NotImplementedError

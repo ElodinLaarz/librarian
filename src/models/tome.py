@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import numpy as np
@@ -20,4 +20,4 @@ class Tome(BaseModel):
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
     embedding: np.ndarray
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

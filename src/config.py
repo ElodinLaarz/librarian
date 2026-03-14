@@ -31,13 +31,6 @@ class VerificationSettings(BaseSettings):
     store_threshold: float = 0.7
 
 
-class ResearcherSettings(BaseSettings):
-    default_depth: ResearchDepth = ResearchDepth.STANDARD
-    max_tomes_per_run: int = 10
-    max_sources_per_query: int = 3
-    async_default: bool = False
-
-
 class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
