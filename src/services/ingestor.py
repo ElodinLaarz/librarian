@@ -57,6 +57,12 @@ class Ingestor:
         self, chunk: str, category_hint: str | None = None
     ) -> tuple[str, list[str]]:
         """Auto-classify into a category and extract topic tags."""
+        raise NotImplementedError
 
     async def _generate_title_and_summary(self, chunk: str) -> tuple[str, str]:
         """Generate a short title and one-to-two sentence summary for a chunk."""
+        raise NotImplementedError
+
+    async def _dedup_and_store(self, tome: Tome, allow_update: bool) -> str:
+        """Check for near-duplicates; merge, skip, or insert accordingly. Returns the Tome ID."""
+        raise NotImplementedError

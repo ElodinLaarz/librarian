@@ -1,3 +1,7 @@
+# Personal AI assistant context files
+CLAUDE.md
+GEMINI.md
+
 # IDE
 .idea/
 *.iml
@@ -22,12 +26,14 @@ eggs/
 venv/
 ENV/
 env/
+.uv/
 
 # Environment / secrets
 .env
 .env.*
 *.pem
 credentials.json
+librarian.config.yaml
 
 # Distribution / packaging
 sdist/
@@ -41,9 +47,12 @@ htmlcov/
 .tox/
 .nox/
 
-# mypy / type checkers
+# Type checkers
 .mypy_cache/
 .pytype/
+
+# Ruff
+.ruff_cache/
 
 # OS
 .DS_Store

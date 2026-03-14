@@ -10,6 +10,7 @@ class DatabaseSettings(BaseSettings):
     uri: str = "localhost"
     database: str = "librarian"
     tomes_collection: str = "tomes"
+    jobs_collection: str = "research_jobs"
 
 
 class EmbeddingSettings(BaseSettings):
@@ -30,6 +31,13 @@ class VerificationSettings(BaseSettings):
     store_threshold: float = 0.7
 
 
+class ResearcherSettings(BaseSettings):
+    default_depth: ResearchDepth = ResearchDepth.STANDARD
+    max_tomes_per_run: int = 10
+    max_sources_per_query: int = 3
+    async_default: bool = False
+
+
 class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
@@ -46,3 +54,4 @@ class LibrarianConfig(BaseSettings):
     @classmethod
     def from_yaml(cls, path: Path) -> "LibrarianConfig":
         """Load configuration from a YAML file, with env-var overrides."""
+        raise NotImplementedError
