@@ -34,7 +34,6 @@ packages = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src"]
 
 [tool.ruff.lint]
 select = [

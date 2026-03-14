@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field
-
 from src.models.enums import IngestStatus, JobStatus, ResearchDepth
 from src.models.tome import Tome
 
