@@ -12,7 +12,8 @@ mcp = FastMCP(
     "The Librarian",
     instructions=(
         "An intelligent knowledge management server. Use library_search to "
-        "find information and library_ingest to store new knowledge."
+        "find information, library_ingest to store new knowledge, and "
+        "library_research to discover knowledge from the web."
     ),
 )
 
@@ -31,6 +32,7 @@ async def library_search(params: SearchInput) -> SearchOutput:
 @mcp.tool()
 async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
+    raise NotImplementedError
 
 
 async def start_server(config: LibrarianConfig) -> None:

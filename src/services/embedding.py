@@ -30,7 +30,3 @@ class EmbeddingService(ABC):
         Returns from cache if the text has been embedded before.
         """
         ...
-
-    def _cache_key(self, text: str) -> str:
-        """Compute SHA-256 hash of text for cache lookup."""
-        raise NotImplementedError

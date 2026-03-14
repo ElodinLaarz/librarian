@@ -27,7 +27,8 @@ class Ingestor:
         self._tome_repo = tome_repo
 
     async def ingest(self, blob: str) -> list[Tome]:
-        """Run the full ingest pipeline: validate -> verify -> chunk -> embed -> dedup -> store."""
+        """Convert unstructured text into a structured knowledge Tome,
+        and save it in the collection."""
         category, tags = self._classify_and_tag(blob)
         title, summary = self._generate_title_and_summary(blob)
         embedding = await self._embedding_service.embed(blob)

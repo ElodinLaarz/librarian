@@ -18,7 +18,7 @@ class TomeRepository(ABC):
 
     @abstractmethod
     async def delete(self, tome_id: str) -> bool:
-        """Deletes a Tome by ID. Returns True if a document was modified."""
+        """Deletes a Tome by ID. Returns True if a document was deleted."""
         ...
 
     @abstractmethod
