@@ -1,0 +1,8 @@
+mcp
+pydantic
+pydantic-settings
+pyyaml
+langchain-text-splitters
+instructor
+trafilatura
+httpx
