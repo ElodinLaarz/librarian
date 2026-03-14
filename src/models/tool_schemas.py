@@ -60,4 +60,4 @@ class ResearchOutput(BaseModel):
     tomes: list[Tome]
     sources: list[str]
     query_count: int
-    status: str  # "completed" | "failed"
+    status: Literal["completed", "failed"]
