@@ -22,16 +22,16 @@ class SearchEngine:
 
     async def search(self, params: SearchInput) -> SearchOutput:
         """Execute the full search pipeline: embed -> vector search -> re-rank -> return."""
-        ...
+        raise NotImplementedError
 
     async def _embed_query(self, query: str) -> tuple[list[float], bool]:
         """Embed the query string. Returns (vector, from_cache)."""
-        ...
+        raise NotImplementedError
 
     def _rerank(
         self,
-        results: list[tuple],
+        results: list[tuple[object, ...]],
         recency_boost: float = 0.1,
-    ) -> list[tuple]:
+    ) -> list[tuple[object, ...]]:
         """Re-rank results by blending similarity score with recency and confidence."""
-        ...
+        raise NotImplementedError

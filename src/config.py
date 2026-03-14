@@ -57,4 +57,4 @@ class LibrarianConfig(BaseSettings):
     @classmethod
     def from_yaml(cls, path: Path) -> "LibrarianConfig":
         """Load configuration from a YAML file, with env-var overrides."""
-        ...
+        raise NotImplementedError
