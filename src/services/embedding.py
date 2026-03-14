@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+import numpy as np
+
 from src.config import EmbeddingSettings
 
 
@@ -22,23 +24,12 @@ class EmbeddingService(ABC):
         ...
 
     @abstractmethod
-    async def embed(self, text: str) -> list[float]:
+    async def embed(self, text: str) -> np.ndarray:
         """Produce a dense vector embedding for a single text string.
 
         Returns from cache if the text has been embedded before.
         """
         ...
 
-    @abstractmethod
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed multiple texts in a single call for throughput."""
-        ...
-
     def _cache_key(self, text: str) -> str:
         """Compute SHA-256 hash of text for cache lookup."""
-        ...
-
-    @property
-    def dimensions(self) -> int:
-        """Return the dimensionality of the active model's output vectors."""
-        return self._settings.dimensions

@@ -17,7 +17,7 @@ class TomeRepository(ABC):
         ...
 
     @abstractmethod
-    async def update(self, tome_id: str, updates: dict) -> bool:
+    async def delete(self, tome_id: str) -> bool:
         """Partially update a Tome by ID. Returns True if a document was modified."""
         ...
 
@@ -27,29 +27,16 @@ class TomeRepository(ABC):
         ...
 
     @abstractmethod
-    async def vector_search(
+    async def search(
         self,
-        embedding: list[float],
+        query: str,
         top_k: int = 5,
-        category: str | None = None,
         min_confidence: float = 0.5,
     ) -> list[tuple[Tome, float]]:
         """Perform ANN vector search. Returns (Tome, score) pairs sorted by similarity."""
         ...
 
     @abstractmethod
-    async def find_near_duplicates(
-        self, embedding: list[float], threshold: float = 0.95
-    ) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold."""
-        ...
-
-    @abstractmethod
-    async def find_by_research_job(self, job_id: str) -> list[Tome]:
-        """Retrieve all Tomes produced by a specific research job."""
-        ...
-
-    @abstractmethod
-    async def supersede(self, old_id: str, new_id: str) -> None:
-        """Mark an old Tome as superseded by a new one."""
         ...
