@@ -57,7 +57,7 @@ ______________________________________________________________________
 - [ ] **Claim Extraction:** Create a prompt and utility function that uses a local LLM (via Ollama or an external API) to extract 3–7 key factual claims from a text chunk.
 - [ ] **Web Search Verification:** Write logic to take each extracted claim, search the web (using a dummy client or actual Brave API if available), and score the claim as `supported`, `contradicted`, or `unverifiable`.
 - [ ] **Confidence Calculation:** Compute an aggregate confidence score (0.0 - 1.0) based on the claim scores.
-- [ ] **Integrate Verifier:** Wire the Verifier into the `library.ingest` flow before chunking/embedding. Reject content if confidence \< 0.3. Add an offline bypass mode that assigns a `0.6` score.
+- [ ] **Integrate Verifier:** Wire the Verifier into the `library.ingest` flow before chunking/embedding. Reject content if confidence < 0.3. Add an offline bypass mode that assigns a `0.6` score.
 
 ______________________________________________________________________
 

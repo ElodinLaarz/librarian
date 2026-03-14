@@ -4,12 +4,12 @@
 
 *An Intelligent Knowledge Management MCP*
 
-|              |                              |
+| | |
 | ------------ | ---------------------------- |
-| **Version**  | 1.0 (Draft)                  |
-| **Date**     | March 2026                   |
+| **Version** | 1.0 (Draft) |
+| **Date** | March 2026 |
 | **Protocol** | Model Context Protocol (MCP) |
-| **Status**   | Design Phase                 |
+| **Status** | Design Phase |
 
 ______________________________________________________________________
 
@@ -37,10 +37,10 @@ The Librarian is an MCP (Model Context Protocol) server that provides AI agents 
 
 The system exposes three primary tools to any MCP-compatible agent:
 
-| Tool               | Purpose                                                                    | Returns                           |
+| Tool | Purpose | Returns |
 | ------------------ | -------------------------------------------------------------------------- | --------------------------------- |
-| `library.search`   | Retrieve relevant Tomes using semantic vector search                       | Ranked list of Tome documents     |
-| `library.ingest`   | Feed new knowledge into the library; validates, chunks, and stores it      | Ingested Tome IDs and summary     |
+| `library.search` | Retrieve relevant Tomes using semantic vector search | Ranked list of Tome documents |
+| `library.ingest` | Feed new knowledge into the library; validates, chunks, and stores it | Ingested Tome IDs and summary |
 | `library.research` | Dispatch a Researcher agent to collect information on a topic from the web | Newly created Tomes for the topic |
 
 The underlying store is MongoDB (with Atlas-compatible Vector Search), paired with a locally running embedding model for offline, low-latency semantic similarity. Internet connectivity is used optionally during ingestion (for truth-checking) and during research dispatches.
@@ -114,23 +114,23 @@ ______________________________________________________________________
 
 Every piece of knowledge stored in The Librarian is a **Tome** — a compact, single-topic document stored in the `tomes` collection. Tomes are intentionally small (100–400 words) to keep retrieval precise.
 
-| Field           | Type       | Required | Description                                           |
+| Field | Type | Required | Description |
 | --------------- | ---------- | -------- | ----------------------------------------------------- |
-| `_id`           | ObjectId   | Yes      | MongoDB auto-generated unique identifier              |
-| `title`         | string     | Yes      | Short descriptive title (max 120 chars)               |
-| `content`       | string     | Yes      | Full text body (100–400 words recommended)            |
-| `summary`       | string     | Yes      | One-to-two sentence summary for quick scanning        |
-| `category`      | string     | Yes      | High-level domain category (e.g. `science`, `code`)   |
-| `tags`          | string\[\] | No       | Freeform topic tags for keyword filtering             |
-| `source_url`    | string     | No       | Origin URL if sourced from the web                    |
-| `source_type`   | string     | Yes      | One of: `agent_input`, `researcher`, `manual`         |
-| `confidence`    | number     | Yes      | Truthiness confidence score 0.0–1.0 from the Verifier |
-| `embedding`     | number\[\] | Yes      | Dense vector embedding of the content (e.g. 768 dims) |
-| `created_at`    | ISODate    | Yes      | Timestamp when the Tome was first created             |
-| `updated_at`    | ISODate    | Yes      | Timestamp of last modification                        |
-| `version`       | number     | Yes      | Incremented each time content is updated              |
-| `superseded_by` | ObjectId   | No       | Points to successor if this Tome was replaced         |
-| `research_job`  | string     | No       | ID of the Researcher job that produced this Tome      |
+| `_id` | ObjectId | Yes | MongoDB auto-generated unique identifier |
+| `title` | string | Yes | Short descriptive title (max 120 chars) |
+| `content` | string | Yes | Full text body (100–400 words recommended) |
+| `summary` | string | Yes | One-to-two sentence summary for quick scanning |
+| `category` | string | Yes | High-level domain category (e.g. `science`, `code`) |
+| `tags` | string[] | No | Freeform topic tags for keyword filtering |
+| `source_url` | string | No | Origin URL if sourced from the web |
+| `source_type` | string | Yes | One of: `agent_input`, `researcher`, `manual` |
+| `confidence` | number | Yes | Truthiness confidence score 0.0–1.0 from the Verifier |
+| `embedding` | number[] | Yes | Dense vector embedding of the content (e.g. 768 dims) |
+| `created_at` | ISODate | Yes | Timestamp when the Tome was first created |
+| `updated_at` | ISODate | Yes | Timestamp of last modification |
+| `version` | number | Yes | Incremented each time content is updated |
+| `superseded_by` | ObjectId | No | Points to successor if this Tome was replaced |
+| `research_job` | string | No | ID of the Researcher job that produced this Tome |
 
 ### 4.2 MongoDB Indexes
 
@@ -143,17 +143,17 @@ Every piece of knowledge stored in The Librarian is a **Tome** — a compact, si
 
 Tracks the state and output of each Researcher dispatch, stored in the `research_jobs` collection.
 
-| Field         | Type         | Required | Description                                         |
+| Field | Type | Required | Description |
 | ------------- | ------------ | -------- | --------------------------------------------------- |
-| `_id`         | ObjectId     | Yes      | Unique job identifier                               |
-| `topic`       | string       | Yes      | The topic string passed to the Researcher           |
-| `context`     | string       | No       | Optional agent-supplied context                     |
-| `status`      | string       | Yes      | One of: `pending`, `running`, `completed`, `failed` |
-| `queries`     | string\[\]   | No       | Search queries issued during the run                |
-| `tome_ids`    | ObjectId\[\] | No       | IDs of Tomes created by this job                    |
-| `error`       | string       | No       | Error message if status is `failed`                 |
-| `started_at`  | ISODate      | Yes      | When the job began executing                        |
-| `finished_at` | ISODate      | No       | When the job completed or failed                    |
+| `_id` | ObjectId | Yes | Unique job identifier |
+| `topic` | string | Yes | The topic string passed to the Researcher |
+| `context` | string | No | Optional agent-supplied context |
+| `status` | string | Yes | One of: `pending`, `running`, `completed`, `failed` |
+| `queries` | string[] | No | Search queries issued during the run |
+| `tome_ids` | ObjectId[] | No | IDs of Tomes created by this job |
+| `error` | string | No | Error message if status is `failed` |
+| `started_at` | ISODate | Yes | When the job began executing |
+| `finished_at` | ISODate | No | When the job completed or failed |
 
 ______________________________________________________________________
 
@@ -167,22 +167,22 @@ Converts a natural-language query to a vector embedding and retrieves the most s
 
 **Input Parameters**
 
-| Parameter         | Type    | Description                                                        |
+| Parameter | Type | Description |
 | ----------------- | ------- | ------------------------------------------------------------------ |
-| `query`           | string  | Natural language question or topic (required). Max 2000 chars.     |
-| `top_k`           | number  | Number of results to return. Default 5, max 20.                    |
-| `category`        | string  | Optional: restrict results to a specific category.                 |
-| `min_confidence`  | number  | Minimum confidence score. Default 0.5.                             |
+| `query` | string | Natural language question or topic (required). Max 2000 chars. |
+| `top_k` | number | Number of results to return. Default 5, max 20. |
+| `category` | string | Optional: restrict results to a specific category. |
+| `min_confidence` | number | Minimum confidence score. Default 0.5. |
 | `include_summary` | boolean | Return only summary field rather than full content. Default false. |
 
 **Output Schema**
 
-| Field        | Type       | Description                                                    |
+| Field | Type | Description |
 | ------------ | ---------- | -------------------------------------------------------------- |
-| `tomes`      | Tome\[\]   | Matching Tome documents, sorted by similarity score descending |
-| `scores`     | number\[\] | Cosine similarity scores corresponding to each Tome            |
-| `query_id`   | string     | Unique identifier for this search request                      |
-| `from_cache` | boolean    | Whether the result was served from the embedding cache         |
+| `tomes` | Tome[] | Matching Tome documents, sorted by similarity score descending |
+| `scores` | number[] | Cosine similarity scores corresponding to each Tome |
+| `query_id` | string | Unique identifier for this search request |
+| `from_cache` | boolean | Whether the result was served from the embedding cache |
 
 **Processing Flow**
 
@@ -197,30 +197,30 @@ ______________________________________________________________________
 
 Accepts a raw knowledge payload, validates its truthfulness against web sources, decomposes it into one or more focused Tomes, embeds each, and persists them. Call this whenever the agent learns something new that should be remembered.
 
-> **Warning:** Content that fails verification (confidence \< 0.3) will be rejected by default. Set `skip_verify: true` to bypass — useful for agent-generated internal notes or fictional world-building where web truth-checking is not applicable.
+> **Warning:** Content that fails verification (confidence < 0.3) will be rejected by default. Set `skip_verify: true` to bypass — useful for agent-generated internal notes or fictional world-building where web truth-checking is not applicable.
 
 **Input Parameters**
 
-| Parameter      | Type       | Description                                                                          |
+| Parameter | Type | Description |
 | -------------- | ---------- | ------------------------------------------------------------------------------------ |
-| `content`      | string     | The raw knowledge text to ingest (required). Chunked at ~400 words.                  |
-| `title`        | string     | Optional title (auto-generated if omitted).                                          |
-| `category`     | string     | Domain category hint. Auto-classified if omitted.                                    |
-| `tags`         | string\[\] | Optional topic tags. Merged with auto-detected tags.                                 |
-| `source_url`   | string     | URL where this content originated, if known.                                         |
-| `skip_verify`  | boolean    | Bypass the Verifier step. Default false.                                             |
-| `allow_update` | boolean    | Update an existing very-similar Tome rather than creating a duplicate. Default true. |
+| `content` | string | The raw knowledge text to ingest (required). Chunked at ~400 words. |
+| `title` | string | Optional title (auto-generated if omitted). |
+| `category` | string | Domain category hint. Auto-classified if omitted. |
+| `tags` | string[] | Optional topic tags. Merged with auto-detected tags. |
+| `source_url` | string | URL where this content originated, if known. |
+| `skip_verify` | boolean | Bypass the Verifier step. Default false. |
+| `allow_update` | boolean | Update an existing very-similar Tome rather than creating a duplicate. Default true. |
 
 **Output Schema**
 
-| Field           | Type       | Description                                |
+| Field | Type | Description |
 | --------------- | ---------- | ------------------------------------------ |
-| `tome_ids`      | string\[\] | IDs of all Tomes created or updated        |
-| `tomes`         | Tome\[\]   | Full Tome objects created during this call |
-| `confidence`    | number     | Overall verification confidence (0.0–1.0)  |
-| `chunks`        | number     | Number of Tomes the input was split into   |
-| `status`        | string     | One of: `stored`, `rejected`, `partial`    |
-| `reject_reason` | string     | Explanation if status is `rejected`        |
+| `tome_ids` | string[] | IDs of all Tomes created or updated |
+| `tomes` | Tome[] | Full Tome objects created during this call |
+| `confidence` | number | Overall verification confidence (0.0–1.0) |
+| `chunks` | number | Number of Tomes the input was split into |
+| `status` | string | One of: `stored`, `rejected`, `partial` |
+| `reject_reason` | string | Explanation if status is `rejected` |
 
 **Processing Flow**
 
@@ -241,25 +241,25 @@ Dispatches a Researcher sub-agent to independently search the web, synthesise fi
 
 **Input Parameters**
 
-| Parameter   | Type    | Description                                                                          |
+| Parameter | Type | Description |
 | ----------- | ------- | ------------------------------------------------------------------------------------ |
-| `topic`     | string  | Core subject to research (required). Be specific.                                    |
-| `context`   | string  | Optional context about what the agent needs to know.                                 |
-| `depth`     | string  | One of: `shallow` (3 sources), `standard` (6 sources, default), `deep` (12 sources). |
-| `max_tomes` | number  | Maximum Tomes to create per run. Default 10.                                         |
-| `category`  | string  | Optional category to assign to all produced Tomes.                                   |
-| `async`     | boolean | Return a `job_id` immediately without waiting. Default false.                        |
+| `topic` | string | Core subject to research (required). Be specific. |
+| `context` | string | Optional context about what the agent needs to know. |
+| `depth` | string | One of: `shallow` (3 sources), `standard` (6 sources, default), `deep` (12 sources). |
+| `max_tomes` | number | Maximum Tomes to create per run. Default 10. |
+| `category` | string | Optional category to assign to all produced Tomes. |
+| `async` | boolean | Return a `job_id` immediately without waiting. Default false. |
 
 **Output Schema**
 
-| Field         | Type       | Description                                         |
+| Field | Type | Description |
 | ------------- | ---------- | --------------------------------------------------- |
-| `job_id`      | string     | ID of the ResearchJob record created                |
-| `tome_ids`    | string\[\] | IDs of all Tomes created                            |
-| `tomes`       | Tome\[\]   | Full Tome objects produced, ready for immediate use |
-| `sources`     | string\[\] | URLs of web pages consulted                         |
-| `query_count` | number     | Number of individual search queries issued          |
-| `status`      | string     | `completed` or `failed`                             |
+| `job_id` | string | ID of the ResearchJob record created |
+| `tome_ids` | string[] | IDs of all Tomes created |
+| `tomes` | Tome[] | Full Tome objects produced, ready for immediate use |
+| `sources` | string[] | URLs of web pages consulted |
+| `query_count` | number | Number of individual search queries issued |
+| `status` | string | `completed` or `failed` |
 
 **Researcher Sub-Agent Flow**
 
@@ -274,12 +274,12 @@ ______________________________________________________________________
 
 ## 6. Embedding Strategy
 
-| Model                                       | Dimensions | Mode           | Best For                                           | Latency (CPU) |
+| Model | Dimensions | Mode | Best For | Latency (CPU) |
 | ------------------------------------------- | ---------- | -------------- | -------------------------------------------------- | ------------- |
-| `nomic-embed-text` (Ollama)                 | 768        | Local (Ollama) | Balanced quality & speed; recommended default      | ~30ms         |
-| `all-MiniLM-L6-v2` (sentence-transformers)  | 384        | Local (Python) | Pure Python; no Ollama required; lighter           | ~15ms         |
-| `all-mpnet-base-v2` (sentence-transformers) | 768        | Local (Python) | Higher quality; slower; better for dense knowledge | ~60ms         |
-| `text-embedding-3-small` (OpenAI)           | 1536       | Remote API     | Highest quality; requires API key and internet     | ~200ms        |
+| `nomic-embed-text` (Ollama) | 768 | Local (Ollama) | Balanced quality & speed; recommended default | ~30ms |
+| `all-MiniLM-L6-v2` (sentence-transformers) | 384 | Local (Python) | Pure Python; no Ollama required; lighter | ~15ms |
+| `all-mpnet-base-v2` (sentence-transformers) | 768 | Local (Python) | Higher quality; slower; better for dense knowledge | ~60ms |
+| `text-embedding-3-small` (OpenAI) | 1536 | Remote API | Highest quality; requires API key and internet | ~200ms |
 
 ### 6.1 Embedding Cache
 
@@ -389,20 +389,20 @@ ______________________________________________________________________
 
 ## 10. Technology Stack
 
-| Component           | Technology                          | Rationale                                                          |
+| Component | Technology | Rationale |
 | ------------------- | ----------------------------------- | ------------------------------------------------------------------ |
-| MCP Framework       | FastMCP (Python)                    | Native Python MCP server framework; minimal boilerplate            |
-| Database            | MongoDB 7.x (motor async driver)    | Flexible document model; built-in vector search via Atlas          |
-| Vector Index        | Atlas Vector Search / mongot        | ANN search on embedding field; cosine similarity                   |
-| Embedding (default) | nomic-embed-text via Ollama         | High-quality, locally run, zero API-cost embeddings                |
-| Embedding (alt)     | sentence-transformers (HuggingFace) | Pure Python fallback; no Ollama daemon required                    |
-| Chunking            | LangChain RecursiveTextSplitter     | Battle-tested sentence-boundary chunking with configurable overlap |
-| Claim Extraction    | Instructor + local LLM (Ollama)     | Structured output for claim extraction during verification         |
-| Web Search          | Brave Search API / Tavily / Serper  | Configurable; Brave preferred for privacy & cost                   |
-| HTML Extraction     | trafilatura                         | High-quality boilerplate removal for web content                   |
-| Config Management   | Pydantic Settings + YAML            | Type-safe config with env-var override support                     |
-| Containerisation    | Docker + Docker Compose             | One-command local setup including MongoDB and Ollama               |
-| Testing             | pytest + pytest-asyncio             | Async-native testing for motor and FastMCP interactions            |
+| MCP Framework | FastMCP (Python) | Native Python MCP server framework; minimal boilerplate |
+| Database | MongoDB 7.x (motor async driver) | Flexible document model; built-in vector search via Atlas |
+| Vector Index | Atlas Vector Search / mongot | ANN search on embedding field; cosine similarity |
+| Embedding (default) | nomic-embed-text via Ollama | High-quality, locally run, zero API-cost embeddings |
+| Embedding (alt) | sentence-transformers (HuggingFace) | Pure Python fallback; no Ollama daemon required |
+| Chunking | LangChain RecursiveTextSplitter | Battle-tested sentence-boundary chunking with configurable overlap |
+| Claim Extraction | Instructor + local LLM (Ollama) | Structured output for claim extraction during verification |
+| Web Search | Brave Search API / Tavily / Serper | Configurable; Brave preferred for privacy & cost |
+| HTML Extraction | trafilatura | High-quality boilerplate removal for web content |
+| Config Management | Pydantic Settings + YAML | Type-safe config with env-var override support |
+| Containerisation | Docker + Docker Compose | One-command local setup including MongoDB and Ollama |
+| Testing | pytest + pytest-asyncio | Async-native testing for motor and FastMCP interactions |
 
 ______________________________________________________________________
 
