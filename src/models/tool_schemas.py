@@ -1,8 +1,5 @@
-from pydantic import BaseModel
-from pydantic import Field
-from src.models.enums import IngestStatus
-from src.models.enums import JobStatus
-from src.models.enums import ResearchDepth
+from pydantic import BaseModel, Field
+from src.models.enums import IngestStatus, JobStatus, ResearchDepth
 from src.models.tome import Tome
 
 

@@ -49,6 +49,11 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 
+[tool.ruff.lint.per-file-ignores]
+# tool_schemas.py mixes third-party (pydantic) and first-party (src.models)
+# imports; ruff's isort misclassifies the section boundary in this layout.
+"src/models/tool_schemas.py" = ["I001"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
