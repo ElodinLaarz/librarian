@@ -48,7 +48,7 @@ class IngestOutput(BaseModel):
 class ResearchInput(BaseModel):
     topic: str
     context: str | None = None
-    depth: str = Field(default="standard")  # "shallow" | "standard" | "deep"
+    depth: Literal["shallow", "standard", "deep"] = Field(default="standard")
     max_tomes: int = Field(default=10, ge=1)
     category: str | None = None
     async_mode: bool = Field(default=False, alias="async")
