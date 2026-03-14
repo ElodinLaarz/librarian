@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings
 
 
 class DatabaseSettings(BaseSettings):
-    uri: str = "localhost"
+    host: str = "localhost"
     database: str = "librarian"
     tomes_collection: str = "tomes"
     jobs_collection: str = "research_jobs"
