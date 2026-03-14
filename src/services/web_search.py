@@ -4,8 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
-@dataclass
-class WebSearchResult:
+class WebSearchResult(BaseModel):
     title: str
     url: str
     snippet: str
