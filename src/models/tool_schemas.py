@@ -39,7 +39,7 @@ class IngestOutput(BaseModel):
     tomes: list[Tome]
     confidence: float
     chunks: int
-    status: str  # "stored" | "rejected" | "partial"
+    status: Literal["stored", "rejected", "partial"]
     reject_reason: str | None = None
 
 
