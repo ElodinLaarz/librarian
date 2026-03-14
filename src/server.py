@@ -22,12 +22,12 @@ def _build_services(config: LibrarianConfig) -> dict:
 
 
 @mcp.tool()
-async def library_search(query: SearchInput) -> SearchOutput:
+async def library_search(params: SearchInput) -> SearchOutput:
     """Search the library for relevant Tomes using semantic vector search."""
 
 
 @mcp.tool()
-async def library_ingest(blob: IngestInput) -> IngestOutput:
+async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
 
 
