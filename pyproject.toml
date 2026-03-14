@@ -50,6 +50,16 @@ known-first-party = ["librarian"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+# Third-party libraries without type stubs
+module = [
+    "fastmcp.*",
+    "motor.*",
+    "langchain_text_splitters.*",
+    "trafilatura.*",
+    "instructor.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
