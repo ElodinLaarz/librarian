@@ -23,7 +23,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.11
       - run: uv sync --extra dev
-      - run: uv run mypy .
+      - run: uv run mypy src
 
   test:
     runs-on: ubuntu-latest

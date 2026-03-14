@@ -7,15 +7,14 @@ name = "librarian"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "fastmcp",
-    "motor",
-    "pydantic",
-    "pydantic-settings",
-    "langchain-text-splitters",
-    "trafilatura",
-    "instructor",
-    "httpx",
-    "pyyaml",
+    "mcp==1.26.0",
+    "pydantic==2.12.5",
+    "pydantic-settings==2.13.1",
+    "pyyaml==6.0.3",
+    "langchain-text-splitters==1.1.1",
+    "instructor==1.14.5",
+    "trafilatura==2.0.0",
+    "httpx==0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +27,9 @@ dev = [
     "mypy",
     "pre-commit",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [tool.ruff]
 line-length = 100
@@ -45,7 +47,7 @@ select = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["librarian"]
+known-first-party = ["src"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -54,7 +56,7 @@ strict = true
 [[tool.mypy.overrides]]
 # Third-party libraries without type stubs
 module = [
-    "fastmcp.*",
+    "mcp.*",
     "motor.*",
     "langchain_text_splitters.*",
     "trafilatura.*",
