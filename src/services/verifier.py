@@ -7,8 +7,7 @@ from src.config import VerificationSettings
 from src.services.web_search import WebSearchClient
 
 
-@dataclass
-class ClaimResult:
+class ClaimResult(BaseModel):
     claim: str
     verdict: Literal["supported", "contradicted", "unverifiable"]
     evidence: str
