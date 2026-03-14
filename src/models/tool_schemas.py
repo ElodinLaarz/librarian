@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 from pydantic import BaseModel, Field
 
+from src.models.enums import IngestStatus, JobStatus, ResearchDepth
 from src.models.tome import Tome
 
 
@@ -39,7 +38,7 @@ class IngestOutput(BaseModel):
     tomes: list[Tome]
     confidence: float
     chunks: int
-    status: Literal["stored", "rejected", "partial"]
+    status: IngestStatus
     reject_reason: str | None = None
 
 
@@ -48,7 +47,7 @@ class IngestOutput(BaseModel):
 class ResearchInput(BaseModel):
     topic: str
     context: str | None = None
-    depth: Literal["shallow", "standard", "deep"] = Field(default="standard")
+    depth: ResearchDepth = ResearchDepth.STANDARD
     max_tomes: int = Field(default=10, ge=1)
     category: str | None = None
     async_mode: bool = Field(default=False, alias="async")
@@ -60,4 +59,4 @@ class ResearchOutput(BaseModel):
     tomes: list[Tome]
     sources: list[str]
     query_count: int
-    status: Literal["completed", "failed"]
+    status: JobStatus

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from mcp.server.fastmcp import FastMCP
 
 from src.config import LibrarianConfig
@@ -11,17 +9,15 @@ from src.models.tool_schemas import (
     SearchInput,
     SearchOutput,
 )
-from src.services.embedding import EmbeddingService
-from src.services.ingestor import Ingestor
-from src.services.researcher import Researcher
-from src.services.search import SearchEngine
-from src.services.verifier import Verifier
-from src.services.web_search import WebSearchClient
-from src.storage.database import DatabaseClient
-from src.storage.job_repository import JobRepository
-from src.storage.tome_repository import TomeRepository
 
-mcp = FastMCP("The Librarian")
+mcp = FastMCP(
+    "The Librarian",
+    instructions=(
+        "An intelligent knowledge management server. Use library_search to "
+        "find information, library_ingest to store new knowledge, and "
+        "library_research to discover knowledge from the web."
+    ),
+)
 
 
 def _build_services(config: LibrarianConfig) -> dict:
@@ -50,3 +46,5 @@ async def library_research(params: ResearchInput) -> ResearchOutput:
 async def start_server(config: LibrarianConfig) -> None:
     """Initialise services, connect to the database, and start the MCP server."""
     ...
+
+

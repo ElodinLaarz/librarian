@@ -1,14 +1,13 @@
-from __future__ import annotations
-
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from src.models.enums import LogLevel, ResearchDepth
+
 
 class DatabaseSettings(BaseSettings):
-    host: str = "localhost"
+    uri: str = "localhost"
     database: str = "librarian"
     tomes_collection: str = "tomes"
     jobs_collection: str = "research_jobs"
@@ -33,7 +32,7 @@ class VerificationSettings(BaseSettings):
 
 
 class ResearcherSettings(BaseSettings):
-    default_depth: Literal["shallow", "standard", "deep"] = "standard"
+    default_depth: ResearchDepth = ResearchDepth.STANDARD
     max_tomes_per_run: int = 10
     max_sources_per_query: int = 3
     async_default: bool = False
@@ -42,7 +41,9 @@ class ResearcherSettings(BaseSettings):
 class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
-    log_level: Literal["debug", "info", "warning", "error"] = "info"
+    log_level: LogLevel = LogLevel.INFO
+
+
 
 
 class LibrarianConfig(BaseSettings):
@@ -54,6 +55,6 @@ class LibrarianConfig(BaseSettings):
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod
-    def from_yaml(cls, path: Path) -> LibrarianConfig:
+    def from_yaml(cls, path: Path) -> "LibrarianConfig":
         """Load configuration from a YAML file, with env-var overrides."""
         ...

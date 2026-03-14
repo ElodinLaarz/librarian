@@ -1,15 +1,14 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import Literal
 
 from src.config import VerificationSettings
+from src.models.enums import VerificationVerdict
 from src.services.web_search import WebSearchClient
 
 
-class ClaimResult(BaseModel):
+@dataclass
+class ClaimResult:
     claim: str
-    verdict: Literal["supported", "contradicted", "unverifiable"]
+    verdict: VerificationVerdict
     evidence: str
 
 
