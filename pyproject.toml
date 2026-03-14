@@ -11,7 +11,6 @@ dependencies = [
     "motor",
     "pydantic",
     "pydantic-settings",
-    "sentence-transformers",
     "langchain-text-splitters",
     "trafilatura",
     "instructor",
@@ -20,6 +19,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Heavy ML deps (pulls torch ~870MB) — install separately when needed
+sentence-transformers = ["sentence-transformers"]
 dev = [
     "pytest",
     "pytest-asyncio",
