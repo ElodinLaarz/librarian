@@ -1,3 +1,20 @@
 # Personal AI assistant context files
 CLAUDE.md
 GEMINI.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.uv/
+
+# Config with secrets
+librarian.config.yaml
+
+# Tools
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
