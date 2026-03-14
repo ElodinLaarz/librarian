@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import numpy as np
-from numpydantic import NDArray, Shape
+from numpy.typing import NDArray
 from pydantic import BaseModel, Field
 
 from src.models.enums import SourceType
@@ -20,5 +20,5 @@ class Tome(BaseModel):
     source_url: str | None = None
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
-    embedding: NDArray[Shape["*"], np.float32]  # noqa: F722
+    embedding: NDArray[np.float32]  # noqa: F722
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

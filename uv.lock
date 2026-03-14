@@ -1022,6 +1022,8 @@ dependencies = [
     { name = "instructor" },
     { name = "langchain-text-splitters" },
     { name = "mcp" },
+    { name = "numpy" },
+    { name = "numpydantic" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
@@ -1040,6 +1042,11 @@ sentence-transformers = [
     { name = "sentence-transformers" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
@@ -1047,6 +1054,8 @@ requires-dist = [
     { name = "langchain-text-splitters", specifier = "==1.1.1" },
     { name = "mcp", specifier = "==1.26.0" },
     { name = "mypy", marker = "extra == 'dev'" },
+    { name = "numpy", specifier = "==2.4.3" },
+    { name = "numpydantic", specifier = "==1.8.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pydantic", specifier = "==2.12.5" },
     { name = "pydantic-settings", specifier = "==2.13.1" },
@@ -1058,6 +1067,9 @@ requires-dist = [
     { name = "trafilatura", specifier = "==2.0.0" },
 ]
 provides-extras = ["sentence-transformers", "dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "mypy", specifier = ">=1.19.1" }]
 
 [[package]]
 name = "librt"
@@ -1640,6 +1652,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/58/ad/1100d7229bb248394939a12a8074d485b655e8ed44207d328fdd7fcebc7b/numpy-2.4.3-pp311-pypy311_pp73-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7e58765ad74dcebd3ef0208a5078fba32dc8ec3578fe84a604432950cd043d79", size = 15800434, upload-time = "2026-03-09T07:58:44.837Z" },
     { url = "https://files.pythonhosted.org/packages/0c/fd/16d710c085d28ba4feaf29ac60c936c9d662e390344f94a6beaa2ac9899b/numpy-2.4.3-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8e236dbda4e1d319d681afcbb136c0c4a8e0f1a5c58ceec2adebb547357fe857", size = 16729409, upload-time = "2026-03-09T07:58:47.972Z" },
     { url = "https://files.pythonhosted.org/packages/57/a7/b35835e278c18b85206834b3aa3abe68e77a98769c59233d1f6300284781/numpy-2.4.3-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:4b42639cdde6d24e732ff823a3fa5b701d8acad89c4142bc1d0bd6dc85200ba5", size = 12504685, upload-time = "2026-03-09T07:58:50.525Z" },
+]
+
+[[package]]
+name = "numpydantic"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/87/59e5cac8d14bdaec8f13f954b54c8c48cf107ea19c476ba781514f4b2cc3/numpydantic-1.8.0.tar.gz", hash = "sha256:874f009d141fe70de2e096527683a722a25a32ef561a55a210d3e486e9c99327", size = 81681, upload-time = "2026-02-27T02:15:39.137Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/3f/ba491e30e8be2996a5ee31cf395f445a34c10519156ec15c6edb83e66f23/numpydantic-1.8.0-py3-none-any.whl", hash = "sha256:7c9586f50bbdf331b9a6b3a15b86cd1afa42096af20df1bf1f3620031dc393f3", size = 87589, upload-time = "2026-02-27T02:01:46.092Z" },
 ]
 
 [[package]]

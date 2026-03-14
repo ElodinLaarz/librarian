@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import UUID
 
 from src.config import DatabaseSettings
 from src.models.tome import Tome
@@ -15,22 +16,22 @@ class FsTomeRepository(TomeRepository):
 
     def __init__(self, settings: DatabaseSettings) -> None:
         # Default to ~/.librarian_mcp if uri is "localhost" or empty
-        if self._settings.uri in ("localhost", ""):
+        if settings.uri in ("localhost", ""):
             self._base_path = Path.home() / ".librarian_mcp"
         else:
-            self._base_path = Path(self._settings.uri).expanduser()
-        self._tomes_dir = self.base_path / settings.tomes_collection
+            self._base_path = Path(settings.uri).expanduser()
+        self._tomes_dir = self._base_path / settings.tomes_collection
 
-    def _get_path(self, tome_id: str) -> Path:
+    def _get_path(self, tome_id: UUID) -> Path:
         return self._tomes_dir / f"{tome_id}.json"
 
-    async def insert(self, tome: Tome) -> str:
+    async def insert(self, tome: Tome) -> UUID:
         """Save a Tome as a JSON file."""
         path = self._get_path(tome.id)
         path.write_text(tome.model_dump_json(indent=2))
         return tome.id
 
-    async def delete(self, tome_id: str) -> bool:
+    async def delete(self, tome_id: UUID) -> bool:
         """Deletes a Tome by ID. Returns True if a file was removed."""
         path = self._get_path(tome_id)
         if path.exists():
@@ -38,7 +39,7 @@ class FsTomeRepository(TomeRepository):
             return True
         return False
 
-    async def get_by_id(self, tome_id: str) -> Tome | None:
+    async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Read a Tome from its JSON file."""
         path = self._get_path(tome_id)
         if not path.exists():

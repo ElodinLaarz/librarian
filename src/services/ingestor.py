@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -27,11 +28,19 @@ class Ingestor:
         self._tome_repo = tome_repo
 
     async def ingest(self, blob: str) -> list[Tome]:
-        """Convert unstructured text into a structured knowledge Tome,
+        """Convert unstructured text into a structured knowledge Tome
         and save it in the collection."""
-        category, tags = self._classify_and_tag(blob)
-        title, summary = self._generate_title_and_summary(blob)
-        embedding = await self._embedding_service.embed(blob)
+
+        # Run async methods concurrently
+        classify_task = self._classify_and_tag(blob)
+        summarize_task = self._generate_title_and_summary(blob)
+        embed_task = self._embedding_service.embed(blob)
+
+        # Wait for all three to finish
+        (category, tags), (title, summary), embedding = await asyncio.gather(
+            classify_task, summarize_task, embed_task
+        )
+
         timestamp = datetime.now(tz=UTC)
         tome = Tome(
             id=uuid.uuid4(),
@@ -46,7 +55,11 @@ class Ingestor:
             source_type=SourceType.AGENT_INPUT,
             confidence=0.5,
         )
+
+        # Validate (sync method)
         self._validate(tome)
+
+        # Store async
         await self._tome_repo.insert(tome)
 
         return [tome]

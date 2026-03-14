@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from uuid import UUID
 
 from src.models.tome import Tome
 
@@ -12,17 +13,17 @@ class TomeRepository(ABC):
     """
 
     @abstractmethod
-    async def insert(self, tome: Tome) -> str:
+    async def insert(self, tome: Tome) -> UUID:
         """Insert a new Tome and return its ID."""
         ...
 
     @abstractmethod
-    async def delete(self, tome_id: str) -> bool:
+    async def delete(self, tome_id: UUID) -> bool:
         """Deletes a Tome by ID. Returns True if a document was deleted."""
         ...
 
     @abstractmethod
-    async def get_by_id(self, tome_id: str) -> Tome | None:
+    async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Retrieve a single Tome by its ID."""
         ...
 
