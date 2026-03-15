@@ -23,7 +23,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.11
       - run: uv sync --extra dev
-      - run: git ls-files '*.md' | xargs uv run mdformat --check
+      - run: git ls-files -z '*.md' | xargs -0 -r uv run mdformat --check
 
   typecheck:
     runs-on: ubuntu-latest
