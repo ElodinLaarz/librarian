@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 
-import numpy as np
 import pytest
 
 from src.config import LibrarianConfig, VerificationSettings
@@ -33,7 +32,7 @@ def _make_tome(content: str, confidence: float = 0.8) -> Tome:
         source_url=None,
         source_type=SourceType.AGENT_INPUT,
         confidence=confidence,
-        embedding=np.zeros(768, dtype=np.float32),
+        embedding=[0.0] * 768,
     )
 
 
@@ -137,7 +136,7 @@ async def test_partial_status_when_some_chunks_fail(
         def __init__(self) -> None:
             self._call_count = 0
 
-        async def verify(self, content: str) -> VerificationResult:  # type: ignore[override]
+        async def verify(self, content: str) -> VerificationResult:
             self._call_count += 1
             confidence = 0.9 if self._call_count % 2 == 1 else 0.05
             return VerificationResult(
@@ -329,9 +328,7 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
                 return [blob.strip()]
             return []
 
-    ingestor = EmptyChunkIngestor(
-        config, StubVerifier(confidence=0.9), repo
-    )
+    ingestor = EmptyChunkIngestor(config, StubVerifier(confidence=0.9), repo)
 
     await ingestor.ingest("Incoming content.")
 
@@ -348,9 +345,7 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     # Wire a fresh ingestor that uses the fail-deletes repo.
     from src.config import LibrarianConfig
 
-    bad_repo_ingestor = StubIngestor(
-        LibrarianConfig(), StubVerifier(confidence=0.9), repo
-    )
+    bad_repo_ingestor = StubIngestor(LibrarianConfig(), StubVerifier(confidence=0.9), repo)
 
     output = await bad_repo_ingestor.ingest("Replacement content.")
 

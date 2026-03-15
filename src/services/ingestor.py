@@ -17,6 +17,7 @@ SUMMARY_LENGTH = 200
 TITLE_LENGTH = 120
 UNVERIFIED_CONFIDENCE = 0.5
 
+
 class ReshardError(Exception):
     """Raised when a reshard operation cannot be completed safely."""
 
@@ -65,7 +66,7 @@ class Ingestor:
         reject_reasons: list[str] = []
 
         for result in tomes:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 any_rejected = True
                 if isinstance(result, ReshardError):
                     stored.extend(result.tomes)
@@ -90,8 +91,8 @@ class Ingestor:
             )
 
         status = IngestStatus.PARTIAL if any_rejected else IngestStatus.STORED
-        reason = "; ".join(reject_reasons) if reject_reasons else None
-        return IngestOutput(tomes=stored, status=status, reject_reason=reason)
+        final_reason = "; ".join(reject_reasons) if reject_reasons else None
+        return IngestOutput(tomes=stored, status=status, reject_reason=final_reason)
 
     async def _process_text(self, text: str) -> list[Tome] | None:
         """Verify, classify, embed, and dedup/store a single text.
@@ -219,7 +220,6 @@ class Ingestor:
             chunk_overlap=SHARD_OVERLAP,
         )
         return splitter.split_text(blob)
-
 
     async def _classify_and_tag(
         self, text: str, category_hint: str | None = None
