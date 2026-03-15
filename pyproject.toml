@@ -17,6 +17,8 @@ dependencies = [
     "httpx==0.28.1",
     "numpy==2.4.3",
     "numpydantic==1.8.0",
+    "motor==3.7.0",
+    "pymongo==4.11.1"
 ]
 
 [project.optional-dependencies]
