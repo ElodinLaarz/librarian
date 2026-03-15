@@ -27,6 +27,7 @@ dev = [
     "pytest-asyncio",
     "ruff",
     "mypy",
+    "mdformat",
     "pre-commit",
 ]
 

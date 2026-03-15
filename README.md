@@ -4,10 +4,10 @@ An MCP server that provides AI agents with a persistent, searchable, and self-ex
 
 ## Tools
 
-| Tool               | Description                                                                                               |
+| Tool | Description |
 | ------------------ | --------------------------------------------------------------------------------------------------------- |
-| `library.search`   | Semantic vector search over stored tomes, with optional category and confidence filtering                 |
-| `library.ingest`   | Fact-checks agent-provided information via web search, chunks it, and stores verified tomes               |
+| `library.search` | Semantic vector search over stored tomes, with optional category and confidence filtering |
+| `library.ingest` | Fact-checks agent-provided information via web search, chunks it, and stores verified tomes |
 | `library.research` | Dispatches a Researcher sub-agent to search the web, synthesise findings, and ingest results as new tomes |
 
 ### Usage pattern
@@ -30,24 +30,24 @@ Before storing, the Verifier extracts key factual claims and cross-references th
 
 - **confidence > 0.7** — stored as-is
 - **confidence 0.3–0.7** — stored with a low-confidence flag
-- **confidence \< 0.3** — rejected by default
+- **confidence < 0.3** — rejected by default
 
 Set `skip_verify: true` on ingest to bypass (useful for agent-generated notes or fictional content). When no search API key is configured, verification is skipped and tomes are assigned a synthetic confidence of `0.6`.
 
 ## Stack
 
-| Component           | Technology                                                                     |
+| Component | Technology |
 | ------------------- | ------------------------------------------------------------------------------ |
-| MCP Framework       | FastMCP (Python)                                                               |
-| Database            | MongoDB 7.x via `motor` (async)                                                |
-| Vector Search       | Atlas Vector Search (cosine similarity)                                        |
-| Embedding (default) | `nomic-embed-text` via Ollama (768 dims, ~30ms on CPU)                         |
-| Embedding (alt)     | `sentence-transformers/all-MiniLM-L6-v2` (384 dims, ~15ms, no Ollama required) |
-| Chunking            | LangChain `RecursiveTextSplitter`                                              |
-| Claim extraction    | Instructor + local Ollama LLM                                                  |
-| Web search          | Brave Search API / Tavily / Serper (configurable)                              |
-| HTML extraction     | `trafilatura`                                                                  |
-| Config              | Pydantic Settings + `librarian.config.yaml`                                    |
+| MCP Framework | FastMCP (Python) |
+| Database | MongoDB 7.x via `motor` (async) |
+| Vector Search | Atlas Vector Search (cosine similarity) |
+| Embedding (default) | `nomic-embed-text` via Ollama (768 dims, ~30ms on CPU) |
+| Embedding (alt) | `sentence-transformers/all-MiniLM-L6-v2` (384 dims, ~15ms, no Ollama required) |
+| Chunking | LangChain `RecursiveTextSplitter` |
+| Claim extraction | Instructor + local Ollama LLM |
+| Web search | Brave Search API / Tavily / Serper (configurable) |
+| HTML extraction | `trafilatura` |
+| Config | Pydantic Settings + `librarian.config.yaml` |
 
 ## Quick Start
 
