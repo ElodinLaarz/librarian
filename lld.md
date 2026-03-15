@@ -230,7 +230,7 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 | ----------------------- | -------------------------------------------- | ------------- | --------------------------------------------------- |
 | `ingest` | `(params: IngestInput)` | `IngestOutput` | Full pipeline: validate → verify → chunk → embed → dedup → store |
 | `_validate` | `(params: IngestInput)` | `None` | Length check, HTML sanitisation; raises on failure |
-| `_chunk` | `(content: str)` | `list[str]` | Sentence-boundary split at ~400 words |
+| `_chunk` | `(content: str)` | `list[str]` | LLM-driven decomposition into self-contained atomic facts |
 | `_classify_and_tag` | `(chunk: str, category_hint: str\|None)` | `(str, list[str])` | Returns `(category, tags)` |
 | `_generate_title_and_summary` | `(chunk: str)` | `(str, str)` | Returns `(title, summary)` |
 | `_dedup_and_store` | `(tome: Tome, allow_update: bool)` | `str` | Near-dup check → merge or insert; returns Tome ID |
@@ -240,8 +240,10 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 1. `_validate` — enforce minimum length, sanitise HTML/markdown
 1. `Verifier.verify` — unless `skip_verify=True`; reject if
    `confidence < reject_threshold`
-1. `_chunk` — `RecursiveTextSplitter` at ~400 words with sentence-boundary
-   awareness
+1. `_chunk` — LLM prompt decomposes content into atomic, self-contained facts;
+   each chunk must stand alone without requiring surrounding context. Word count
+   is a soft upper bound (~400 words), not the splitting criterion. A single
+   short input may produce one chunk; a dense multi-topic input may produce many.
 1. For each chunk:
    1. `_classify_and_tag` — category classification + keyword tag extraction
    1. `_generate_title_and_summary` — LLM-generated title and summary
@@ -359,10 +361,14 @@ The agent may call `library_ingest` with curated content on the topic, or
 
 ______________________________________________________________________
 
-### Journey C — Ingest (happy path, two chunks)
+### Journey C — Ingest (happy path, multi-fact decomposition)
+
+Input is a dense article covering several distinct facts. `_chunk` decomposes
+it into three self-contained atomic facts rather than splitting at a word-count
+boundary.
 
 ```
-Agent → library_ingest(content="...(800 words)...", source_url="https://...")
+Agent → library_ingest(content="<article covering facts A, B, C>", source_url="https://...")
   Ingestor.ingest():
     _validate() → OK
     Verifier.verify(content):
@@ -371,29 +377,40 @@ Agent → library_ingest(content="...(800 words)...", source_url="https://...")
       _aggregate_confidence() → 0.82
       → VerificationResult{confidence: 0.82, skipped: false}
     0.82 ≥ 0.3 → proceed
-    _chunk(content) → ["chunk_1 (~400w)", "chunk_2 (~400w)"]
+    _chunk(content):
+      LLM prompt: "decompose into atomic, self-contained facts"
+      → ["Fact A (standalone)", "Fact B (standalone)", "Fact C (standalone)"]
+      ← 3 chunks, each independently meaningful
 
-    chunk_1:
-      _classify_and_tag("chunk_1", category_hint=null) → ("science", ["tag_a", "tag_b"])
-      _generate_title_and_summary("chunk_1") → ("Title A", "Summary A")
-      EmbeddingService.embed("chunk_1") → embedding_1
-      _dedup_and_store(Tome{...chunk_1...}, allow_update=true):
-        tome_repo.find_near_duplicates(embedding_1, threshold=0.95) → []
+    chunk "Fact A":
+      _classify_and_tag() → ("science", ["tag_a"])
+      _generate_title_and_summary() → ("Title A", "Summary A")
+      EmbeddingService.embed() → embedding_a
+      _dedup_and_store(allow_update=true):
+        tome_repo.find_near_duplicates(embedding_a) → []
         tome_repo.insert(Tome{...}) → "t1"
 
-    chunk_2:
-      _classify_and_tag("chunk_2", category_hint=null) → ("science", ["tag_b", "tag_c"])
-      _generate_title_and_summary("chunk_2") → ("Title B", "Summary B")
-      EmbeddingService.embed("chunk_2") → embedding_2
-      _dedup_and_store(Tome{...chunk_2...}, allow_update=true):
-        tome_repo.find_near_duplicates(embedding_2, threshold=0.95) → []
+    chunk "Fact B":
+      _classify_and_tag() → ("science", ["tag_b"])
+      _generate_title_and_summary() → ("Title B", "Summary B")
+      EmbeddingService.embed() → embedding_b
+      _dedup_and_store(allow_update=true):
+        tome_repo.find_near_duplicates(embedding_b) → []
         tome_repo.insert(Tome{...}) → "t2"
 
+    chunk "Fact C":
+      _classify_and_tag() → ("science", ["tag_c"])
+      _generate_title_and_summary() → ("Title C", "Summary C")
+      EmbeddingService.embed() → embedding_c
+      _dedup_and_store(allow_update=true):
+        tome_repo.find_near_duplicates(embedding_c) → []
+        tome_repo.insert(Tome{...}) → "t3"
+
 ← Agent ← IngestOutput{
-    tome_ids: ["t1", "t2"],
-    tomes: [Tome_t1, Tome_t2],
+    tome_ids: ["t1", "t2", "t3"],
+    tomes: [Tome_t1, Tome_t2, Tome_t3],
     confidence: 0.82,
-    chunks: 2,
+    chunks: 3,
     status: "stored",
     reject_reason: null
   }
