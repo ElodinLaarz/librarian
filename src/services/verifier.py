@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 
-from src.config import VerificationSettings
 from src.models.enums import VerificationVerdict
-from src.services.web_search import WebSearchClient
 
 
 @dataclass
@@ -23,14 +21,6 @@ class Verifier:
     """Quality control layer that estimates the truthfulness of incoming content
     by cross-referencing factual claims against web sources."""
 
-    def __init__(
-        self,
-        settings: VerificationSettings,
-        web_search: WebSearchClient,
-    ) -> None:
-        self._settings = settings
-        self._web_search = web_search
-
     async def verify(self, content: str) -> VerificationResult:
         """Run the full verification pipeline on a piece of content."""
         raise NotImplementedError
@@ -50,3 +40,13 @@ class Verifier:
     def _make_offline_result(self) -> VerificationResult:
         """Return a synthetic 0.6-confidence result when verification is unavailable."""
         raise NotImplementedError
+
+    @staticmethod
+    def noop() -> "Verifier":
+        """Return a no-op Verifier that skips all verification and returns full confidence."""
+
+        class _NoopVerifier(Verifier):
+            async def verify(self, content: str) -> VerificationResult:
+                return VerificationResult(confidence=1.0, claims=[], skipped=True)
+
+        return _NoopVerifier()
