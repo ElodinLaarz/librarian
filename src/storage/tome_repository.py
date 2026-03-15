@@ -13,6 +13,11 @@ class TomeRepository(ABC):
     """
 
     @abstractmethod
+    async def get_embedding(self, text: str) -> list[float]:
+        """Generate an embedding for the given text."""
+        ...
+
+    @abstractmethod
     async def insert(self, tome: Tome) -> UUID:
         """Insert a new Tome and return its ID."""
         ...

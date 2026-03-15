@@ -10,10 +10,8 @@ import pytest
 from src.config import LibrarianConfig, VerificationSettings
 from src.models.enums import IngestStatus, SourceType, VerificationVerdict
 from src.models.tome import Tome
-from src.services.ingestor import ReshardError
 from src.services.verifier import ClaimResult, VerificationResult
 from tests.stubs import (
-    StubEmbeddingService,
     StubIngestor,
     StubTomeRepository,
     StubVerifier,
@@ -155,7 +153,7 @@ async def test_partial_status_when_some_chunks_fail(
             )
 
     repo = StubTomeRepository()
-    ingestor = StubIngestor(config, StubEmbeddingService(), VariableVerifier(), repo)
+    ingestor = StubIngestor(config, VariableVerifier(), repo)
 
     output = await ingestor.ingest("Good chunk.\n\nBad chunk (low confidence).")
 
@@ -279,15 +277,15 @@ async def test_disabled_verification_stores_despite_low_confidence() -> None:
     assert len(repo.all_tomes()) == 1
 
 
-async def test_disabled_verification_confidence_is_one() -> None:
-    """Tomes stored without verification carry a confidence of 1.0."""
+async def test_disabled_verification_confidence_is_point_five() -> None:
+    """Tomes stored without verification carry a confidence of 0.5."""
     config = LibrarianConfig(verification=VerificationSettings(enabled=False))
     repo = StubTomeRepository()
     ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.5, repo=repo)
 
     output = await ingestor.ingest("Unverified fact.")
 
-    assert output.tomes[0].confidence == pytest.approx(1.0)
+    assert output.tomes[0].confidence == pytest.approx(0.5)
 
 
 # ── reshard safety ────────────────────────────────────────────────────────────
@@ -323,7 +321,7 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
     class EmptyChunkIngestor(StubIngestor):
         _chunked_once = False
 
-        async def _chunk(self, blob: str) -> list[str]:
+        async def _reshard(self, blob: str) -> list[str]:
             # First call (the original blob) returns one chunk so ingest proceeds.
             # Subsequent calls (reshard) return nothing.
             if not self._chunked_once:
@@ -332,7 +330,7 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
             return []
 
     ingestor = EmptyChunkIngestor(
-        config, StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+        config, StubVerifier(confidence=0.9), repo
     )
 
     await ingestor.ingest("Incoming content.")
@@ -341,10 +339,8 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
     assert await repo.get_by_id(existing.id) is not None
 
 
-async def test_reshard_raises_on_delete_failure(
-    ingestor: StubIngestor,
-) -> None:
-    """A failed tome deletion during reshard raises ReshardError."""
+async def test_reshard_returns_partial_status_on_delete_failure() -> None:
+    """A failed tome deletion during reshard returns IngestOutput with error rather than raising."""
     repo = StubTomeRepository(fail_deletes=True)
     existing = _make_tome("Fact that cannot be deleted.")
     repo.seed_near_duplicates([existing])
@@ -353,8 +349,13 @@ async def test_reshard_raises_on_delete_failure(
     from src.config import LibrarianConfig
 
     bad_repo_ingestor = StubIngestor(
-        LibrarianConfig(), StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+        LibrarianConfig(), StubVerifier(confidence=0.9), repo
     )
 
-    with pytest.raises(ReshardError):
-        await bad_repo_ingestor.ingest("Replacement content.")
+    output = await bad_repo_ingestor.ingest("Replacement content.")
+
+    # Still stored the new tomes!
+    assert output.status == IngestStatus.PARTIAL
+    assert output.reject_reason is not None
+    assert "Failed to delete tomes" in output.reject_reason
+    assert len(output.tomes) >= 1

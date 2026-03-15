@@ -38,6 +38,9 @@ class StubTomeRepository(TomeRepository):
     def all_tomes(self) -> list[Tome]:
         return list(self._tomes.values())
 
+    async def get_embedding(self, text: str) -> list[float]:
+        return [0.0] * 768
+
     async def insert(self, tome: Tome) -> UUID:
         self._tomes[tome.id] = tome
         return tome.id
@@ -104,7 +107,7 @@ class StubVerifier(Verifier):
 class StubIngestor(Ingestor):
     """Ingestor with deterministic, LLM-free overrides for all abstract methods."""
 
-    async def _chunk(self, blob: str) -> list[str]:
+    async def _reshard(self, blob: str) -> list[str]:
         """Split on double newlines; discard blank segments."""
         return [seg.strip() for seg in blob.split("\n\n") if seg.strip()]
 
@@ -130,6 +133,5 @@ def make_stub_ingestor(
     config = config or LibrarianConfig()
     repo = repo or StubTomeRepository()
     verifier = StubVerifier(confidence=confidence)
-    embedding = StubEmbeddingService(dimensions=dimensions)
-    ingestor = StubIngestor(config, embedding, verifier, repo)
+    ingestor = StubIngestor(config, verifier, repo)
     return ingestor, repo, verifier

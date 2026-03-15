@@ -33,7 +33,8 @@ class Verifier:
 
     async def verify(self, content: str) -> VerificationResult:
         """Run the full verification pipeline on a piece of content."""
-        raise NotImplementedError
+        # TODO: Implement full web search verification in a future PR
+        return self._make_offline_result()
 
     async def _extract_claims(self, content: str) -> list[str]:
         """Extract 3-7 key factual claims using a zero-shot claim extraction prompt."""
@@ -49,4 +50,4 @@ class Verifier:
 
     def _make_offline_result(self) -> VerificationResult:
         """Return a synthetic 0.6-confidence result when verification is unavailable."""
-        raise NotImplementedError
+        return VerificationResult(confidence=0.6, claims=[], skipped=True)

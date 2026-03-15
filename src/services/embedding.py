@@ -24,9 +24,19 @@ class EmbeddingService(ABC):
         ...
 
     @abstractmethod
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str) -> np.ndarray | str | list[float]:
         """Produce a dense vector embedding for a single text string.
 
         Returns from cache if the text has been embedded before.
         """
         ...
+
+
+class DummyEmbeddingService(EmbeddingService):
+    """A placeholder embedding service that returns the text directly for local dev/testing."""
+
+    async def initialize(self) -> None:
+        pass
+
+    async def embed(self, text: str) -> str:
+        return text
