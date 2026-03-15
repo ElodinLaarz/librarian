@@ -74,8 +74,8 @@ class Ingestor:
         summarize_task = self._generate_title_and_summary(chunk)
         embed_task = self._embedding_service.embed(chunk)
 
-        verification, (category, tags), (title, summary), embedding = await asyncio.gather(
-            verify_task, classify_task, summarize_task, embed_task
+        verification, (category, tags), (title, summary), embedding = (
+            await asyncio.gather(verify_task, classify_task, summarize_task, embed_task)
         )
 
         if verification.confidence < self._config.verification.reject_threshold:
@@ -116,11 +116,13 @@ class Ingestor:
             await self._tome_repo.delete(dup.id)
 
         new_chunks = await self._chunk(combined)
+        chunk_results = await asyncio.gather(
+            *[self._process_chunk(c) for c in new_chunks]
+        )
         results: list[Tome] = []
-        for chunk in new_chunks:
-            chunk_tomes = await self._process_chunk(chunk)
-            if chunk_tomes is not None:
-                results.extend(chunk_tomes)
+        for result in chunk_results:
+            if result is not None:
+                results.extend(result)
         return results
 
     async def _chunk(self, blob: str) -> list[str]:
