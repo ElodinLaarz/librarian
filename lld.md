@@ -22,7 +22,7 @@ ______________________________________________________________________
 
 ## 1. Architecture Overview
 
-The system exposes two distinct API boundaries. The **MCP API** (API 1) is the external surface that any MCP-compatible calling agent communicates with. The **Internal RPC API** (API 2) is the in-process contract between the Librarian orchestrator and the Tome Repository Agent, which owns all persistence decisions.
+The system exposes two distinct API boundaries. The **MCP API** (API 1) is the external surface that any MCP-compatible calling agent communicates with. The **Repository Layer** (API 2) is the in-process contract between the Librarian services and the storage layer, which owns all persistence decisions.
 
 ```
 ┌──────────────────────────────────┐
@@ -31,23 +31,23 @@ The system exposes two distinct API boundaries. The **MCP API** (API 1) is the e
 └──────────────┬───────────────────┘
                │
                │  ◄── API 1: MCP Protocol (stdio / SSE) ──►
-               │  tools: library.search / library.ingest / library.research
+               │  tools: library_search / library_ingest / library_research
                │
                ▼
 ┌──────────────────────────────────┐
 │  LIBRARIAN MCP AGENT             │
 │  Orchestrates search, ingest,    │
-│  and research; calls Repo Agent  │
+│  and research; calls repositories│
 └──────────────┬───────────────────┘
                │
-               │  ◄── API 2: Internal Agent RPC ──►
-               │  namespaces: tome.* / job.*
+               │  ◄── API 2: Repository Layer ──►
+               │  TomeRepository / JobRepository
                │
                ▼
 ┌──────────────────────────────────┐
-│  TOME REPOSITORY AGENT           │
-│  Owns persistence decisions,     │
-│  dedup, versioning, MongoDB      │
+│  STORAGE LAYER                   │
+│  Abstract repository classes;    │
+│  MongoDB concrete implementation │
 └──────────────────────────────────┘
 ```
 
@@ -61,7 +61,7 @@ All three tools follow the standard MCP tool-call envelope. Errors are returned 
 
 ______________________________________________________________________
 
-### 2.1 `library.search`
+### 2.1 `library_search`
 
 Converts a natural-language query to a vector embedding and retrieves the most semantically relevant Tomes from the library.
 
@@ -93,7 +93,7 @@ Converts a natural-language query to a vector embedding and retrieves the most s
 
 ______________________________________________________________________
 
-### 2.2 `library.ingest`
+### 2.2 `library_ingest`
 
 Validates, chunks, embeds, and stores a raw knowledge payload as one or more Tomes.
 
@@ -130,7 +130,7 @@ Validates, chunks, embeds, and stores a raw knowledge payload as one or more Tom
 
 ______________________________________________________________________
 
-### 2.3 `library.research`
+### 2.3 `library_research`
 
 Dispatches a Researcher to search the web, synthesise findings, and ingest results as new Tomes. Supports both synchronous and asynchronous operation.
 
@@ -193,40 +193,40 @@ All tool outputs that include `Tome` objects use this schema (sourced from `src/
 
 ______________________________________________________________________
 
-## 3. API 2 — Librarian MCP Agent ↔ Tome Repository Agent
+## 3. API 2 — Repository Layer
 
-The Tome Repository Agent exposes two operation namespaces via in-process RPC. The Librarian is the only caller; no external agent calls these directly.
-
-______________________________________________________________________
-
-### 3.1 Tome Namespace
-
-| Operation | Inputs | Returns | Notes |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------- |
-| `tome.store` | `content`, `title`, `summary`, `category`, `tags`, `source_url`, `source_type`, `confidence`, `embedding`, `research_job?` | `Tome` (with `id`, `created_at`, `updated_at`, `version=1`) | Agent decides whether to version or insert fresh |
-| `tome.get` | `tome_id: str` | `Tome \| None` | |
-| `tome.update` | `tome_id: str`, `patch: TomePatch` | `Tome` | Bumps `version`, sets `updated_at` |
-| `tome.supersede` | `old_id: str`, `new_id: str` | `void` | Sets `superseded_by` on the old Tome |
-| `tome.search` | `embedding: float[]`, `top_k: int`, `category?: str`, `min_confidence?: float` | `SearchResult[]` | Executes `$vectorSearch`; each result = Tome + score |
-| `tome.find_near_duplicates` | `embedding: float[]`, `threshold: float` (default 0.95), `limit: int` (default 5) | `DuplicateMatch[]` | Each match = Tome + similarity score; called by ingestor before store |
-| `tome.find_by_job` | `job_id: str` | `Tome[]` | Returns all Tomes produced by a given research job |
-
-#### `TomePatch` fields (all optional)
-
-`content`, `title`, `summary`, `category`, `tags`, `source_url`, `confidence`, `embedding`
+The storage layer is structured as two abstract repository classes (`TomeRepository` and `JobRepository`) defined in `src/storage/`. Concrete implementations bind these to MongoDB. The Librarian services are the only callers.
 
 ______________________________________________________________________
 
-### 3.2 Job Namespace
+### 3.1 `TomeRepository`
 
-| Operation | Inputs | Returns | Notes |
-| ----------------- | ----------------------------------------------------- | --------------------- | -------------------------------------------------- |
-| `job.create` | `topic: str`, `context?: str`, `depth: ResearchDepth` | `ResearchJob` | Initial status = `pending` |
-| `job.get` | `job_id: str` | `ResearchJob \| None` | |
-| `job.set_running` | `job_id: str` | `void` | Sets `status=running`, records `started_at` |
-| `job.add_queries` | `job_id: str`, `queries: str[]` | `void` | Appends to the `queries` list |
-| `job.complete` | `job_id: str`, `tome_ids: str[]`, `queries: str[]` | `void` | Sets `status=completed`, `finished_at`, `tome_ids` |
-| `job.fail` | `job_id: str`, `error: str` | `void` | Sets `status=failed`, `finished_at`, `error` |
+Defined in `src/storage/tome_repository.py`.
+
+| Method | Signature | Returns | Notes |
+| ----------------------- | ------------------------------------------------------------------------------ | ----------------------- | ----------------------------------------------------- |
+| `insert` | `(tome: Tome)` | `str` | Inserts a new Tome; returns its ID |
+| `get_by_id` | `(tome_id: str)` | `Tome \| None` | |
+| `update` | `(tome_id: str, updates: dict[str, Any])` | `bool` | Returns `True` if a document was modified |
+| `supersede` | `(old_id: str, new_id: str)` | `None` | Sets `superseded_by` on the old Tome |
+| `vector_search` | `(embedding: float[], top_k: int, category?: str, min_confidence: float=0.5)` | `list[tuple[Tome, float]]` | ANN search via `$vectorSearch`; sorted by similarity |
+| `find_near_duplicates` | `(embedding: float[], threshold: float=0.95)` | `list[Tome]` | Returns Tomes with cosine similarity above threshold |
+| `find_by_research_job` | `(job_id: str)` | `list[Tome]` | All Tomes produced by a given research job |
+
+______________________________________________________________________
+
+### 3.2 `JobRepository`
+
+Defined in `src/storage/job_repository.py`.
+
+| Method | Signature | Returns | Notes |
+| --------------- | ------------------------------------------------------------ | --------------------- | -------------------------------------------- |
+| `create` | `(job: ResearchJob)` | `str` | Inserts a new job; returns its ID |
+| `get_by_id` | `(job_id: str)` | `ResearchJob \| None` | |
+| `set_running` | `(job_id: str)` | `None` | Sets `status=running`, records `started_at` |
+| `add_queries` | `(job_id: str, queries: list[str])` | `None` | Appends to the `queries` list |
+| `set_completed` | `(job_id: str, tome_ids: list[str], finished_at: datetime)` | `None` | Sets `status=completed`, `finished_at`, `tome_ids` |
+| `set_failed` | `(job_id: str, error: str, finished_at: datetime)` | `None` | Sets `status=failed`, `finished_at`, `error` |
 
 #### `ResearchJob` shape (sourced from `src/models/research_job.py`)
 
@@ -255,11 +255,11 @@ ______________________________________________________________________
 The agent knows what it wants and the library already has it.
 
 ```
-Calling Agent → library.search(query="how does X work", top_k=5)
+Calling Agent → library_search(query="how does X work", top_k=5)
   Librarian:
     embed query → LRU cache hit → from_cache=true
-    → tome.search(embedding, top_k=5, min_confidence=0.5)
-      Repo Agent → $vectorSearch → returns 3 Tomes with scores
+    → tome_repo.vector_search(embedding, top_k=5, min_confidence=0.5)
+      Storage → $vectorSearch → returns 3 Tomes with scores
     re-rank by score + recency
 ← Calling Agent ← SearchOutput{tomes: [t1,t2,t3], scores: [...], query_id: "q1", from_cache: true}
 ```
@@ -271,16 +271,16 @@ ______________________________________________________________________
 The library has nothing on the topic; the agent decides to commission research.
 
 ```
-Calling Agent → library.search(query="obscure topic")
-  Librarian → embed query → tome.search(embedding, top_k=5)
-    Repo Agent → $vectorSearch → returns [] (no results above threshold)
+Calling Agent → library_search(query="obscure topic")
+  Librarian → embed query → tome_repo.vector_search(embedding, top_k=5)
+    Storage → $vectorSearch → returns [] (no results above threshold)
 ← Calling Agent ← SearchOutput{tomes: [], scores: [], query_id: "q2", from_cache: false}
 
-Calling Agent → library.research(topic="obscure topic", depth=standard)
+Calling Agent → library_research(topic="obscure topic", depth=standard)
   [see Journey E — synchronous research]
 ← Calling Agent ← ResearchOutput{job_id: "j1", tomes: [...], status: "completed"}
 
-Calling Agent → library.search(query="obscure topic")
+Calling Agent → library_search(query="obscure topic")
   ← now returns populated results (Journey A path)
 ```
 
@@ -291,7 +291,7 @@ ______________________________________________________________________
 New content is verified, chunked, and stored as two fresh Tomes.
 
 ```
-Calling Agent → library.ingest(content="...", source_url="https://...")
+Calling Agent → library_ingest(content="...", source_url="https://...")
   Librarian:
     pre-flight: validate length and fields
     Verifier:
@@ -303,16 +303,16 @@ Calling Agent → library.ingest(content="...", source_url="https://...")
     Embedder: embed chunk 1, embed chunk 2
 
     For chunk 1:
-      → tome.find_near_duplicates(embedding_1, threshold=0.95)
-        Repo Agent → $vectorSearch → [] (no duplicates)
-      → tome.store(chunk_1_data)
-        Repo Agent → insert → Tome{id:"t1", version:1, ...}
+      → tome_repo.find_near_duplicates(embedding_1, threshold=0.95)
+        Storage → $vectorSearch → [] (no duplicates)
+      → tome_repo.insert(Tome{...chunk_1_data...})
+        Storage → insert → id:"t1"
 
     For chunk 2:
-      → tome.find_near_duplicates(embedding_2, threshold=0.95)
-        Repo Agent → $vectorSearch → [] (no duplicates)
-      → tome.store(chunk_2_data)
-        Repo Agent → insert → Tome{id:"t2", version:1, ...}
+      → tome_repo.find_near_duplicates(embedding_2, threshold=0.95)
+        Storage → $vectorSearch → [] (no duplicates)
+      → tome_repo.insert(Tome{...chunk_2_data...})
+        Storage → insert → id:"t2"
 
 ← Calling Agent ← IngestOutput{
     tome_ids: ["t1","t2"],
@@ -331,18 +331,18 @@ ______________________________________________________________________
 Content is very similar to an existing Tome; `allow_update=true` causes an update instead of insert.
 
 ```
-Calling Agent → library.ingest(content="similar content", allow_update=true)
+Calling Agent → library_ingest(content="similar content", allow_update=true)
   Librarian:
     Verifier → confidence=0.75
     Chunker → 1 chunk
     Embedder → embedding
 
-    → tome.find_near_duplicates(embedding, threshold=0.95, limit=5)
-      Repo Agent → $vectorSearch → [{tome: Tome{id:"t_existing"}, similarity: 0.97}]
+    → tome_repo.find_near_duplicates(embedding, threshold=0.95)
+      Storage → $vectorSearch → [Tome{id:"t_existing"}]  (similarity 0.97)
 
     similarity 0.97 > threshold 0.95 → merge/update path:
-      → tome.update("t_existing", patch={content, confidence, updated_at})
-        Repo Agent → bump version to 2, set updated_at → Tome{id:"t_existing", version:2}
+      → tome_repo.update("t_existing", {"content": ..., "confidence": 0.75, "updated_at": now})
+        Storage → bump version to 2, set updated_at → modified=True
 
 ← Calling Agent ← IngestOutput{
     tome_ids: ["t_existing"],
@@ -361,28 +361,28 @@ ______________________________________________________________________
 Full synchronous research flow. Blocks until all web fetching and ingestion is complete.
 
 ```
-Calling Agent → library.research(topic="topic X", depth=standard)
+Calling Agent → library_research(topic="topic X", depth=standard)
   Librarian:
-    → job.create("topic X", depth=standard)
-      Repo Agent → insert ResearchJob{id:"j1", status:"pending"}
-    → job.set_running("j1")
-      Repo Agent → status="running", started_at=now
+    → job_repo.create(ResearchJob{topic:"topic X", status:"pending"})
+      Storage → insert → id:"j1"
+    → job_repo.set_running("j1")
+      Storage → status="running", started_at=now
 
     Researcher sub-agent:
       plan 6 targeted search queries for "topic X"
-      → job.add_queries("j1", ["query1", ..., "query6"])
-        Repo Agent → append to queries[]
+      → job_repo.add_queries("j1", ["query1", ..., "query6"])
+        Storage → append to queries[]
 
       WebSearch API: fetch results for all 6 queries
       trafilatura: extract body text from top URLs
       synthesise content across sources into N logical sub-topics
 
       ingest pipeline for each sub-topic (Journey C):
-        → tome.find_near_duplicates(embedding) → []
-        → tome.store(chunk_data) → Tome{id:"tN"}
+        → tome_repo.find_near_duplicates(embedding) → []
+        → tome_repo.insert(Tome{...chunk_data...}) → id:"tN"
 
-    → job.complete("j1", tome_ids=["t3","t4","t5"], queries=["query1",...])
-      Repo Agent → status="completed", finished_at=now, tome_ids=[...]
+    → job_repo.set_completed("j1", tome_ids=["t3","t4","t5"], finished_at=now)
+      Storage → status="completed", finished_at=now, tome_ids=[...]
 
 ← Calling Agent ← ResearchOutput{
     job_id: "j1",
@@ -401,10 +401,10 @@ ______________________________________________________________________
 Job is kicked off immediately; the agent polls separately for status.
 
 ```
-Calling Agent → library.research(topic="topic X", async=true)
+Calling Agent → library_research(topic="topic X", async=true)
   Librarian:
-    → job.create("topic X", depth=standard)
-      Repo Agent → ResearchJob{id:"j2", status:"pending"}
+    → job_repo.create(ResearchJob{topic:"topic X", status:"pending"})
+      Storage → insert → id:"j2"
     starts Journey E in background (non-blocking)
 ← Calling Agent ← ResearchOutput{
     job_id: "j2",
@@ -417,18 +417,18 @@ Calling Agent → library.research(topic="topic X", async=true)
 
 ... agent does other work ...
 
-Calling Agent → library.research(topic="j2")   ← polling by job_id
+Calling Agent → library_research(topic="j2")   ← polling by job_id
   Librarian:
     detect "j2" matches an existing job ID
-    → job.get("j2")
-      Repo Agent → ResearchJob{id:"j2", status:"running", ...}
+    → job_repo.get_by_id("j2")
+      Storage → ResearchJob{id:"j2", status:"running", ...}
 ← Calling Agent ← ResearchOutput{job_id:"j2", status:"running", tomes:[], ...}
 
 ... later ...
 
-Calling Agent → library.research(topic="j2")   ← final poll
-  Librarian → job.get("j2") → status:"completed"
-  Librarian → tome.find_by_job("j2") → [Tome_t3, Tome_t4, Tome_t5]
+Calling Agent → library_research(topic="j2")   ← final poll
+  Librarian → job_repo.get_by_id("j2") → status:"completed"
+  Librarian → tome_repo.find_by_research_job("j2") → [Tome_t3, Tome_t4, Tome_t5]
 ← Calling Agent ← ResearchOutput{
     job_id: "j2",
     tome_ids: ["t3","t4","t5"],
