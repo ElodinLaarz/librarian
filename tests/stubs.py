@@ -24,9 +24,10 @@ class StubTomeRepository(TomeRepository):
     calls to `find_near_duplicates` no longer return it (prevents infinite reshard).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, fail_deletes: bool = False) -> None:
         self._tomes: dict[UUID, Tome] = {}
         self._near_duplicates: list[Tome] = []
+        self._fail_deletes = fail_deletes
 
     def seed_near_duplicates(self, tomes: list[Tome]) -> None:
         """Register tomes as near-duplicates AND add them to the main store."""
@@ -42,6 +43,8 @@ class StubTomeRepository(TomeRepository):
         return tome.id
 
     async def delete(self, tome_id: UUID) -> bool:
+        if self._fail_deletes:
+            return False
         if tome_id not in self._tomes:
             return False
         del self._tomes[tome_id]

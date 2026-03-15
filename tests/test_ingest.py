@@ -10,6 +10,7 @@ import pytest
 from src.config import LibrarianConfig, VerificationSettings
 from src.models.enums import IngestStatus, SourceType, VerificationVerdict
 from src.models.tome import Tome
+from src.services.ingestor import ReshardError
 from src.services.verifier import ClaimResult, VerificationResult
 from tests.stubs import (
     StubEmbeddingService,
@@ -258,3 +259,102 @@ async def test_confidence_at_threshold_boundary_accepted() -> None:
     output = await ingestor.ingest("Borderline content.")
 
     assert output.status == IngestStatus.STORED
+
+
+# ── verification.enabled = False ─────────────────────────────────────────────
+
+
+async def test_disabled_verification_stores_despite_low_confidence() -> None:
+    """When verification is disabled, content is stored regardless of confidence."""
+    config = LibrarianConfig(
+        verification=VerificationSettings(enabled=False, reject_threshold=0.99)
+    )
+    repo = StubTomeRepository()
+    # StubVerifier would return 0.05 confidence — normally rejected, but verification is off.
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.05, repo=repo)
+
+    output = await ingestor.ingest("Content that would fail if verified.")
+
+    assert output.status == IngestStatus.STORED
+    assert len(repo.all_tomes()) == 1
+
+
+async def test_disabled_verification_confidence_is_one() -> None:
+    """Tomes stored without verification carry a confidence of 1.0."""
+    config = LibrarianConfig(verification=VerificationSettings(enabled=False))
+    repo = StubTomeRepository()
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.5, repo=repo)
+
+    output = await ingestor.ingest("Unverified fact.")
+
+    assert output.tomes[0].confidence == pytest.approx(1.0)
+
+
+# ── reshard safety ────────────────────────────────────────────────────────────
+
+
+async def test_reshard_aborts_without_data_loss_when_all_replacements_rejected(
+    config: LibrarianConfig,
+) -> None:
+    """If all reshard chunks fail verification, existing tomes are preserved."""
+    repo = StubTomeRepository()
+    existing = _make_tome("Existing valuable fact.")
+    repo.seed_near_duplicates([existing])
+
+    # Verifier always rejects, so no replacements will be built.
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.0, repo=repo)
+
+    output = await ingestor.ingest("New content (will fail verification).")
+
+    # The old tome must still be in the repo — no data was lost.
+    assert await repo.get_by_id(existing.id) is not None
+    # The ingest result carries no new tomes for this chunk.
+    assert existing.id not in {t.id for t in output.tomes}
+
+
+async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
+    config: LibrarianConfig,
+) -> None:
+    """If _chunk returns nothing for the combined content, existing tomes are preserved."""
+    repo = StubTomeRepository()
+    existing = _make_tome("Existing fact.")
+    repo.seed_near_duplicates([existing])
+
+    class EmptyChunkIngestor(StubIngestor):
+        _chunked_once = False
+
+        async def _chunk(self, blob: str) -> list[str]:
+            # First call (the original blob) returns one chunk so ingest proceeds.
+            # Subsequent calls (reshard) return nothing.
+            if not self._chunked_once:
+                self._chunked_once = True
+                return [blob.strip()]
+            return []
+
+    ingestor = EmptyChunkIngestor(
+        config, StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+    )
+
+    await ingestor.ingest("Incoming content.")
+
+    # Existing tome must still be present.
+    assert await repo.get_by_id(existing.id) is not None
+
+
+async def test_reshard_raises_on_delete_failure(
+    ingestor: StubIngestor,
+) -> None:
+    """A failed tome deletion during reshard raises ReshardError."""
+    repo = StubTomeRepository(fail_deletes=True)
+    existing = _make_tome("Fact that cannot be deleted.")
+    repo.seed_near_duplicates([existing])
+
+    # Wire a fresh ingestor that uses the fail-deletes repo.
+    from src.config import LibrarianConfig
+
+    bad_repo_ingestor = StubIngestor(
+        LibrarianConfig(), StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+    )
+
+    with pytest.raises(ReshardError):
+        await bad_repo_ingestor.ingest("Replacement content.")

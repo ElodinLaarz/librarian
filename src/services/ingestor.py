@@ -12,6 +12,10 @@ from src.services.verifier import Verifier
 from src.storage.tome_repository import TomeRepository
 
 
+class ReshardError(Exception):
+    """Raised when a reshard operation cannot be completed safely."""
+
+
 class Ingestor:
     """Receives raw knowledge, validates, chunks, embeds, and stores it as Tomes."""
 
@@ -67,21 +71,44 @@ class Ingestor:
     async def _process_chunk(self, chunk: str) -> list[Tome] | None:
         """Verify, classify, embed, and dedup/store a single chunk.
 
-        Returns None if verification confidence is below the reject threshold.
+        Returns None if verification is enabled and confidence is below the reject
+        threshold.  When verification is disabled the chunk is stored unconditionally
+        with a confidence of 1.0.
         """
-        verify_task = self._verifier.verify(chunk)
-        classify_task = self._classify_and_tag(chunk)
-        summarize_task = self._generate_title_and_summary(chunk)
-        embed_task = self._embedding_service.embed(chunk)
-
-        verification, (category, tags), (title, summary), embedding = (
-            await asyncio.gather(verify_task, classify_task, summarize_task, embed_task)
-        )
-
-        if verification.confidence < self._config.verification.reject_threshold:
+        tome = await self._build_tome(chunk)
+        if tome is None:
             return None
+        return await self._dedup_and_store(tome)
 
-        tome = Tome(
+    async def _build_tome(self, chunk: str) -> Tome | None:
+        """Verify, classify, and embed a chunk, returning a Tome ready for storage.
+
+        Returns None if verification rejects the chunk.  Does NOT persist anything.
+        """
+        if self._config.verification.enabled:
+            (
+                verification_result,
+                (category, tags),
+                (title, summary),
+                embedding,
+            ) = await asyncio.gather(
+                self._verifier.verify(chunk),
+                self._classify_and_tag(chunk),
+                self._generate_title_and_summary(chunk),
+                self._embedding_service.embed(chunk),
+            )
+            if verification_result.confidence < self._config.verification.reject_threshold:
+                return None
+            confidence = verification_result.confidence
+        else:
+            (category, tags), (title, summary), embedding = await asyncio.gather(
+                self._classify_and_tag(chunk),
+                self._generate_title_and_summary(chunk),
+                self._embedding_service.embed(chunk),
+            )
+            confidence = 1.0
+
+        return Tome(
             id=uuid.uuid4(),
             content=chunk,
             summary=summary,
@@ -91,39 +118,48 @@ class Ingestor:
             embedding=embedding,
             source_url=None,
             source_type=SourceType.AGENT_INPUT,
-            confidence=verification.confidence,
+            confidence=confidence,
         )
-        return await self._dedup_and_store(tome)
 
     async def _dedup_and_store(self, tome: Tome) -> list[Tome]:
         """Insert tome, or reshard with any near-duplicates found in the repository.
 
-        Reshard: combine the new tome's content with duplicate content, delete the
-        old tomes, re-chunk, and re-process each new chunk through the full pipeline.
-        Because the old tomes are deleted before re-processing, subsequent
-        find_near_duplicates calls on the new chunks will not match them again.
+        Reshard strategy (safe ordering):
+        1. Build and verify all replacement tomes from combined content.
+        2. Abort without touching existing tomes if no replacement survives verification.
+        3. Delete old tomes only once at least one replacement is ready — checking
+           each delete return value and raising ReshardError on failure.
+        4. Insert all replacements.
         """
         duplicates = await self._tome_repo.find_near_duplicates(tome)
         if not duplicates:
             await self._tome_repo.insert(tome)
             return [tome]
 
-        # Combine existing duplicate content with the incoming content.
+        # Step 1 — build replacements from combined content (nothing persisted yet).
         combined = "\n\n".join([d.content for d in duplicates] + [tome.content])
-
-        # Delete old tomes before inserting resharded replacements.
-        for dup in duplicates:
-            await self._tome_repo.delete(dup.id)
-
         new_chunks = await self._chunk(combined)
-        chunk_results = await asyncio.gather(
-            *[self._process_chunk(c) for c in new_chunks]
-        )
-        results: list[Tome] = []
-        for result in chunk_results:
-            if result is not None:
-                results.extend(result)
-        return results
+        replacement_results = await asyncio.gather(*[self._build_tome(c) for c in new_chunks])
+        replacements = [t for t in replacement_results if t is not None]
+
+        # Step 2 — abort if verification left us with nothing to store.
+        if not replacements:
+            return []
+
+        # Step 3 — safe to delete now that we have confirmed replacements.
+        for dup in duplicates:
+            deleted = await self._tome_repo.delete(dup.id)
+            if not deleted:
+                raise ReshardError(
+                    f"Failed to delete tome {dup.id!r} during reshard; "
+                    "aborting to prevent duplicate data."
+                )
+
+        # Step 4 — insert all replacements.
+        for replacement in replacements:
+            await self._tome_repo.insert(replacement)
+
+        return replacements
 
     async def _chunk(self, blob: str) -> list[str]:
         """Split blob into atomic, self-contained fact chunks.

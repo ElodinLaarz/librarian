@@ -20,5 +20,5 @@ class Tome(BaseModel):
     source_url: str | None = None
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
-    embedding: NDArray[Shape["*"], np.float32]  # noqa: F722
+    embedding: NDArray[Shape["*"], np.float32]  # type: ignore[valid-type]  # noqa: F722
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
