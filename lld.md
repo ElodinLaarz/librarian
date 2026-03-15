@@ -4,7 +4,7 @@
 
 | | |
 | ----------- | ------------ |
-| **Version** | 0.2 (Draft) |
+| **Version** | 0.3 (Draft) |
 | **Date** | March 2026 |
 | **Status** | Design Phase |
 
@@ -38,29 +38,26 @@ ______________________________________________________________________
 │  LIBRARIAN MCP SERVER            │
 │  server.py — tool routing,       │
 │  input validation, wiring        │
-└──────┬──────────────┬────────────┘
-       │              │
-       ▼              ▼
-┌────────────┐  ┌─────────────────────────────────┐
-│  Search    │  │  Ingestor                        │
-│  Engine    │  │  ┌──────────┐  ┌──────────────┐ │
-│            │  │  │ Verifier │  │ Embedding    │ │
-│ Embedding  │  │  │          │  │ Service      │ │
-│ Service    │  │  └──────────┘  └──────────────┘ │
-└──────┬─────┘  └──────────────────┬──────────────┘
-       │                           │
-       │  ◄── API 2: Repository Layer ──►
-       │                           │
-       ▼                           ▼
-┌──────────────────────────────────┐
-│  TomeRepository                  │
-│  (abstract; MongoDB impl)        │
-└──────────────────────────────────┘
+└──────────┬───────────────────────┘
+           │
+           ├── library_search ──► TomeRepository.search(query)
+           │
+           └── library_ingest ──► Ingestor
+                                    ├── EmbeddingService
+                                    ├── Verifier
+                                    └── TomeRepository
+                                          │
+                                          ▼
+                                  ┌───────────────────┐
+                                  │  FsTomeRepository  │
+                                  │  ~/.librarian_mcp/ │
+                                  │  tomes/<uuid>.json │
+                                  └───────────────────┘
 ```
 
-The Calling Agent communicates only with the MCP server. All persistence goes
-through `TomeRepository`. `EmbeddingService` is shared between `SearchEngine`
-and `Ingestor`.
+Search is routed directly to `TomeRepository.search`; no separate search
+service. The concrete storage implementation is `FsTomeRepository` (filesystem
+JSON). A MongoDB implementation is planned for a later phase.
 
 ______________________________________________________________________
 
@@ -73,8 +70,7 @@ ______________________________________________________________________
 
 ### 2.1 `library_search`
 
-Converts a natural-language query to a vector embedding and retrieves the most
-semantically relevant Tomes.
+Retrieves the most semantically relevant Tomes for a natural-language query.
 
 #### Input — `SearchInput`
 
@@ -89,9 +85,9 @@ semantically relevant Tomes.
 #### Output — `SearchOutput`
 
 | Field | Type | Description |
-| ------------ | --------- | -------------------------------------------------------------------- |
-| `tomes` | `Tome[]` | Matching Tome documents, sorted by re-ranked score descending |
-| `scores` | `float[]` | Final scores corresponding to each Tome (parallel array) |
+| ------------ | --------- | ---------------------------------------------------------------- |
+| `tomes` | `Tome[]` | Matching Tome documents, sorted by score descending |
+| `scores` | `float[]` | Similarity scores corresponding to each Tome (parallel array) |
 | `query_id` | `str` | Unique identifier for this search request |
 | `from_cache` | `bool` | Whether the query embedding was served from the LRU cache |
 
@@ -106,119 +102,73 @@ ______________________________________________________________________
 
 ### 2.2 `library_ingest`
 
-Validates, chunks, embeds, and stores a raw knowledge payload as one or more
-Tomes.
+Validates, embeds, deduplicates, and stores raw text as one or more Tomes.
 
 #### Input — `IngestInput`
 
-| Field | Type | Required | Constraints | Default |
-| -------------- | ----------- | -------- | ----------- | ------- |
-| `content` | `str` | Yes | — | — |
-| `title` | `str\|null` | No | — | `null` |
-| `category` | `str\|null` | No | — | `null` |
-| `tags` | `str[]` | No | — | `[]` |
-| `source_url` | `str\|null` | No | — | `null` |
-| `skip_verify` | `bool` | No | — | `false` |
-| `allow_update` | `bool` | No | — | `true` |
+| Field | Type | Required | Notes |
+| --------- | ----- | -------- | ------ |
+| `content` | `str` | Yes | Raw knowledge text |
 
 #### Output — `IngestOutput`
 
 | Field | Type | Description |
-| --------------- | -------------- | ------------------------------------------------------------------- |
-| `tome_ids` | `str[]` | IDs of all Tomes created or updated |
+| --------------- | -------------- | ------------------------------------------------------- |
 | `tomes` | `Tome[]` | Full Tome objects as stored |
-| `confidence` | `float` | Aggregate verification confidence (0.0–1.0) |
-| `chunks` | `int` | Number of chunks the input was split into |
 | `status` | `IngestStatus` | One of: `stored`, `rejected`, `partial` |
 | `reject_reason` | `str\|null` | Rejection explanation; non-null when `status=rejected` |
 
 #### Errors
 
 | Code | When raised |
-| ------------------- | ---------------------------------------- |
+| ------------------- | ------------------------------------------ |
 | `VERIFY_FAILED` | Confidence below reject threshold (< 0.3) |
-| `CONTENT_TOO_SHORT` | Input too short to chunk meaningfully |
 | `EMBED_UNAVAILABLE` | Embedding model unreachable |
 
 ______________________________________________________________________
 
 ### 2.3 Shared Type — `Tome`
 
-All tool outputs that include `Tome` objects use this schema (source:
-`src/models/tome.py`):
+Source: `src/models/tome.py`
 
 | Field | Type | Description |
-| --------------- | ------------ | ----------------------------------------------------- |
-| `id` | `str` | UUID hex string, auto-generated |
+| ------------- | -------------------- | ---------------------------------------- |
+| `id` | `UUID` | Auto-generated UUID |
 | `title` | `str` | Short descriptive title (max 120 chars) |
 | `content` | `str` | Full text body |
 | `summary` | `str` | One-to-two sentence summary |
 | `category` | `str` | High-level domain category |
 | `tags` | `str[]` | Freeform topic tags |
 | `source_url` | `str\|null` | Origin URL if sourced from the web |
-| `source_type` | `SourceType` | One of: `agent_input`, `researcher`, `manual` |
+| `source_type` | `SourceType` | `agent_input`, `researcher`, or `manual` |
 | `confidence` | `float` | Truthiness confidence score (0.0–1.0) |
-| `embedding` | `float[]` | Dense vector embedding of the content |
-| `created_at` | `datetime` | ISO 8601 UTC timestamp of creation |
-| `updated_at` | `datetime` | ISO 8601 UTC timestamp of last modification |
-| `version` | `int` | Incremented on each content update; starts at 1 |
-| `research_job` | `str\|null` | ID of the ResearchJob that produced this Tome, if any |
+| `embedding` | `NDArray[np.float32]` | Dense vector embedding of the content |
+| `created_at` | `datetime` | UTC timestamp of creation |
 
 ______________________________________________________________________
 
 ## 3. Service Layer
 
-The service layer sits between the MCP server and the repository. It owns all
-business logic; the MCP server only does routing and validation.
-
 ______________________________________________________________________
 
-### 3.1 `SearchEngine`
-
-Source: `src/services/search.py`
-
-Dependencies: `SearchSettings`, `EmbeddingService`, `TomeRepository`
-
-| Method | Signature | Returns | Notes |
-| --------------- | -------------------------------------------- | --------------------- | ------------------------------------------ |
-| `search` | `(params: SearchInput)` | `SearchOutput` | Full pipeline: embed → search → re-rank |
-| `_embed_query` | `(query: str)` | `(list[float], bool)` | Returns `(vector, from_cache)` |
-| `_rerank` | `(results, recency_boost: float=0.1)` | `results` | Blends similarity, recency, confidence |
-
-**Pipeline:**
-
-1. `_embed_query` — pass query through `EmbeddingService.embed()`; SHA-256 cache
-   hit returns immediately with `from_cache=True`
-1. `TomeRepository.vector_search` — ANN search with optional `category` and
-   `min_confidence` filters
-1. `_rerank` — blend raw cosine score with `updated_at` recency and
-   `confidence`; re-sort descending
-1. Serialize `tomes` and parallel `scores`; generate `query_id`; return
-   `SearchOutput`
-
-______________________________________________________________________
-
-### 3.2 `EmbeddingService`
+### 3.1 `EmbeddingService`
 
 Source: `src/services/embedding.py`
 
 Abstract base; concrete implementations cover Ollama, sentence-transformers,
-OpenAI. Shared by `SearchEngine` and `Ingestor`.
+OpenAI. Used by `Ingestor` to embed content before storage and dedup.
 
 | Method | Signature | Returns | Notes |
-| -------------- | ---------------------- | ------------- | ----------------------------------------- |
+| ------------ | ------------- | ----------- | ------------------------------------------ |
 | `initialize` | `()` | `None` | Load model; warm up provider connection |
-| `embed` | `(text: str)` | `list[float]` | Single text; returns from LRU cache if hit |
-| `embed_batch` | `(texts: list[str])` | `list[list[float]]` | Batch embed for throughput |
-| `_cache_key` | `(text: str)` | `str` | SHA-256 hash of text for cache lookup |
-| `dimensions` | property | `int` | Output vector dimensionality |
+| `embed` | `(text: str)` | `np.ndarray` | Single text; returns from LRU cache if hit |
 
-Cache is an in-memory LRU keyed on `_cache_key(text)`. Cache size is
+Cache is an in-memory LRU keyed on SHA-256 of input text. Cache size is
 configurable (`embedding.cache_size`). Cold on restart.
 
 ______________________________________________________________________
 
-### 3.3 `Ingestor`
+### 3.2 `Ingestor`
 
 Source: `src/services/ingestor.py`
 
@@ -226,49 +176,46 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 `TomeRepository`
 
 | Method | Signature | Returns | Notes |
-| ----------------------- | -------------------------------------------- | ------------- | --------------------------------------------------- |
-| `ingest` | `(params: IngestInput)` | `IngestOutput` | Full pipeline: validate → verify → chunk → embed → dedup → store |
-| `_validate` | `(params: IngestInput)` | `None` | Length check, HTML sanitisation; raises on failure |
-| `_chunk` | `(content: str)` | `list[str]` | LLM-driven decomposition into self-contained atomic facts |
+| ----------------------------- | ----------------------------------------- | ----------- | ---------------------------------------------------------------- |
+| `ingest` | `(blob: str)` | `list[Tome]` | Full pipeline: classify+summarize+embed (concurrent) → validate → dedup → store |
+| `_validate` | `(tome: Tome)` | `None` | Post-construction checks; raises on failure |
 | `_classify_and_tag` | `(chunk: str, category_hint: str\|None)` | `(str, list[str])` | Returns `(category, tags)` |
 | `_generate_title_and_summary` | `(chunk: str)` | `(str, str)` | Returns `(title, summary)` |
-| `_dedup_and_store` | `(tome: Tome, allow_update: bool)` | `list[str]` | Near-dup check → reshard or insert; returns list of Tome IDs |
+| `_dedup_and_store` | `(tome: Tome)` | `list[UUID]` | Near-dup check → reshard or insert; returns stored Tome IDs |
 
 **Pipeline:**
 
-1. `_validate` — enforce minimum length, sanitise HTML/markdown
-1. `Verifier.verify` — unless `skip_verify=True`; reject if
-   `confidence < reject_threshold`
-1. `_chunk` — LLM prompt decomposes content into atomic, self-contained facts;
-   each chunk must stand alone without requiring surrounding context. Word count
-   is a soft upper bound (~400 words), not the splitting criterion. A single
-   short input may produce one chunk; a dense multi-topic input may produce many.
-1. For each chunk:
-   1. `_classify_and_tag` — category classification + keyword tag extraction
-   1. `_generate_title_and_summary` — LLM-generated title and summary
-   1. `EmbeddingService.embed` — produce chunk vector
-   1. `_dedup_and_store`:
-      - Call `TomeRepository.find_near_duplicates`
-      - **No duplicates** → `insert` the new Tome
-      - **Duplicates found and `allow_update=True`** → reshard: combine the
-        new chunk's content with all overlapping Tomes' content, re-run
-        `_chunk` on the combined text, produce fresh Tomes for each resulting
-        `delete` all old overlapping Tomes, `insert` the new ones
+1. `_classify_and_tag`, `_generate_title_and_summary`, and
+   `EmbeddingService.embed` run **concurrently** via `asyncio.gather`
+1. A `Tome` object is constructed from the results
+1. `_validate` — post-construction checks on the assembled Tome
+1. `Verifier.verify` — reject if `confidence < reject_threshold`
+1. `_dedup_and_store`:
+   - Call `TomeRepository.find_near_duplicates(tome)`
+   - **No duplicates** → `TomeRepository.insert(tome)`
+   - **Duplicates found** → reshard: combine new content with all overlapping
+     Tomes' content, re-run the pipeline on the combined text, delete old
+     Tomes, insert fresh ones
+
+> **Note:** Chunking of long inputs into multiple atomic facts is handled
+> within `_dedup_and_store`'s reshard path. A single input blob always enters
+> the pipeline as one unit; resharding is what produces multiple Tomes when
+> content overlaps with existing knowledge.
 
 ______________________________________________________________________
 
-### 3.4 `Verifier`
+### 3.3 `Verifier`
 
 Source: `src/services/verifier.py`
 
 Dependencies: `VerificationSettings`, `WebSearchClient`
 
 | Method | Signature | Returns | Notes |
-| ---------------------- | ------------------------------ | -------------------- | -------------------------------------------- |
+| ----------------------- | ------------------------------ | -------------------- | ---------------------------------------------------- |
 | `verify` | `(content: str)` | `VerificationResult` | Full pipeline; returns offline result if unavailable |
 | `_extract_claims` | `(content: str)` | `list[str]` | 3–7 claims via zero-shot prompt |
 | `_check_claim` | `(claim: str)` | `ClaimResult` | Web search + snippet scoring per claim |
-| `_aggregate_confidence`| `(results: list[ClaimResult])` | `float` | Weighted score across all claims |
+| `_aggregate_confidence` | `(results: list[ClaimResult])` | `float` | Weighted score across all claims |
 | `_make_offline_result` | `()` | `VerificationResult` | Synthetic 0.6 confidence when search unavailable |
 
 **Types:**
@@ -290,20 +237,20 @@ class VerificationResult:
 **Confidence thresholds** (from `VerificationSettings`):
 
 | Range | Action |
-| ----------- | ---------------------------------------- |
+| ----------- | ------------------------------------- |
 | ≥ 0.7 | Store with full confidence |
 | 0.3 – 0.7 | Store with low-confidence flag |
 | < 0.3 | Reject; raise `VERIFY_FAILED` |
 
-When `skip_verify=True` or no search API key is configured,
-`_make_offline_result` returns `confidence=0.6` and `skipped=True`.
+When no search API key is configured, `_make_offline_result` returns
+`confidence=0.6` and `skipped=True`.
 
 ______________________________________________________________________
 
 ## 4. API 2 — Repository Layer
 
-Defined in `src/storage/`. Abstract base classes; concrete implementations bind
-to MongoDB. Services are the only callers.
+Source: `src/storage/`. Abstract base class with a concrete filesystem
+implementation. Services are the only callers.
 
 ______________________________________________________________________
 
@@ -312,38 +259,53 @@ ______________________________________________________________________
 Source: `src/storage/tome_repository.py`
 
 | Method | Signature | Returns | Notes |
-| ----------------------- | ------------------------------------------------------------------------------ | -------------------------- | ----------------------------------------------------- |
-| `insert` | `(tome: Tome)` | `str` | Inserts a new Tome; returns its ID |
-| `get_by_id` | `(tome_id: str)` | `Tome \| None` | |
-| `update` | `(tome_id: str, updates: dict[str, Any])` | `bool` | `True` if a document was modified |
-| `delete` | `(tome_id: str)` | `None` | Permanently removes a Tome by ID |
-| `vector_search` | `(embedding: float[], top_k: int, category?: str, min_confidence: float=0.5)` | `list[tuple[Tome, float]]` | ANN search via `$vectorSearch`; sorted by similarity |
-| `find_near_duplicates` | `(embedding: float[], threshold: float=0.95)` | `list[Tome]` | Tomes with cosine similarity above threshold |
-| `find_by_research_job` | `(job_id: str)` | `list[Tome]` | All Tomes from a given research job (v2) |
+| --------------------- | ------------------------------------------------- | -------------------------- | --------------------------------------------------- |
+| `insert` | `(tome: Tome)` | `UUID` | Inserts a new Tome; returns its ID |
+| `delete` | `(tome_id: UUID)` | `bool` | Removes a Tome; `True` if found and deleted |
+| `get_by_id` | `(tome_id: UUID)` | `Tome \| None` | |
+| `search` | `(query: str, top_k: int, min_confidence: float)` | `list[tuple[Tome, float]]` | Full-text or vector search; sorted by score |
+| `find_near_duplicates` | `(tome: Tome)` | `list[Tome]` | Tomes with high embedding similarity to the input |
+
+______________________________________________________________________
+
+### 4.2 `FsTomeRepository`
+
+Source: `src/storage/filesystem/fs_tome_repository.py`
+
+Current concrete implementation. Stores each Tome as a JSON file under
+`~/.librarian_mcp/tomes/<uuid>.json` (path configurable via
+`DatabaseSettings.uri`).
+
+| Method | Behaviour |
+| --------------------- | ----------------------------------------------------------------- |
+| `insert` | Writes `<uuid>.json` via `Tome.model_dump_json()` |
+| `delete` | Unlinks `<uuid>.json`; returns `False` if file not found |
+| `get_by_id` | Reads and deserialises `<uuid>.json` |
+| `search` | Brute-force scan of all `.json` files; filters by `min_confidence`; placeholder similarity score |
+| `find_near_duplicates` | Scans all files; placeholder comparison by title equality |
+
+> **Note:** `search` and `find_near_duplicates` in `FsTomeRepository` use
+> placeholder logic. A production implementation (MongoDB or similar) will
+> replace these with proper vector similarity search against stored embeddings.
 
 ______________________________________________________________________
 
 ## 5. User Journeys
 
-Each journey shows the full call chain across both API boundaries.
-
 ______________________________________________________________________
 
-### Journey A — Search (cache hit)
+### Journey A — Search (results found)
 
 ```
 Agent → library_search(query="how does X work", top_k=5)
-  SearchEngine.search():
-    _embed_query("how does X work")
-      EmbeddingService.embed() → LRU cache hit → from_cache=True
-    tome_repo.vector_search(embedding, top_k=5, min_confidence=0.5)
-      MongoDB $vectorSearch → [(Tome_t1, 0.91), (Tome_t2, 0.87), (Tome_t3, 0.81)]
-    _rerank(results, recency_boost=0.1) → re-sorted list
+  server:
+    tome_repo.search("how does X work", top_k=5, min_confidence=0.5)
+      FsTomeRepository: scan *.json, filter confidence ≥ 0.5, return top 5
 ← Agent ← SearchOutput{
     tomes: [t1, t2, t3],
     scores: [0.93, 0.88, 0.82],
     query_id: "q1",
-    from_cache: true
+    from_cache: false
   }
 ```
 
@@ -353,10 +315,9 @@ ______________________________________________________________________
 
 ```
 Agent → library_search(query="obscure topic")
-  SearchEngine.search():
-    _embed_query("obscure topic") → cache miss → EmbeddingService.embed()
-    tome_repo.vector_search(embedding, top_k=5, min_confidence=0.5)
-      MongoDB $vectorSearch → [] (nothing above threshold)
+  server:
+    tome_repo.search("obscure topic", top_k=5, min_confidence=0.5)
+      FsTomeRepository: scan *.json → [] (nothing above threshold)
 ← Agent ← SearchOutput{tomes: [], scores: [], query_id: "q2", from_cache: false}
 ```
 
@@ -365,56 +326,27 @@ The agent may call `library_ingest` with curated content on the topic, or
 
 ______________________________________________________________________
 
-### Journey C — Ingest (happy path, multi-fact decomposition)
-
-Input is a dense article covering several distinct facts. `_chunk` decomposes
-it into three self-contained atomic facts rather than splitting at a word-count
-boundary.
+### Journey C — Ingest (new content, no duplicates)
 
 ```
-Agent → library_ingest(content="<article covering facts A, B, C>", source_url="https://...")
-  Ingestor.ingest():
-    _validate() → OK
-    Verifier.verify(content):
-      _extract_claims() → 5 claims
-      _check_claim() × 5 → [supported, supported, unverifiable, supported, supported]
+Agent → library_ingest(content="<article covering a single fact>")
+  Ingestor.ingest(blob):
+    concurrently:
+      _classify_and_tag(blob)        → ("science", ["tag_a", "tag_b"])
+      _generate_title_and_summary(blob) → ("Title A", "Summary A")
+      EmbeddingService.embed(blob)   → embedding (NDArray[float32])
+    Tome{id: uuid4(), content, title, summary, category, tags, embedding, ...}
+    _validate(tome) → OK
+    Verifier.verify(blob):
+      _extract_claims() → 4 claims
+      _check_claim() × 4 → [supported, supported, unverifiable, supported]
       _aggregate_confidence() → 0.82
-      → VerificationResult{confidence: 0.82, skipped: false}
     0.82 ≥ 0.3 → proceed
-    _chunk(content):
-      LLM prompt: "decompose into atomic, self-contained facts"
-      → ["Fact A (standalone)", "Fact B (standalone)", "Fact C (standalone)"]
-      ← 3 chunks, each independently meaningful
-
-    chunk "Fact A":
-      _classify_and_tag() → ("science", ["tag_a"])
-      _generate_title_and_summary() → ("Title A", "Summary A")
-      EmbeddingService.embed() → embedding_a
-      _dedup_and_store(allow_update=true):
-        tome_repo.find_near_duplicates(embedding_a) → []
-        tome_repo.insert(Tome{...}) → "t1"
-
-    chunk "Fact B":
-      _classify_and_tag() → ("science", ["tag_b"])
-      _generate_title_and_summary() → ("Title B", "Summary B")
-      EmbeddingService.embed() → embedding_b
-      _dedup_and_store(allow_update=true):
-        tome_repo.find_near_duplicates(embedding_b) → []
-        tome_repo.insert(Tome{...}) → "t2"
-
-    chunk "Fact C":
-      _classify_and_tag() → ("science", ["tag_c"])
-      _generate_title_and_summary() → ("Title C", "Summary C")
-      EmbeddingService.embed() → embedding_c
-      _dedup_and_store(allow_update=true):
-        tome_repo.find_near_duplicates(embedding_c) → []
-        tome_repo.insert(Tome{...}) → "t3"
-
+    _dedup_and_store(tome):
+      tome_repo.find_near_duplicates(tome) → []
+      tome_repo.insert(tome) → uuid_t1
 ← Agent ← IngestOutput{
-    tome_ids: ["t1", "t2", "t3"],
-    tomes: [Tome_t1, Tome_t2, Tome_t3],
-    confidence: 0.82,
-    chunks: 3,
+    tomes: [Tome_t1],
     status: "stored",
     reject_reason: null
   }
@@ -424,48 +356,32 @@ ______________________________________________________________________
 
 ### Journey D — Ingest (duplicate → reshard)
 
-New content partially overlaps with an existing Tome. Rather than overwriting
-it, the overlapping Tomes and the new chunk are combined and re-decomposed into
-fresh atomic facts. The old Tomes are deleted.
+New content overlaps with an existing Tome. The old Tome is deleted and the
+combined knowledge is re-ingested as fresh atomic facts.
 
 ```
-Agent → library_ingest(content="updated fact about X with new detail", allow_update=true)
-  Ingestor.ingest():
-    _validate() → OK
-    Verifier.verify() → VerificationResult{confidence: 0.75}
-    _chunk("updated fact about X with new detail") → ["new_chunk"]
-    _classify_and_tag("new_chunk") → ("science", ["tag_a"])
-    _generate_title_and_summary("new_chunk") → ("Title A v2", "Summary A v2")
-    EmbeddingService.embed("new_chunk") → embedding_new
+Agent → library_ingest(content="updated fact about X with new detail")
+  Ingestor.ingest(blob):
+    concurrently:
+      _classify_and_tag(blob)           → ("science", ["tag_a"])
+      _generate_title_and_summary(blob) → ("Title A v2", "Summary A v2")
+      EmbeddingService.embed(blob)      → embedding_new
+    Tome{id: uuid_new, ...}
+    _validate(tome) → OK
+    Verifier.verify(blob) → VerificationResult{confidence: 0.75}
+    _dedup_and_store(tome):
+      tome_repo.find_near_duplicates(tome)
+        → [Tome{id: uuid_t1, content: "original fact about X"}]
 
-    _dedup_and_store(new_tome, allow_update=true):
-      tome_repo.find_near_duplicates(embedding_new, threshold=0.95)
-        → [Tome{id:"t1", content:"original fact about X"}]  ← similarity 0.97
-
-      duplicates found + allow_update=True → reshard:
-        combined = "original fact about X" + "updated fact about X with new detail"
-        _chunk(combined):
-          LLM decomposes combined text → ["Resharded fact A", "Resharded fact B"]
-
-        for "Resharded fact A":
-          _classify_and_tag(), _generate_title_and_summary()
-          EmbeddingService.embed() → embedding_ra
-          tome_repo.find_near_duplicates(embedding_ra) → []
-          tome_repo.insert(Tome{...}) → "t2"
-
-        for "Resharded fact B":
-          _classify_and_tag(), _generate_title_and_summary()
-          EmbeddingService.embed() → embedding_rb
-          tome_repo.find_near_duplicates(embedding_rb) → []
-          tome_repo.insert(Tome{...}) → "t3"
-
-        tome_repo.delete("t1")  ← old tome permanently removed
+      reshard:
+        combined = "original fact about X\n\nupdated fact about X with new detail"
+        ingest(combined) [recursive, internal]:
+          → Tome_ra ("Resharded fact A") → uuid_ra
+          → Tome_rb ("Resharded fact B") → uuid_rb
+        tome_repo.delete(uuid_t1)  ← old Tome permanently removed
 
 ← Agent ← IngestOutput{
-    tome_ids: ["t2", "t3"],
-    tomes: [Tome_t2, Tome_t3],
-    confidence: 0.75,
-    chunks: 2,
+    tomes: [Tome_ra, Tome_rb],
     status: "stored",
     reject_reason: null
   }
@@ -473,24 +389,20 @@ Agent → library_ingest(content="updated fact about X with new detail", allow_u
 
 ______________________________________________________________________
 
-### Journey E — Ingest (rejected)
+### Journey E — Ingest (rejected by verifier)
 
 ```
 Agent → library_ingest(content="The moon is made of cheese...")
-  Ingestor.ingest():
-    _validate() → OK
-    Verifier.verify():
+  Ingestor.ingest(blob):
+    concurrently: classify, summarize, embed
+    _validate(tome) → OK
+    Verifier.verify(blob):
       _extract_claims() → 3 claims
       _check_claim() × 3 → [contradicted, contradicted, contradicted]
       _aggregate_confidence() → 0.11
-      → VerificationResult{confidence: 0.11}
-    0.11 < 0.3 → raise VERIFY_FAILED
-
+    0.11 < 0.3 → reject
 ← Agent ← IngestOutput{
-    tome_ids: [],
     tomes: [],
-    confidence: 0.11,
-    chunks: 0,
     status: "rejected",
     reject_reason: "Confidence 0.11 below reject threshold 0.3"
   }
@@ -513,14 +425,12 @@ All errors use this envelope:
 ```
 
 | Code | Layer | Meaning |
-| -------------------- | ----------- | --------------------------------------------------------------- |
-| `EMBED_UNAVAILABLE` | SearchEngine / Ingestor | Embedding model unreachable (Ollama down, model not loaded) |
+| ------------------- | --------------- | --------------------------------------------------------------- |
+| `EMBED_UNAVAILABLE` | Ingestor | Embedding model unreachable |
 | `VERIFY_FAILED` | Verifier | Confidence below `reject_threshold` (< 0.3) |
-| `CONTENT_TOO_SHORT` | Ingestor | Input too short to produce at least one chunk |
-| `NO_RESULTS` | SearchEngine | Zero results above `min_confidence` threshold |
-| `DB_UNAVAILABLE` | TomeRepository | MongoDB unreachable or connection timed out |
-| `DUPLICATE_CONFLICT` | TomeRepository | Near-duplicate found and `allow_update=false` |
-| `EMBEDDING_MISMATCH` | TomeRepository | Stored vector dimensions don't match the configured index |
+| `NO_RESULTS` | MCP server | Zero results above `min_confidence` threshold |
+| `DB_UNAVAILABLE` | TomeRepository | Storage backend unreachable or unreadable |
+| `EMBEDDING_MISMATCH` | TomeRepository | Stored vector dimensions don't match the configured model |
 
 `details` is an optional free-form object; its structure is not stable across
 versions.
@@ -537,13 +447,13 @@ ______________________________________________________________________
 
 ### 7.1 `library_research` (provisional)
 
-Dispatches a Researcher to search the web, synthesise findings, and pipe results
-through the ingest pipeline as new Tomes.
+Dispatches a Researcher to search the web, synthesise findings, and pipe
+results through the ingest pipeline as new Tomes.
 
 #### Input — `ResearchInput`
 
 | Field | Type | Required | Default | Notes |
-| ----------- | --------------- | -------- | ---------- | ----------------------------------------- |
+| ----------- | --------------- | -------- | ---------- | -------------------------------- |
 | `topic` | `str` | Yes | — | |
 | `context` | `str\|null` | No | `null` | |
 | `depth` | `ResearchDepth` | No | `standard` | `shallow` / `standard` / `deep` |
@@ -557,10 +467,10 @@ status instead of starting a new job.
 #### Output — `ResearchOutput`
 
 | Field | Type | Description |
-| ------------- | ----------- | ------------------------------------------------------------ |
+| ------------- | ----------- | ------------------------------------------- |
 | `job_id` | `str` | ID of the ResearchJob record |
-| `tome_ids` | `str[]` | IDs of Tomes created; empty while pending/running |
-| `tomes` | `Tome[]` | Full Tome objects; empty while pending/running |
+| `tome_ids` | `UUID[]` | IDs of Tomes created; empty while in-flight |
+| `tomes` | `Tome[]` | Full Tome objects; empty while in-flight |
 | `sources` | `str[]` | URLs consulted |
 | `query_count` | `int` | Search queries issued |
 | `status` | `JobStatus` | `pending` / `running` / `completed` / `failed` |
