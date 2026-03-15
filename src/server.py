@@ -71,10 +71,6 @@ async def library_search(params: SearchInput) -> SearchOutput:
     tomes = [tome for tome, _ in results]
     scores = [score for _, score in results]
 
-    if params.include_summary:
-        for tome in tomes:
-            tome.content = tome.summary
-
     return SearchOutput(
         tomes=tomes,
         scores=scores,
