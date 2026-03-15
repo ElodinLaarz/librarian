@@ -94,9 +94,8 @@ Retrieves the most semantically relevant Tomes for a natural-language query.
 #### Errors
 
 | Code | When raised |
-| ------------------- | -------------------------------------------- |
+| ------------------- | ---------------------------- |
 | `EMBED_UNAVAILABLE` | Embedding model unreachable |
-| `NO_RESULTS` | Zero tomes exceed `min_confidence` threshold |
 
 ______________________________________________________________________
 
@@ -176,8 +175,9 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 `TomeRepository`
 
 | Method | Signature | Returns | Notes |
-| ----------------------------- | ----------------------------------------- | ----------- | ---------------------------------------------------------------- |
-| `ingest` | `(blob: str)` | `list[Tome]` | Full pipeline: classify+summarize+embed (concurrent) → validate → dedup → store |
+| ----------------------------- | ----------------------------------------- | ------------ | --------------------------------------------------------------- |
+| `ingest` | `(blob: str)` | `list[Tome]` | Full pipeline: chunk → per-chunk (classify+summarize+embed) → validate → dedup → store |
+| `_chunk` | `(blob: str)` | `list[str]` | LLM-driven decomposition into atomic, self-contained facts |
 | `_validate` | `(tome: Tome)` | `None` | Post-construction checks; raises on failure |
 | `_classify_and_tag` | `(chunk: str, category_hint: str\|None)` | `(str, list[str])` | Returns `(category, tags)` |
 | `_generate_title_and_summary` | `(chunk: str)` | `(str, str)` | Returns `(title, summary)` |
@@ -185,22 +185,22 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 
 **Pipeline:**
 
-1. `_classify_and_tag`, `_generate_title_and_summary`, and
-   `EmbeddingService.embed` run **concurrently** via `asyncio.gather`
-1. A `Tome` object is constructed from the results
-1. `_validate` — post-construction checks on the assembled Tome
-1. `Verifier.verify` — reject if `confidence < reject_threshold`
+1. `_chunk` — LLM prompt decomposes the input blob into atomic,
+   self-contained facts. Each chunk must stand alone without requiring
+   surrounding context. A short single-fact input produces one chunk; a dense
+   multi-topic document produces many.
+1. For each chunk, concurrently via `asyncio.gather`:
+   - `_classify_and_tag`
+   - `_generate_title_and_summary`
+   - `EmbeddingService.embed`
+1. Construct a `Tome` from the results and run `_validate`
+1. `Verifier.verify` on the chunk — reject chunk if `confidence < reject_threshold`
 1. `_dedup_and_store`:
    - Call `TomeRepository.find_near_duplicates(tome)`
    - **No duplicates** → `TomeRepository.insert(tome)`
-   - **Duplicates found** → reshard: combine new content with all overlapping
-     Tomes' content, re-run the pipeline on the combined text, delete old
-     Tomes, insert fresh ones
-
-> **Note:** Chunking of long inputs into multiple atomic facts is handled
-> within `_dedup_and_store`'s reshard path. A single input blob always enters
-> the pipeline as one unit; resharding is what produces multiple Tomes when
-> content overlaps with existing knowledge.
+   - **Duplicates found** → reshard: combine this chunk's content with all
+     overlapping Tomes' content, re-run from step 1 on the combined text,
+     delete old Tomes, insert fresh ones
 
 ______________________________________________________________________
 
@@ -328,25 +328,42 @@ ______________________________________________________________________
 
 ### Journey C — Ingest (new content, no duplicates)
 
+A large document is decomposed into two atomic facts upfront; each is stored as
+an independent Tome.
+
 ```
-Agent → library_ingest(content="<article covering a single fact>")
+Agent → library_ingest(content="<article covering facts A and B>")
   Ingestor.ingest(blob):
-    concurrently:
-      _classify_and_tag(blob)        → ("science", ["tag_a", "tag_b"])
-      _generate_title_and_summary(blob) → ("Title A", "Summary A")
-      EmbeddingService.embed(blob)   → embedding (NDArray[float32])
-    Tome{id: uuid4(), content, title, summary, category, tags, embedding, ...}
-    _validate(tome) → OK
-    Verifier.verify(blob):
-      _extract_claims() → 4 claims
-      _check_claim() × 4 → [supported, supported, unverifiable, supported]
-      _aggregate_confidence() → 0.82
-    0.82 ≥ 0.3 → proceed
-    _dedup_and_store(tome):
-      tome_repo.find_near_duplicates(tome) → []
-      tome_repo.insert(tome) → uuid_t1
+    _chunk(blob):
+      LLM: "decompose into atomic, self-contained facts"
+      → ["Fact A (standalone)", "Fact B (standalone)"]
+
+    chunk "Fact A":
+      concurrently:
+        _classify_and_tag()           → ("science", ["tag_a"])
+        _generate_title_and_summary() → ("Title A", "Summary A")
+        EmbeddingService.embed()      → embedding_a
+      Tome{id: uuid_a, content: "Fact A", ...}
+      _validate(tome_a) → OK
+      Verifier.verify("Fact A") → confidence: 0.85
+      _dedup_and_store(tome_a):
+        tome_repo.find_near_duplicates(tome_a) → []
+        tome_repo.insert(tome_a) → uuid_a
+
+    chunk "Fact B":
+      concurrently:
+        _classify_and_tag()           → ("science", ["tag_b"])
+        _generate_title_and_summary() → ("Title B", "Summary B")
+        EmbeddingService.embed()      → embedding_b
+      Tome{id: uuid_b, content: "Fact B", ...}
+      _validate(tome_b) → OK
+      Verifier.verify("Fact B") → confidence: 0.79
+      _dedup_and_store(tome_b):
+        tome_repo.find_near_duplicates(tome_b) → []
+        tome_repo.insert(tome_b) → uuid_b
+
 ← Agent ← IngestOutput{
-    tomes: [Tome_t1],
+    tomes: [Tome_a, Tome_b],
     status: "stored",
     reject_reason: null
   }
@@ -356,29 +373,34 @@ ______________________________________________________________________
 
 ### Journey D — Ingest (duplicate → reshard)
 
-New content overlaps with an existing Tome. The old Tome is deleted and the
-combined knowledge is re-ingested as fresh atomic facts.
+A single-fact input overlaps with an existing Tome. The combined content is
+re-chunked and re-ingested; the old Tome is deleted.
 
 ```
 Agent → library_ingest(content="updated fact about X with new detail")
   Ingestor.ingest(blob):
-    concurrently:
-      _classify_and_tag(blob)           → ("science", ["tag_a"])
-      _generate_title_and_summary(blob) → ("Title A v2", "Summary A v2")
-      EmbeddingService.embed(blob)      → embedding_new
-    Tome{id: uuid_new, ...}
-    _validate(tome) → OK
-    Verifier.verify(blob) → VerificationResult{confidence: 0.75}
-    _dedup_and_store(tome):
-      tome_repo.find_near_duplicates(tome)
-        → [Tome{id: uuid_t1, content: "original fact about X"}]
+    _chunk(blob) → ["updated fact about X with new detail"]  ← single chunk
 
-      reshard:
-        combined = "original fact about X\n\nupdated fact about X with new detail"
-        ingest(combined) [recursive, internal]:
-          → Tome_ra ("Resharded fact A") → uuid_ra
-          → Tome_rb ("Resharded fact B") → uuid_rb
-        tome_repo.delete(uuid_t1)  ← old Tome permanently removed
+    chunk "updated fact about X with new detail":
+      concurrently:
+        _classify_and_tag()           → ("science", ["tag_a"])
+        _generate_title_and_summary() → ("Title A v2", "Summary A v2")
+        EmbeddingService.embed()      → embedding_new
+      Tome{id: uuid_new, ...}
+      _validate(tome) → OK
+      Verifier.verify() → confidence: 0.75
+      _dedup_and_store(tome):
+        tome_repo.find_near_duplicates(tome)
+          → [Tome{id: uuid_t1, content: "original fact about X"}]
+
+        reshard:
+          combined = "original fact about X\n\nupdated fact about X with new detail"
+          _chunk(combined) → ["Resharded fact A", "Resharded fact B"]
+          for each resharded chunk → full pipeline (classify, summarize, embed,
+                                     validate, verify, dedup-or-insert)
+            → Tome_ra → uuid_ra
+            → Tome_rb → uuid_rb
+          tome_repo.delete(uuid_t1)  ← old Tome permanently removed
 
 ← Agent ← IngestOutput{
     tomes: [Tome_ra, Tome_rb],
@@ -428,7 +450,6 @@ All errors use this envelope:
 | ------------------- | --------------- | --------------------------------------------------------------- |
 | `EMBED_UNAVAILABLE` | Ingestor | Embedding model unreachable |
 | `VERIFY_FAILED` | Verifier | Confidence below `reject_threshold` (< 0.3) |
-| `NO_RESULTS` | MCP server | Zero results above `min_confidence` threshold |
 | `DB_UNAVAILABLE` | TomeRepository | Storage backend unreachable or unreadable |
 | `EMBEDDING_MISMATCH` | TomeRepository | Stored vector dimensions don't match the configured model |
 
