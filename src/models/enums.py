@@ -7,19 +7,6 @@ class SourceType(StrEnum):
     MANUAL = "manual"
 
 
-class JobStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class ResearchDepth(StrEnum):
-    SHALLOW = "shallow"
-    STANDARD = "standard"
-    DEEP = "deep"
-
-
 class IngestStatus(StrEnum):
     STORED = "stored"
     REJECTED = "rejected"

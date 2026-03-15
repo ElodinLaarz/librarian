@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import uuid
+from datetime import UTC, datetime
+
 from src.config import LibrarianConfig
+from src.models.enums import SourceType
 from src.models.tome import Tome
-from src.models.tool_schemas import IngestInput, IngestOutput
 from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
 from src.storage.tome_repository import TomeRepository
@@ -23,21 +27,48 @@ class Ingestor:
         self._verifier = verifier
         self._tome_repo = tome_repo
 
-    async def ingest(self, params: IngestInput) -> IngestOutput:
-        """Run the full ingest pipeline: validate -> verify -> chunk -> embed -> dedup -> store."""
-        raise NotImplementedError
+    async def ingest(self, blob: str) -> list[Tome]:
+        """Convert unstructured text into a structured knowledge Tome
+        and save it in the collection."""
 
-    def _validate(self, params: IngestInput) -> None:
+        # Run async methods concurrently
+        classify_task = self._classify_and_tag(blob)
+        summarize_task = self._generate_title_and_summary(blob)
+        embed_task = self._embedding_service.embed(blob)
+
+        # Wait for all three to finish
+        (category, tags), (title, summary), embedding = await asyncio.gather(
+            classify_task, summarize_task, embed_task
+        )
+
+        timestamp = datetime.now(tz=UTC)
+        tome = Tome(
+            id=uuid.uuid4(),
+            content=blob,
+            summary=summary,
+            title=title,
+            category=category,
+            tags=tags,
+            embedding=embedding,
+            created_at=timestamp,
+            source_url=None,
+            source_type=SourceType.AGENT_INPUT,
+            confidence=0.5,
+        )
+
+        # Validate (sync method)
+        self._validate(tome)
+
+        # Store async
+        await self._tome_repo.insert(tome)
+
+        return [tome]
+
+    def _validate(self, params: Tome) -> None:
         """Pre-flight checks: input length, required fields, HTML sanitisation."""
-        raise NotImplementedError
-
-    def _chunk(self, content: str) -> list[str]:
-        """Split content into single-topic chunks of ~400 words
-        using sentence-boundary splitting."""
-        raise NotImplementedError
 
     async def _classify_and_tag(
-        self, chunk: str, category_hint: str | None
+        self, chunk: str, category_hint: str | None = None
     ) -> tuple[str, list[str]]:
         """Auto-classify into a category and extract topic tags."""
         raise NotImplementedError

@@ -1,12 +1,10 @@
-from mcp.server.fastmcp import FastMCP
+from mcp.server import FastMCP
 
 from src.config import LibrarianConfig
+from src.models import SearchInput
 from src.models.tool_schemas import (
     IngestInput,
     IngestOutput,
-    ResearchInput,
-    ResearchOutput,
-    SearchInput,
     SearchOutput,
 )
 
@@ -34,12 +32,6 @@ async def library_search(params: SearchInput) -> SearchOutput:
 @mcp.tool()
 async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
-    raise NotImplementedError
-
-
-@mcp.tool()
-async def library_research(params: ResearchInput) -> ResearchOutput:
-    """Dispatch a Researcher sub-agent to search the web and create new Tomes."""
     raise NotImplementedError
 
 

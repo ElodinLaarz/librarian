@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from uuid import UUID
 
 from src.models.tome import Tome
 
@@ -13,44 +13,31 @@ class TomeRepository(ABC):
     """
 
     @abstractmethod
-    async def insert(self, tome: Tome) -> str:
+    async def insert(self, tome: Tome) -> UUID:
         """Insert a new Tome and return its ID."""
         ...
 
     @abstractmethod
-    async def update(self, tome_id: str, updates: dict[str, Any]) -> bool:
-        """Partially update a Tome by ID. Returns True if a document was modified."""
+    async def delete(self, tome_id: UUID) -> bool:
+        """Deletes a Tome by ID. Returns True if a document was deleted."""
         ...
 
     @abstractmethod
-    async def get_by_id(self, tome_id: str) -> Tome | None:
+    async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Retrieve a single Tome by its ID."""
         ...
 
     @abstractmethod
-    async def vector_search(
+    async def search(
         self,
-        embedding: list[float],
+        query: str,
         top_k: int = 5,
-        category: str | None = None,
         min_confidence: float = 0.5,
     ) -> list[tuple[Tome, float]]:
         """Perform ANN vector search. Returns (Tome, score) pairs sorted by similarity."""
         ...
 
     @abstractmethod
-    async def find_near_duplicates(
-        self, embedding: list[float], threshold: float = 0.95
-    ) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold."""
-        ...
-
-    @abstractmethod
-    async def find_by_research_job(self, job_id: str) -> list[Tome]:
-        """Retrieve all Tomes produced by a specific research job."""
-        ...
-
-    @abstractmethod
-    async def supersede(self, old_id: str, new_id: str) -> None:
-        """Mark an old Tome as superseded by a new one."""
         ...

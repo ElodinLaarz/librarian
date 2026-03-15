@@ -3,14 +3,13 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
-from src.models.enums import LogLevel, ResearchDepth
+from src.models.enums import LogLevel
 
 
 class DatabaseSettings(BaseSettings):
     uri: str = "localhost"
     database: str = "librarian"
     tomes_collection: str = "tomes"
-    jobs_collection: str = "research_jobs"
 
 
 class EmbeddingSettings(BaseSettings):
@@ -31,13 +30,6 @@ class VerificationSettings(BaseSettings):
     store_threshold: float = 0.7
 
 
-class ResearcherSettings(BaseSettings):
-    default_depth: ResearchDepth = ResearchDepth.STANDARD
-    max_tomes_per_run: int = 10
-    max_sources_per_query: int = 3
-    async_default: bool = False
-
-
 class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
@@ -49,7 +41,6 @@ class LibrarianConfig(BaseSettings):
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
-    researcher: ResearcherSettings = Field(default_factory=ResearcherSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod
