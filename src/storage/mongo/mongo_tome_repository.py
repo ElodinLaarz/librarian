@@ -25,7 +25,7 @@ class MongoTomeRepository(TomeRepository):
 
     def __init__(self, settings: DatabaseSettings, embedding_service: EmbeddingService) -> None:
         srv = f"mongodb+srv://{settings.uri}/?authSource=%24external&authMechanism=MONGODB-X509"
-        cert = os.path.expanduser("~/X509-cert-4371721483021722335.pem")
+        cert = os.path.expanduser(settings.tls_cert_path)
         self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
             srv, tls=True, tlsCertificateKeyFile=cert
         )
@@ -142,7 +142,7 @@ class MongoTomeRepository(TomeRepository):
         pipeline: list[Mapping[str, Any]] = [
             {
                 "$vectorSearch": {
-                    "index": "vector_index",
+                    "index": "vectors",
                     "path": "embedding",
                     "queryVector": query_vector,
                     "numCandidates": 100,

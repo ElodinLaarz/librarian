@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.models.enums import LogLevel
@@ -10,9 +10,10 @@ from src.models.enums import LogLevel
 
 class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_DATABASE_")
-    uri: str = "unset_env_varianble_LIBRARIAN_DATABASE_URI"
+    uri: str
     database: str = "library"
     tomes_collection: str = "tomes"
+    tls_cert_path: str
 
 
 class EmbeddingSettings(BaseSettings):
@@ -63,10 +64,24 @@ class LibrarianConfig(BaseSettings):
 
         # Build each sub-settings object from YAML values, then let pydantic-settings
         # apply env-var overrides on top via the prefixed env vars.
-        return cls(
-            database=DatabaseSettings(**raw.get("database", {})),
-            embedding=EmbeddingSettings(**raw.get("embedding", {})),
-            search=SearchSettings(**raw.get("search", {})),
-            verification=VerificationSettings(**raw.get("verification", {})),
-            server=ServerSettings(**raw.get("server", {})),
-        )
+        section_classes: list[tuple[str, type[BaseSettings]]] = [
+            ("database", DatabaseSettings),
+            ("embedding", EmbeddingSettings),
+            ("search", SearchSettings),
+            ("verification", VerificationSettings),
+            ("server", ServerSettings),
+        ]
+        sections: dict[str, BaseSettings] = {}
+        for section, settings_cls in section_classes:
+            try:
+                sections[section] = settings_cls(**raw.get(section, {}))
+            except ValidationError as exc:
+                prefix = settings_cls.model_config.get("env_prefix", "")
+                missing = [e["loc"][0] for e in exc.errors() if e["type"] == "missing"]
+                hints = [f"  {prefix}{str(f).upper()}=<value>" for f in missing]
+                raise ValueError(
+                    f"Missing required config for [{section}] in {path.resolve()}.\n"
+                    f"Set via YAML or environment variable:\n" + "\n".join(hints)
+                ) from exc
+
+        return cls(**sections)
