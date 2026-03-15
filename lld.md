@@ -162,7 +162,6 @@ All tool outputs that include `Tome` objects use this schema (source:
 | `created_at` | `datetime` | ISO 8601 UTC timestamp of creation |
 | `updated_at` | `datetime` | ISO 8601 UTC timestamp of last modification |
 | `version` | `int` | Incremented on each content update; starts at 1 |
-| `superseded_by` | `str\|null` | ID of successor Tome if this one has been replaced |
 | `research_job` | `str\|null` | ID of the ResearchJob that produced this Tome, if any |
 
 ______________________________________________________________________
@@ -233,7 +232,7 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 | `_chunk` | `(content: str)` | `list[str]` | LLM-driven decomposition into self-contained atomic facts |
 | `_classify_and_tag` | `(chunk: str, category_hint: str\|None)` | `(str, list[str])` | Returns `(category, tags)` |
 | `_generate_title_and_summary` | `(chunk: str)` | `(str, str)` | Returns `(title, summary)` |
-| `_dedup_and_store` | `(tome: Tome, allow_update: bool)` | `str` | Near-dup check → merge or insert; returns Tome ID |
+| `_dedup_and_store` | `(tome: Tome, allow_update: bool)` | `list[str]` | Near-dup check → reshard or insert; returns list of Tome IDs |
 
 **Pipeline:**
 
@@ -248,8 +247,13 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
    1. `_classify_and_tag` — category classification + keyword tag extraction
    1. `_generate_title_and_summary` — LLM-generated title and summary
    1. `EmbeddingService.embed` — produce chunk vector
-   1. `_dedup_and_store` — call `TomeRepository.find_near_duplicates`; if
-      similarity ≥ 0.95 and `allow_update=True` → `update`, else → `insert`
+   1. `_dedup_and_store`:
+      - Call `TomeRepository.find_near_duplicates`
+      - **No duplicates** → `insert` the new Tome
+      - **Duplicates found and `allow_update=True`** → reshard: combine the
+        new chunk's content with all overlapping Tomes' content, re-run
+        `_chunk` on the combined text, produce fresh Tomes for each resulting
+        `delete` all old overlapping Tomes, `insert` the new ones
 
 ______________________________________________________________________
 
@@ -312,7 +316,7 @@ Source: `src/storage/tome_repository.py`
 | `insert` | `(tome: Tome)` | `str` | Inserts a new Tome; returns its ID |
 | `get_by_id` | `(tome_id: str)` | `Tome \| None` | |
 | `update` | `(tome_id: str, updates: dict[str, Any])` | `bool` | `True` if a document was modified |
-| `supersede` | `(old_id: str, new_id: str)` | `None` | Sets `superseded_by` on the old Tome |
+| `delete` | `(tome_id: str)` | `None` | Permanently removes a Tome by ID |
 | `vector_search` | `(embedding: float[], top_k: int, category?: str, min_confidence: float=0.5)` | `list[tuple[Tome, float]]` | ANN search via `$vectorSearch`; sorted by similarity |
 | `find_near_duplicates` | `(embedding: float[], threshold: float=0.95)` | `list[Tome]` | Tomes with cosine similarity above threshold |
 | `find_by_research_job` | `(job_id: str)` | `list[Tome]` | All Tomes from a given research job (v2) |
@@ -418,29 +422,50 @@ Agent → library_ingest(content="<article covering facts A, B, C>", source_url=
 
 ______________________________________________________________________
 
-### Journey D — Ingest (near-duplicate update)
+### Journey D — Ingest (duplicate → reshard)
+
+New content partially overlaps with an existing Tome. Rather than overwriting
+it, the overlapping Tomes and the new chunk are combined and re-decomposed into
+fresh atomic facts. The old Tomes are deleted.
 
 ```
-Agent → library_ingest(content="similar to existing", allow_update=true)
+Agent → library_ingest(content="updated fact about X with new detail", allow_update=true)
   Ingestor.ingest():
     _validate() → OK
     Verifier.verify() → VerificationResult{confidence: 0.75}
-    _chunk() → ["chunk_1"]
-    _classify_and_tag() → ("science", ["tag_a"])
-    _generate_title_and_summary() → ("Title A revised", "Summary A revised")
-    EmbeddingService.embed("chunk_1") → embedding
-    _dedup_and_store(tome, allow_update=true):
-      tome_repo.find_near_duplicates(embedding, threshold=0.95)
-        → [Tome{id:"t_existing"}]  ← similarity 0.97
-      similarity 0.97 ≥ 0.95 and allow_update=True → update path:
-        tome_repo.update("t_existing", {content, title, summary, confidence, updated_at})
-          → True  (version bumped to 2 by MongoDB write)
+    _chunk("updated fact about X with new detail") → ["new_chunk"]
+    _classify_and_tag("new_chunk") → ("science", ["tag_a"])
+    _generate_title_and_summary("new_chunk") → ("Title A v2", "Summary A v2")
+    EmbeddingService.embed("new_chunk") → embedding_new
+
+    _dedup_and_store(new_tome, allow_update=true):
+      tome_repo.find_near_duplicates(embedding_new, threshold=0.95)
+        → [Tome{id:"t1", content:"original fact about X"}]  ← similarity 0.97
+
+      duplicates found + allow_update=True → reshard:
+        combined = "original fact about X" + "updated fact about X with new detail"
+        _chunk(combined):
+          LLM decomposes combined text → ["Resharded fact A", "Resharded fact B"]
+
+        for "Resharded fact A":
+          _classify_and_tag(), _generate_title_and_summary()
+          EmbeddingService.embed() → embedding_ra
+          tome_repo.find_near_duplicates(embedding_ra) → []
+          tome_repo.insert(Tome{...}) → "t2"
+
+        for "Resharded fact B":
+          _classify_and_tag(), _generate_title_and_summary()
+          EmbeddingService.embed() → embedding_rb
+          tome_repo.find_near_duplicates(embedding_rb) → []
+          tome_repo.insert(Tome{...}) → "t3"
+
+        tome_repo.delete("t1")  ← old tome permanently removed
 
 ← Agent ← IngestOutput{
-    tome_ids: ["t_existing"],
-    tomes: [Tome{id:"t_existing", version:2}],
+    tome_ids: ["t2", "t3"],
+    tomes: [Tome_t2, Tome_t3],
     confidence: 0.75,
-    chunks: 1,
+    chunks: 2,
     status: "stored",
     reject_reason: null
   }
