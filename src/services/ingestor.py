@@ -189,7 +189,7 @@ class Ingestor:
             return_exceptions=True,
         )
         delete_errors = []
-        for dup, result in zip(duplicates, delete_results):
+        for dup, result in zip(duplicates, delete_results, strict=True):
             if isinstance(result, Exception):
                 logging.warning("Exception deleting %s during reshard: %s", dup.id, result)
                 delete_errors.append(str(dup.id))
