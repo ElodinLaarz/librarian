@@ -5,16 +5,16 @@ from uuid import uuid4
 from mcp.server import FastMCP
 
 from src.config import LibrarianConfig
-from src.models.enums import IngestStatus
 from src.models.tool_schemas import (
     IngestInput,
     IngestOutput,
     SearchInput,
     SearchOutput,
 )
-from src.services import EmbeddingService
+from src.services.embedding import DummyEmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
+from src.storage.filesystem.fs_tome_repository import FsTomeRepository
 from src.storage.tome_repository import TomeRepository
 
 config = LibrarianConfig()
@@ -28,10 +28,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     """Initialise and tear down services around the server lifetime."""
     global _ingestor, _tome_repo
 
-    embedding_service = EmbeddingService.noop(config.embedding)
-    _tome_repo = _build_tome_repository(config, embedding_service)
-
-    verifier = Verifier.noop()
+    _tome_repo = _build_tome_repository(config)
+    embedding_service = DummyEmbeddingService(config.embedding)
+    verifier = Verifier(config)
     _ingestor = Ingestor(config, embedding_service, verifier, _tome_repo)
 
     yield
@@ -40,11 +39,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     _tome_repo = None
 
 
-def _build_tome_repository(
-    config: LibrarianConfig, embedding_service: EmbeddingService
-) -> TomeRepository:
+def _build_tome_repository(config: LibrarianConfig) -> TomeRepository:
     """Construct the active TomeRepository from config."""
-    raise NotImplementedError
+    return FsTomeRepository(config.database)
 
 
 mcp = FastMCP(
@@ -83,10 +80,4 @@ async def library_search(params: SearchInput) -> SearchOutput:
 async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
     assert _ingestor is not None, "Server not initialised"
-
-    tomes = await _ingestor.ingest(params.content)
-
-    return IngestOutput(
-        tomes=tomes,
-        status=IngestStatus.STORED,
-    )
+    return await _ingestor.ingest(params.content)

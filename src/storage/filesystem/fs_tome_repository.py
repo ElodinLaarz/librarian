@@ -21,6 +21,7 @@ class FsTomeRepository(TomeRepository):
         else:
             self._base_path = Path(settings.uri).expanduser()
         self._tomes_dir = self._base_path / settings.tomes_collection
+        self._tomes_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_path(self, tome_id: UUID) -> Path:
         return self._tomes_dir / f"{tome_id}.json"

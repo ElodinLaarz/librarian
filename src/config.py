@@ -5,6 +5,7 @@ import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src import constants
 from src.models.enums import LogLevel
 
 
@@ -31,12 +32,32 @@ class SearchSettings(BaseSettings):
     use_keyword_prefilter: bool = True
 
 
+class WebSearchSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIBRARIAN_WEB_SEARCH_")
+
+    default_max_results: int = constants.DEFAULT_MAX_RESULTS
+
+
 class VerificationSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_VERIFICATION_")
 
     enabled: bool = True
     reject_threshold: float = 0.3
     store_threshold: float = 0.7
+    mock_confidence: float = constants.DEFAULT_MOCK_CONFIDENCE
+    noop_confidence: float = constants.DEFAULT_NOOP_CONFIDENCE
+
+
+class IngestSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIBRARIAN_INGEST_")
+
+    shard_size: int = constants.DEFAULT_SHARD_SIZE
+    shard_overlap: int = constants.DEFAULT_SHARD_OVERLAP
+    summary_length: int = constants.DEFAULT_SUMMARY_LENGTH
+    title_length: int = constants.TITLE_MAX_LENGTH
+    unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
+    default_category: str = constants.DEFAULT_CATEGORY
+    default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
 
 
 class ServerSettings(BaseSettings):
@@ -53,7 +74,9 @@ class LibrarianConfig(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
+    web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
+    ingest: IngestSettings = Field(default_factory=IngestSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod
@@ -67,6 +90,8 @@ class LibrarianConfig(BaseSettings):
             database=DatabaseSettings(**raw.get("database", {})),
             embedding=EmbeddingSettings(**raw.get("embedding", {})),
             search=SearchSettings(**raw.get("search", {})),
+            web_search=WebSearchSettings(**raw.get("web_search", {})),
             verification=VerificationSettings(**raw.get("verification", {})),
+            ingest=IngestSettings(**raw.get("ingest", {})),
             server=ServerSettings(**raw.get("server", {})),
         )
