@@ -119,18 +119,14 @@ class Ingestor:
             if verification_result.confidence < self._config.verification.reject_threshold:
                 return None
             confidence = verification_result.confidence
-            (category, tags), (title, summary), embedding = await asyncio.gather(
-                self._classify_and_tag(text),
-                self._generate_title_and_summary(text),
-                self._embedding_service.embed(text),
-            )
         else:
-            (category, tags), (title, summary), embedding = await asyncio.gather(
-                self._classify_and_tag(text),
-                self._generate_title_and_summary(text),
-                self._embedding_service.embed(text),
-            )
             confidence = self._config.ingest.unverified_confidence
+
+        (category, tags), (title, summary), embedding = await asyncio.gather(
+            self._classify_and_tag(text),
+            self._generate_title_and_summary(text),
+            self._embedding_service.embed(text),
+        )
 
         tome = Tome(
             id=uuid.uuid4(),
