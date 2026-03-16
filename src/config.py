@@ -57,7 +57,7 @@ class IngestSettings(BaseSettings):
     title_length: int = constants.TITLE_MAX_LENGTH
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
-    default_tags: list[str] = list(constants.DEFAULT_TAGS)
+    default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
 
 
 class ServerSettings(BaseSettings):
