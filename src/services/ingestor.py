@@ -77,7 +77,7 @@ class Ingestor:
                 else:
                     logging.error("Unhandled exception during ingest", exc_info=result)
                     reject_reasons.append(f"Unexpected error: {result}")
-            elif result is None or not result:
+            elif not result:
                 any_rejected = True
             else:
                 stored.extend(result)
@@ -115,20 +115,15 @@ class Ingestor:
         Returns None if verification rejects the text.  Does NOT persist anything.
         """
         if self._config.verification.enabled:
-            (
-                verification_result,
-                (category, tags),
-                (title, summary),
-                embedding,
-            ) = await asyncio.gather(
-                self._verifier.verify(text),
+            verification_result = await self._verifier.verify(text)
+            if verification_result.confidence < self._config.verification.reject_threshold:
+                return None
+            confidence = verification_result.confidence
+            (category, tags), (title, summary), embedding = await asyncio.gather(
                 self._classify_and_tag(text),
                 self._generate_title_and_summary(text),
                 self._embedding_service.embed(text),
             )
-            if verification_result.confidence < self._config.verification.reject_threshold:
-                return None
-            confidence = verification_result.confidence
         else:
             (category, tags), (title, summary), embedding = await asyncio.gather(
                 self._classify_and_tag(text),
@@ -184,20 +179,21 @@ class Ingestor:
             return []
 
         # Step 3 - Insert replacements.
-        for replacement in replacements:
-            await self._tome_repo.insert(replacement)
+        await asyncio.gather(*[self._tome_repo.insert(r) for r in replacements])
 
         # Step 4 - Delete old tomes.
         # Technically if we fail here, we may end up with duplicate data in the
         # library, but that seems like a better choice (IMO) than aborting.
+        delete_results = await asyncio.gather(
+            *[self._tome_repo.delete(dup.id) for dup in duplicates],
+            return_exceptions=True,
+        )
         delete_errors = []
-        for dup in duplicates:
-            try:
-                deleted = await self._tome_repo.delete(dup.id)
-                if not deleted:
-                    delete_errors.append(str(dup.id))
-            except Exception as e:
-                logging.warning("Exception deleting %s during reshard: %s", dup.id, e)
+        for dup, result in zip(duplicates, delete_results):
+            if isinstance(result, Exception):
+                logging.warning("Exception deleting %s during reshard: %s", dup.id, result)
+                delete_errors.append(str(dup.id))
+            elif not result:
                 delete_errors.append(str(dup.id))
 
         if delete_errors:
