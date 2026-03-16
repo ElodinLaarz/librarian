@@ -359,3 +359,26 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     assert output.reject_reason is not None
     assert "Failed to delete tomes" in output.reject_reason
     assert len(output.tomes) >= 1
+
+
+async def test_dedup_store_returning_empty_sets_partial_status(
+    config: LibrarianConfig,
+) -> None:
+    """A shard whose _dedup_and_store returns [] must mark any_rejected=True.
+
+    Previously an empty-list result fell into the `else` branch of the ingest
+    loop, silently extending stored with nothing and leaving any_rejected False,
+    so a single-shard ingest where all replacements were rejected could
+    incorrectly return STORED.
+    """
+    repo = StubTomeRepository()
+    existing = _make_tome("Original content.")
+    repo.seed_near_duplicates([existing])
+
+    # confidence=0.0 → all replacement shards are rejected by the verifier →
+    # _dedup_and_store returns [] for the one shard that reaches it.
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.0, repo=repo)
+
+    output = await ingestor.ingest("Incoming content that triggers a reshard.")
+
+    assert output.status != IngestStatus.STORED

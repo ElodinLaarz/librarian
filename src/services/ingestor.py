@@ -51,7 +51,11 @@ class Ingestor:
             return IngestOutput(
                 tomes=[],
                 status=IngestStatus.REJECTED,
-                reject_reason=f"Unable to re-shard content {blob!r}",
+                reject_reason=(
+                    f"Unable to re-shard content "
+                    f"({len(blob)} chars, shard_size={self._config.ingest.shard_size}, "
+                    f"shard_overlap={self._config.ingest.shard_overlap})"
+                ),
             )
 
         tomes = await asyncio.gather(
@@ -72,7 +76,7 @@ class Ingestor:
                 else:
                     logging.error("Unhandled exception during ingest", exc_info=result)
                     reject_reasons.append(f"Unexpected error: {result}")
-            elif result is None:
+            elif result is None or not result:
                 any_rejected = True
             else:
                 stored.extend(result)
@@ -232,7 +236,8 @@ class Ingestor:
         """Generate a short title and one-to-two sentence summary for a text."""
         clean_text = text.strip().replace("\n", " ")
         if len(clean_text) > self._config.ingest.title_length:
-            title = clean_text[: self._config.ingest.title_length - len(constants.TRUNCATION_SUFFIX)] + constants.TRUNCATION_SUFFIX
+            suffix = constants.TRUNCATION_SUFFIX
+            title = clean_text[: self._config.ingest.title_length - len(suffix)] + suffix
         else:
             title = clean_text
         summary = clean_text[: self._config.ingest.summary_length]
