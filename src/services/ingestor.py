@@ -157,9 +157,8 @@ class Ingestor:
         Reshard strategy (safe ordering):
         1. Build and verify all replacement tomes from combined content.
         2. Abort without touching existing tomes if no replacement survives verification.
-        3. Delete old tomes only once at least one replacement is ready — checking
-           each delete return value and raising ReshardError on failure.
-        4. Insert all replacements.
+        3. Insert all replacements first to ensure no data loss if the operation is interrupted.
+        4. Delete old tomes only once all replacements are successfully persisted.
         """
         duplicates = await self._tome_repo.find_near_duplicates(tome)
         if not duplicates:
