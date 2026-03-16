@@ -348,8 +348,6 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     repo.seed_near_duplicates([existing])
 
     # Wire a fresh ingestor that uses the fail-deletes repo.
-    from src.config import LibrarianConfig
-
     bad_repo_ingestor = StubIngestor(
         LibrarianConfig(), StubEmbeddingService(), StubVerifier(confidence=0.9), repo
     )
