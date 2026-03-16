@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import numpy as np
 import pytest
 
 from src.config import LibrarianConfig, VerificationSettings
@@ -32,7 +33,7 @@ def _make_tome(content: str, confidence: float = 0.8) -> Tome:
         source_url=None,
         source_type=SourceType.AGENT_INPUT,
         confidence=confidence,
-        embedding=[0.0] * 768,
+        embedding=np.zeros(768, dtype=np.float32),
     )
 
 

@@ -38,8 +38,8 @@ class StubTomeRepository(TomeRepository):
     def all_tomes(self) -> list[Tome]:
         return list(self._tomes.values())
 
-    async def get_embedding(self, text: str) -> list[float]:
-        return [0.0] * 768
+    async def get_embedding(self, text: str) -> np.ndarray:
+        return np.zeros(768, dtype=np.float32)
 
     async def insert(self, tome: Tome) -> UUID:
         self._tomes[tome.id] = tome

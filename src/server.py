@@ -5,7 +5,6 @@ from uuid import uuid4
 from mcp.server import FastMCP
 
 from src.config import LibrarianConfig
-from src.models.enums import IngestStatus
 from src.models.tool_schemas import (
     IngestInput,
     IngestOutput,
@@ -41,7 +40,6 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
 def _build_tome_repository(config: LibrarianConfig) -> TomeRepository:
     """Construct the active TomeRepository from config."""
     return FsTomeRepository(config.database)
-
 
 
 mcp = FastMCP(

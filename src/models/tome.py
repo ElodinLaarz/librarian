@@ -29,7 +29,6 @@ class Tome(BaseModel):
 
     embedding: Annotated[NDArray[np.float32], SkipJsonSchema()] = Field(exclude=True)
 
-
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @field_validator("embedding")

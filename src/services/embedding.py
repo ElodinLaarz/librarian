@@ -32,7 +32,6 @@ class EmbeddingService(ABC):
         ...
 
 
-
 class DummyEmbeddingService(EmbeddingService):
     """A placeholder embedding service that returns zero vectors for local dev/testing."""
 
