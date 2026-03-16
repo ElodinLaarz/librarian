@@ -233,7 +233,7 @@ class Ingestor:
         """Generate a short title and one-to-two sentence summary for a text."""
         clean_text = text.strip().replace("\n", " ")
         if len(clean_text) > self._config.ingest.title_length:
-            title = clean_text[: self._config.ingest.title_length] + constants.TRUNCATION_SUFFIX
+            title = clean_text[: self._config.ingest.title_length - len(constants.TRUNCATION_SUFFIX)] + constants.TRUNCATION_SUFFIX
         else:
             title = clean_text
         summary = clean_text[: self._config.ingest.summary_length]
