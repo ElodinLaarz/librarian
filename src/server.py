@@ -11,6 +11,7 @@ from src.models.tool_schemas import (
     SearchInput,
     SearchOutput,
 )
+from src.services.embedding import DummyEmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
 from src.storage.filesystem.fs_tome_repository import FsTomeRepository
@@ -28,8 +29,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     global _ingestor, _tome_repo
 
     _tome_repo = _build_tome_repository(config)
+    embedding_service = DummyEmbeddingService(config.embedding)
     verifier = Verifier()
-    _ingestor = Ingestor(config, verifier, _tome_repo)
+    _ingestor = Ingestor(config, embedding_service, verifier, _tome_repo)
 
     yield
 

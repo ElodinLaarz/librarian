@@ -3,8 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from uuid import UUID
 
-import numpy as np
-
 from src.models.tome import Tome
 
 
@@ -13,11 +11,6 @@ class TomeRepository(ABC):
 
     Concrete implementations bind this to a specific database backend.
     """
-
-    @abstractmethod
-    async def get_embedding(self, text: str) -> np.ndarray:
-        """Generate an embedding for the given text."""
-        ...
 
     @abstractmethod
     async def insert(self, tome: Tome) -> UUID:

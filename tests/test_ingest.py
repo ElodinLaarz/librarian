@@ -12,6 +12,7 @@ from src.models.enums import IngestStatus, SourceType, VerificationVerdict
 from src.models.tome import Tome
 from src.services.verifier import ClaimResult, VerificationResult
 from tests.stubs import (
+    StubEmbeddingService,
     StubIngestor,
     StubTomeRepository,
     StubVerifier,
@@ -153,7 +154,7 @@ async def test_partial_status_when_some_chunks_fail(
             )
 
     repo = StubTomeRepository()
-    ingestor = StubIngestor(config, VariableVerifier(), repo)
+    ingestor = StubIngestor(config, StubEmbeddingService(), VariableVerifier(), repo)
 
     output = await ingestor.ingest("Good chunk.\n\nBad chunk (low confidence).")
 
@@ -329,7 +330,9 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
                 return [blob.strip()]
             return []
 
-    ingestor = EmptyChunkIngestor(config, StubVerifier(confidence=0.9), repo)
+    ingestor = EmptyChunkIngestor(
+        config, StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+    )
 
     await ingestor.ingest("Incoming content.")
 
@@ -346,7 +349,9 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     # Wire a fresh ingestor that uses the fail-deletes repo.
     from src.config import LibrarianConfig
 
-    bad_repo_ingestor = StubIngestor(LibrarianConfig(), StubVerifier(confidence=0.9), repo)
+    bad_repo_ingestor = StubIngestor(
+        LibrarianConfig(), StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+    )
 
     output = await bad_repo_ingestor.ingest("Replacement content.")
 

@@ -8,6 +8,7 @@ from src.config import LibrarianConfig
 from src.models.enums import IngestStatus, SourceType
 from src.models.tome import Tome
 from src.models.tool_schemas import IngestOutput
+from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
 from src.storage.tome_repository import TomeRepository
 
@@ -32,10 +33,12 @@ class Ingestor:
     def __init__(
         self,
         config: LibrarianConfig,
+        embedding_service: EmbeddingService,
         verifier: Verifier,
         tome_repo: TomeRepository,
     ) -> None:
         self._config = config
+        self._embedding_service = embedding_service
         self._verifier = verifier
         self._tome_repo = tome_repo
 
@@ -121,7 +124,7 @@ class Ingestor:
                 self._verifier.verify(text),
                 self._classify_and_tag(text),
                 self._generate_title_and_summary(text),
-                self._tome_repo.get_embedding(text),
+                self._embedding_service.embed(text),
             )
             if verification_result.confidence < self._config.verification.reject_threshold:
                 return None
@@ -130,7 +133,7 @@ class Ingestor:
             (category, tags), (title, summary), embedding = await asyncio.gather(
                 self._classify_and_tag(text),
                 self._generate_title_and_summary(text),
-                self._tome_repo.get_embedding(text),
+                self._embedding_service.embed(text),
             )
             confidence = UNVERIFIED_CONFIDENCE
 

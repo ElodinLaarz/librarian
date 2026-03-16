@@ -31,7 +31,8 @@ def embedding_service() -> StubEmbeddingService:
 @pytest.fixture
 def ingestor(
     config: LibrarianConfig,
+    embedding_service: StubEmbeddingService,
     verifier: StubVerifier,
     repo: StubTomeRepository,
 ) -> StubIngestor:
-    return StubIngestor(config, verifier, repo)
+    return StubIngestor(config, embedding_service, verifier, repo)

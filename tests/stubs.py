@@ -38,9 +38,6 @@ class StubTomeRepository(TomeRepository):
     def all_tomes(self) -> list[Tome]:
         return list(self._tomes.values())
 
-    async def get_embedding(self, text: str) -> np.ndarray:
-        return np.zeros(768, dtype=np.float32)
-
     async def insert(self, tome: Tome) -> UUID:
         self._tomes[tome.id] = tome
         return tome.id
@@ -133,5 +130,6 @@ def make_stub_ingestor(
     config = config or LibrarianConfig()
     repo = repo or StubTomeRepository()
     verifier = StubVerifier(confidence=confidence)
-    ingestor = StubIngestor(config, verifier, repo)
+    embedding_service = StubEmbeddingService(dimensions=dimensions)
+    ingestor = StubIngestor(config, embedding_service, verifier, repo)
     return ingestor, repo, verifier
