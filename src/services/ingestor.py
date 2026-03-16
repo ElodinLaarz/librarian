@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime
 
 from src import constants
 from src.config import LibrarianConfig
@@ -147,6 +148,7 @@ class Ingestor:
             source_url=None,
             source_type=SourceType.AGENT_INPUT,
             confidence=confidence,
+            created_at=datetime.now(UTC),
         )
         try:
             self._validate(tome)
