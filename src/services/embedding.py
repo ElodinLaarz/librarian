@@ -30,3 +30,16 @@ class EmbeddingService(ABC):
         Returns from cache if the text has been embedded before.
         """
         ...
+
+    @staticmethod
+    def noop(settings: EmbeddingSettings) -> EmbeddingService:
+        """Return a no-op EmbeddingService that produces zero vectors of the default dimension."""
+
+        class _NoopEmbeddingService(EmbeddingService):
+            async def initialize(self) -> None:
+                pass
+
+            async def embed(self, text: str) -> np.ndarray:
+                return np.zeros(settings.dimensions, dtype=np.float32)
+
+        return _NoopEmbeddingService(settings)

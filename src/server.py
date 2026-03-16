@@ -1,40 +1,92 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from uuid import uuid4
+
 from mcp.server import FastMCP
 
 from src.config import LibrarianConfig
-from src.models import SearchInput
+from src.models.enums import IngestStatus
 from src.models.tool_schemas import (
     IngestInput,
     IngestOutput,
+    SearchInput,
     SearchOutput,
 )
+from src.services import EmbeddingService
+from src.services.ingestor import Ingestor
+from src.services.verifier import Verifier
+from src.storage.tome_repository import TomeRepository
+
+config = LibrarianConfig()
+
+_ingestor: Ingestor | None = None
+_tome_repo: TomeRepository | None = None
+
+
+@asynccontextmanager
+async def lifespan(server: FastMCP) -> AsyncIterator[None]:
+    """Initialise and tear down services around the server lifetime."""
+    global _ingestor, _tome_repo
+
+    embedding_service = EmbeddingService.noop(config.embedding)
+    _tome_repo = _build_tome_repository(config, embedding_service)
+
+    verifier = Verifier.noop()
+    _ingestor = Ingestor(config, embedding_service, verifier, _tome_repo)
+
+    yield
+
+    _ingestor = None
+    _tome_repo = None
+
+
+def _build_tome_repository(
+    config: LibrarianConfig, embedding_service: EmbeddingService
+) -> TomeRepository:
+    """Construct the active TomeRepository from config."""
+    raise NotImplementedError
+
 
 mcp = FastMCP(
     "The Librarian",
     instructions=(
         "An intelligent knowledge management server. Use library_search to "
-        "find information, library_ingest to store new knowledge, and "
-        "library_research to discover knowledge from the web."
+        "find information and library_ingest to store new knowledge."
     ),
+    lifespan=lifespan,
 )
-
-
-def _build_services(config: LibrarianConfig) -> dict[str, object]:
-    """Wire up all service dependencies from config. Returns a dict of named services."""
-    raise NotImplementedError
 
 
 @mcp.tool()
 async def library_search(params: SearchInput) -> SearchOutput:
     """Search the library for relevant Tomes using semantic vector search."""
-    raise NotImplementedError
+    assert _tome_repo is not None, "Server not initialised"
+
+    results = await _tome_repo.search(
+        query=params.query,
+        top_k=params.top_k,
+        min_confidence=params.min_confidence,
+    )
+
+    tomes = [tome for tome, _ in results]
+    scores = [score for _, score in results]
+
+    return SearchOutput(
+        tomes=tomes,
+        scores=scores,
+        query_id=uuid4().hex,
+        from_cache=False,
+    )
 
 
 @mcp.tool()
 async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
-    raise NotImplementedError
+    assert _ingestor is not None, "Server not initialised"
 
+    tomes = await _ingestor.ingest(params.content)
 
-async def start_server(config: LibrarianConfig) -> None:
-    """Initialise services, connect to the database, and start the MCP server."""
-    raise NotImplementedError
+    return IngestOutput(
+        tomes=tomes,
+        status=IngestStatus.STORED,
+    )
