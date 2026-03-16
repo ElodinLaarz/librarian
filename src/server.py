@@ -1,75 +1,77 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from uuid import uuid4
+
 from mcp.server import FastMCP
 
 from src.config import LibrarianConfig
-from src.models import SearchInput
+from src.models.enums import IngestStatus
 from src.models.tool_schemas import (
     IngestInput,
     IngestOutput,
+    SearchInput,
     SearchOutput,
 )
-from src.services.embedding import DummyEmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
-from src.services.web_search import WebSearchClient, WebSearchResult
 from src.storage.filesystem.fs_tome_repository import FsTomeRepository
+from src.storage.tome_repository import TomeRepository
+
+config = LibrarianConfig()
+
+_ingestor: Ingestor | None = None
+_tome_repo: TomeRepository | None = None
+
+
+@asynccontextmanager
+async def lifespan(server: FastMCP) -> AsyncIterator[None]:
+    """Initialise and tear down services around the server lifetime."""
+    global _ingestor, _tome_repo
+
+    _tome_repo = _build_tome_repository(config)
+    verifier = Verifier()
+    _ingestor = Ingestor(config, verifier, _tome_repo)
+
+    yield
+
+    _ingestor = None
+    _tome_repo = None
+
+
+def _build_tome_repository(config: LibrarianConfig) -> TomeRepository:
+    """Construct the active TomeRepository from config."""
+    return FsTomeRepository(config.database)
+
+
 
 mcp = FastMCP(
     "The Librarian",
     instructions=(
         "An intelligent knowledge management server. Use library_search to "
-        "find information, library_ingest to store new knowledge, and "
-        "library_research to discover knowledge from the web."
+        "find information and library_ingest to store new knowledge."
     ),
+    lifespan=lifespan,
 )
-
-
-class DummyWebSearchClient(WebSearchClient):
-    def __init__(self, config: object) -> None:
-        pass
-
-    async def search(self, query: str, max_results: int = 3) -> list[WebSearchResult]:
-        return []
-
-    async def fetch_page_content(self, url: str) -> str:
-        return ""
-
-    def is_available(self) -> bool:
-        return True
-
-
-# Global services dictionary populated by start_server
-_services: dict[str, object] = {}
-
-
-def _build_services(config: LibrarianConfig) -> dict[str, object]:
-    """Wire up all service dependencies from config. Returns a dict of named services."""
-    embedding = DummyEmbeddingService(config.embedding)
-    # Use a dummy web search client for the verifier since we are returning constants
-    web_search = DummyWebSearchClient(config.verification)
-    verifier = Verifier(config.verification, web_search)
-    repo = FsTomeRepository(config.database)
-    ingestor = Ingestor(config, verifier, repo)
-
-    return {
-        "embedding": embedding,
-        "verifier": verifier,
-        "repo": repo,
-        "ingestor": ingestor,
-    }
 
 
 @mcp.tool()
 async def library_search(params: SearchInput) -> SearchOutput:
     """Search the library for relevant Tomes using semantic vector search."""
-    repo: FsTomeRepository = _services["repo"]  # type: ignore
-    tomes_with_scores = await repo.search(
-        params.query, top_k=params.top_k, min_confidence=params.min_confidence
+    assert _tome_repo is not None, "Server not initialised"
+
+    results = await _tome_repo.search(
+        query=params.query,
+        top_k=params.top_k,
+        min_confidence=params.min_confidence,
     )
 
+    tomes = [tome for tome, _ in results]
+    scores = [score for _, score in results]
+
     return SearchOutput(
-        tomes=[t for t, _ in tomes_with_scores],
-        scores=[s for _, s in tomes_with_scores],
-        query_id="dummy-query-id",  # Can be generated
+        tomes=tomes,
+        scores=scores,
+        query_id=uuid4().hex,
         from_cache=False,
     )
 
@@ -77,18 +79,5 @@ async def library_search(params: SearchInput) -> SearchOutput:
 @mcp.tool()
 async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
-    ingestor: Ingestor = _services["ingestor"]  # type: ignore
-    return await ingestor.ingest(params.content)
-
-
-async def start_server(config: LibrarianConfig) -> None:
-    """Initialise services, connect to the database, and start the MCP server."""
-    global _services
-    _services = _build_services(config)
-
-    # Initialize the embedding service
-    embedding: DummyEmbeddingService = _services["embedding"]  # type: ignore
-    await embedding.initialize()
-
-    print("Starting Librarian MCP Server...")
-    mcp.run()
+    assert _ingestor is not None, "Server not initialised"
+    return await _ingestor.ingest(params.content)

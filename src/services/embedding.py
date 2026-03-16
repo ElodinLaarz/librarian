@@ -32,11 +32,12 @@ class EmbeddingService(ABC):
         ...
 
 
+
 class DummyEmbeddingService(EmbeddingService):
-    """A placeholder embedding service that returns the text directly for local dev/testing."""
+    """A placeholder embedding service that returns zero vectors for local dev/testing."""
 
     async def initialize(self) -> None:
         pass
 
-    async def embed(self, text: str) -> str:
-        return text
+    async def embed(self, text: str) -> np.ndarray:
+        return np.zeros(self._settings.dimensions, dtype=np.float32)

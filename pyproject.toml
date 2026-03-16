@@ -66,6 +66,7 @@ strict = true
 module = [
     "mcp.*",
     "motor.*",
+    "yaml.*",
     "langchain_text_splitters.*",
     "trafilatura.*",
     "instructor.*",

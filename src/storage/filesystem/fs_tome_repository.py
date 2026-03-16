@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+import numpy as np
+
 from src.config import DatabaseSettings
 from src.models.tome import Tome
 from src.storage.tome_repository import TomeRepository
@@ -22,8 +24,8 @@ class FsTomeRepository(TomeRepository):
             self._base_path = Path(settings.uri).expanduser()
         self._tomes_dir = self._base_path / settings.tomes_collection
 
-    async def get_embedding(self, text: str) -> list[float]:
-        return [0.0] * 768
+    async def get_embedding(self, text: str) -> np.ndarray:
+        return np.zeros(768, dtype=np.float32)
 
     def _get_path(self, tome_id: UUID) -> Path:
         return self._tomes_dir / f"{tome_id}.json"
