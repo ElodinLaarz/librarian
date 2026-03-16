@@ -30,7 +30,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
 
     _tome_repo = _build_tome_repository(config)
     embedding_service = DummyEmbeddingService(config.embedding)
-    verifier = Verifier()
+    verifier = Verifier(config)
     _ingestor = Ingestor(config, embedding_service, verifier, _tome_repo)
 
     yield

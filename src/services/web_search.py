@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
+from src import constants
+
 
 class WebSearchResult(BaseModel):
     title: str
@@ -19,7 +21,9 @@ class WebSearchClient(ABC):
     """
 
     @abstractmethod
-    async def search(self, query: str, max_results: int = 3) -> list[WebSearchResult]:
+    async def search(
+        self, query: str, max_results: int = constants.DEFAULT_MAX_RESULTS
+    ) -> list[WebSearchResult]:
         """Issue a search query and return ranked results."""
         ...
 

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 
+from src import constants
 from src.config import LibrarianConfig
 from src.models.enums import IngestStatus, SourceType
 from src.models.tome import Tome
@@ -11,12 +12,6 @@ from src.models.tool_schemas import IngestOutput
 from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
 from src.storage.tome_repository import TomeRepository
-
-SHARD_SIZE = 400
-SHARD_OVERLAP = 100
-SUMMARY_LENGTH = 200
-TITLE_LENGTH = 120
-UNVERIFIED_CONFIDENCE = 0.5
 
 
 class ReshardError(Exception):
@@ -85,7 +80,7 @@ class Ingestor:
         if not stored:
             reason = "All shards failed verification"
             if reject_reasons:
-                reasons_str = "; ".join(reject_reasons)
+                reasons_str = constants.JOIN_SEPARATOR.join(reject_reasons)
                 reason = f"All shards failed verification (or had errors): {reasons_str}"
             return IngestOutput(
                 tomes=[],
@@ -94,7 +89,7 @@ class Ingestor:
             )
 
         status = IngestStatus.PARTIAL if any_rejected else IngestStatus.STORED
-        final_reason = "; ".join(reject_reasons) if reject_reasons else None
+        final_reason = constants.JOIN_SEPARATOR.join(reject_reasons) if reject_reasons else None
         return IngestOutput(tomes=stored, status=status, reject_reason=final_reason)
 
     async def _process_text(self, text: str) -> list[Tome] | None:
@@ -102,7 +97,7 @@ class Ingestor:
 
         Returns None if verification is enabled and confidence is below the reject
         threshold.  When verification is disabled the text is stored unconditionally
-        with a confidence of UNVERIFIED_CONFIDENCE.
+        with a confidence of ingest.unverified_confidence.
         """
         tome = await self._build_tome(text)
         if tome is None:
@@ -135,7 +130,7 @@ class Ingestor:
                 self._generate_title_and_summary(text),
                 self._embedding_service.embed(text),
             )
-            confidence = UNVERIFIED_CONFIDENCE
+            confidence = self._config.ingest.unverified_confidence
 
         tome = Tome(
             id=uuid.uuid4(),
@@ -172,7 +167,9 @@ class Ingestor:
             return [tome]
 
         # Step 1 — build replacements from combined content (nothing persisted yet).
-        combined = "\n\n".join([d.content for d in duplicates] + [tome.content])
+        combined = constants.CONTENT_SEPARATOR.join(
+            [d.content for d in duplicates] + [tome.content]
+        )
         shards = await self._reshard(combined)
         replacement_results = await asyncio.gather(*[self._build_tome(c) for c in shards])
         replacements = [t for t in replacement_results if t is not None]
@@ -199,7 +196,7 @@ class Ingestor:
                 delete_errors.append(str(dup.id))
 
         if delete_errors:
-            failed_ids = ", ".join(delete_errors)
+            failed_ids = constants.ID_SEPARATOR.join(delete_errors)
             msg = (
                 "Failed to delete tomes during reshard "
                 f"(duplicate data may exist for: {failed_ids})"
@@ -211,16 +208,16 @@ class Ingestor:
     async def _reshard(self, blob: str) -> list[str]:
         """Split blob into atomic, self-contained fact shards.
 
-        For now, we just split into chunks of SHARD_SIZE characters with
-        SHARD_OVERLAP overlap, but this should be replaced with LLM-driven
+        For now, we just split into chunks of ingest.shard_size characters with
+        ingest.shard_overlap overlap, but this should be replaced with LLM-driven
         decomposition that returns a list of atomic facts within the given
         character limit.
         """
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=SHARD_SIZE,
-            chunk_overlap=SHARD_OVERLAP,
+            chunk_size=self._config.ingest.shard_size,
+            chunk_overlap=self._config.ingest.shard_overlap,
         )
         return splitter.split_text(blob)
 
@@ -228,21 +225,28 @@ class Ingestor:
         self, text: str, category_hint: str | None = None
     ) -> tuple[str, list[str]]:
         """Auto-classify into a category and extract topic tags."""
-        return category_hint or "Uncategorized", ["auto-tag"]
+        return category_hint or self._config.ingest.default_category, list(
+            self._config.ingest.default_tags
+        )
 
     async def _generate_title_and_summary(self, text: str) -> tuple[str, str]:
         """Generate a short title and one-to-two sentence summary for a text."""
         clean_text = text.strip().replace("\n", " ")
-        title = clean_text[:TITLE_LENGTH] + "..." if len(clean_text) > TITLE_LENGTH else clean_text
-        summary = clean_text[:SUMMARY_LENGTH]
+        if len(clean_text) > self._config.ingest.title_length:
+            title = clean_text[: self._config.ingest.title_length] + constants.TRUNCATION_SUFFIX
+        else:
+            title = clean_text
+        summary = clean_text[: self._config.ingest.summary_length]
         return title, summary
 
     def _validate(self, tome: Tome) -> None:
         """Post-construction checks; raises on failure."""
         if not tome.content.strip():
             raise ValueError("Tome content cannot be empty")
-        if len(tome.title) > TITLE_LENGTH:
-            raise ValueError(f"Tome title too long ({len(tome.title)} > {TITLE_LENGTH})")
+        if len(tome.title) > self._config.ingest.title_length:
+            raise ValueError(
+                f"Tome title too long ({len(tome.title)} > {self._config.ingest.title_length})"
+            )
 
         # In a real implementation we would enforce the embedding size.
         # Here we skip the dimension check if a dummy/string embedding is supplied.

@@ -7,6 +7,7 @@ import uuid
 import numpy as np
 import pytest
 
+from src import constants
 from src.config import LibrarianConfig, VerificationSettings
 from src.models.enums import IngestStatus, SourceType, VerificationVerdict
 from src.models.tome import Tome
@@ -279,14 +280,14 @@ async def test_disabled_verification_stores_despite_low_confidence() -> None:
 
 
 async def test_disabled_verification_confidence_is_point_five() -> None:
-    """Tomes stored without verification carry a confidence of 0.5."""
+    """Tomes stored without verification carry the default unverified confidence."""
     config = LibrarianConfig(verification=VerificationSettings(enabled=False))
     repo = StubTomeRepository()
     ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.5, repo=repo)
 
     output = await ingestor.ingest("Unverified fact.")
 
-    assert output.tomes[0].confidence == pytest.approx(0.5)
+    assert output.tomes[0].confidence == pytest.approx(constants.DEFAULT_UNVERIFIED_CONFIDENCE)
 
 
 # ── reshard safety ────────────────────────────────────────────────────────────
