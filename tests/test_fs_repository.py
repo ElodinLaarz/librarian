@@ -15,6 +15,8 @@ from src.storage.filesystem.fs_tome_repository import FsTomeRepository, _cosine_
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+RNG = np.random.default_rng(12345)
+
 
 def _make_tome(
     *,
@@ -23,7 +25,7 @@ def _make_tome(
     embedding: np.ndarray | None = None,
 ) -> Tome:
     if embedding is None:
-        embedding = np.random.rand(8).astype(np.float32)
+        embedding = RNG.random(8).astype(np.float32)
         embedding /= np.linalg.norm(embedding)
     return Tome(
         id=uuid.uuid4(),
