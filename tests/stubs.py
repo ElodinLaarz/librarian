@@ -77,7 +77,7 @@ class StubEmbeddingService(EmbeddingService):
         pass
 
     async def embed(self, text: str) -> np.ndarray:
-        return np.ones(self._settings.dimensions, dtype=np.float32)
+        return np.zeros(self._settings.dimensions, dtype=np.float32)
 
 
 class StubVerifier(Verifier):

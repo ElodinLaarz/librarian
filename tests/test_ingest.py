@@ -35,7 +35,7 @@ def _make_tome(content: str, confidence: float = 0.8) -> Tome:
         source_url=None,
         source_type=SourceType.AGENT_INPUT,
         confidence=confidence,
-        embedding=np.ones(768, dtype=np.float32),
+        embedding=np.zeros(768, dtype=np.float32),
     )
 
 
