@@ -83,9 +83,8 @@ class StubEmbeddingService(EmbeddingService):
 class StubVerifier(Verifier):
     """Returns a fixed confidence score without making any network calls."""
 
-    def __init__(self, config: LibrarianConfig, confidence: float = 0.8) -> None:
+    def __init__(self, confidence: float = 0.8) -> None:
         # Bypass Verifier.__init__ — no settings or web_search needed.
-        super().__init__(config)
         self._confidence = confidence
 
     async def verify(self, content: str) -> VerificationResult:
