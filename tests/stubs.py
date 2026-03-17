@@ -59,8 +59,8 @@ class StubTomeRepository(TomeRepository):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
-    ) -> list[tuple[Tome, float]]:
-        results = [(t, 1.0) for t in self._tomes.values() if t.confidence >= min_confidence]
+    ) -> list[Tome]:
+        results = [t for t in self._tomes.values() if t.confidence >= min_confidence]
         return results[:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
@@ -77,14 +77,15 @@ class StubEmbeddingService(EmbeddingService):
         pass
 
     async def embed(self, text: str) -> np.ndarray:
-        return np.zeros(self._settings.dimensions, dtype=np.float32)
+        return np.ones(self._settings.dimensions, dtype=np.float32)
 
 
 class StubVerifier(Verifier):
     """Returns a fixed confidence score without making any network calls."""
 
-    def __init__(self, confidence: float = 0.8) -> None:
+    def __init__(self, config: LibrarianConfig, confidence: float = 0.8) -> None:
         # Bypass Verifier.__init__ — no settings or web_search needed.
+        super().__init__(config)
         self._confidence = confidence
 
     async def verify(self, content: str) -> VerificationResult:

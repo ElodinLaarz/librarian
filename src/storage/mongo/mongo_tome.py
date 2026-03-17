@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 import numpy as np
-from bson.binary import BinaryVector, BinaryVectorDtype
+from bson.binary import Binary, BinaryVector, BinaryVectorDtype
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.models.enums import SourceType
@@ -29,7 +29,7 @@ class MongoTome(BaseModel):
     source_url: str | None = None
     source_type: SourceType
     confidence: float
-    embedding: BinaryVector
+    embedding: Binary | BinaryVector
     created_at: datetime
 
     @classmethod
@@ -45,7 +45,7 @@ class MongoTome(BaseModel):
             source_url=tome.source_url,
             source_type=tome.source_type,
             confidence=tome.confidence,
-            embedding=BinaryVector(
+            embedding=Binary.from_vector(
                 tome.embedding.astype(np.float32).tolist(), BinaryVectorDtype.FLOAT32
             ),
             created_at=tome.created_at,
@@ -63,6 +63,11 @@ class MongoTome(BaseModel):
             source_url=self.source_url,
             source_type=self.source_type,
             confidence=self.confidence,
-            embedding=np.array(self.embedding.data, dtype=np.float32),
+            embedding=np.array(
+                self.embedding.as_vector().data
+                if isinstance(self.embedding, Binary)
+                else self.embedding.data,
+                dtype=np.float32,
+            ),
             created_at=self.created_at,
         )

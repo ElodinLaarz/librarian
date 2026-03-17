@@ -13,7 +13,7 @@ class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_DATABASE_")
 
     uri: str = "localhost"
-    database: str = "librarian"
+    database: str = "library"
     tomes_collection: str = "tomes"
     tls_cert_path: str = "~/.edit_me"
 

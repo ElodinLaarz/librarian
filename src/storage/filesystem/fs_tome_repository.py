@@ -52,24 +52,21 @@ class FsTomeRepository(TomeRepository):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
-    ) -> list[tuple[Tome, float]]:
+    ) -> list[Tome]:
         """Perform a brute-force search across all JSON files.
 
         Note: In a real implementation, this would use the query embedding
         to perform vector similarity search.
         """
-        results: list[tuple[Tome, float]] = []
+        results: list[Tome] = []
         for path in self._tomes_dir.glob("*.json"):
             try:
                 tome = Tome.model_validate_json(path.read_text())
                 if tome.confidence >= min_confidence:
                     # Mock similarity score for skeleton
-                    results.append((tome, 1.0))
+                    results.append(tome)
             except Exception:
                 continue
-
-        # Sort by score descending and limit to top_k
-        results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:

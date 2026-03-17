@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
 import numpy as np
-from bson.binary import BinaryVector, BinaryVectorDtype
+from bson.binary import Binary, BinaryVectorDtype
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 
 from src.config import DatabaseSettings
@@ -27,13 +28,11 @@ class MongoTomeRepository(TomeRepository):
         srv = f"mongodb+srv://{settings.uri}/?authSource=%24external&authMechanism=MONGODB-X509"
         cert = os.path.expanduser(settings.tls_cert_path)
         self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
-            srv, tls=True, tlsCertificateKeyFile=cert
+            srv, tls=True, tlsCertificateKeyFile=cert, uuidRepresentation="standard"
         )
         self._embedding_service = embedding_service
-        self._db = self._client[settings.database]
-        self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = self._db[
-            settings.tomes_collection
-        ]
+        db = self._client.get_database(settings.database)
+        self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.tomes_collection]
 
     async def insert(self, tome: Tome) -> UUID:
         """Insert a new Tome into MongoDB."""
@@ -53,89 +52,105 @@ class MongoTomeRepository(TomeRepository):
             return None
         return MongoTome.model_validate(doc).to_tome()
 
-    async def search(
-        self,
-        query: str,
-        top_k: int = 5,
-        min_confidence: float = 0.5,
-    ) -> list[tuple[Tome, float]]:
+    async def search(self, query: str, top_k: int = 5, min_confidence: float = 0.5) -> list[Tome]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
-        Combines results from two separate search pipelines using average score ($scoreFusion).
+        Runs both pipelines concurrently, normalises scores to [0, 1], averages
+        them for documents that appear in both result sets, then returns the
+        top-k results sorted by combined score.
         """
         query_embedding = await self._embedding_service.embed(query)
-        query_vector = BinaryVector(
+        query_vector = Binary.from_vector(
             np.array(query_embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
 
+        lexical_results, vector_results = await asyncio.gather(
+            self._lexical_search(query, top_k, min_confidence),
+            self._vector_search(query_vector, top_k, min_confidence),
+        )
+
+        return self._merge_results(lexical_results, vector_results, top_k)
+
+    async def _lexical_search(self, query: str, top_k: int, min_confidence: float) -> list[Tome]:
         pipeline: list[Mapping[str, Any]] = [
             {
-                "$scoreFusion": {
-                    "input": {
-                        "pipelines": {
-                            "lexical": [
-                                {
-                                    "$search": {
-                                        "compound": {
-                                            "filter": [
-                                                {
-                                                    "range": {
-                                                        "path": "confidence",
-                                                        "gte": min_confidence,
-                                                    }
-                                                }
-                                            ],
-                                            "should": [
-                                                {
-                                                    "text": {
-                                                        "query": query,
-                                                        "path": [
-                                                            "title",
-                                                            "content",
-                                                            "summary",
-                                                            "tags",
-                                                        ],
-                                                    }
-                                                }
-                                            ],
-                                        }
-                                    }
-                                },
-                                {"$limit": top_k * 10},
-                            ],
-                            "semantic": [
-                                {
-                                    "$vectorSearch": {
-                                        "index": "vectors",
-                                        "path": "embedding",
-                                        "queryVector": query_vector,
-                                        "filter": {"confidence": {"$gte": min_confidence}},
-                                        "numCandidates": top_k * 10,
-                                        "limit": top_k * 2,
-                                    }
+                "$search": {
+                    "compound": {
+                        "filter": [{"range": {"path": "confidence", "gte": min_confidence}}],
+                        "should": [
+                            {
+                                "text": {
+                                    "query": query,
+                                    "path": ["title", "content", "summary", "tags"],
                                 }
-                            ],
-                        },
-                        "normalization": "sigmoid",
-                    },
-                    "combination": {"method": "avg"},
+                            }
+                        ],
+                    }
                 }
             },
-            {"$limit": top_k},
-            {"$project": {"score": {"$meta": "searchScore"}, "document": "$$ROOT"}},
+            {"$limit": top_k * 10},
         ]
 
-        results = []
+        results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
-            tome = MongoTome.model_validate(doc["document"]).to_tome()
-            score = doc["score"]
-            results.append((tome, score))
-
+            results.append(MongoTome.model_validate(doc).to_tome())
         return results
+
+    async def _vector_search(
+        self, query_vector: Binary, top_k: int, min_confidence: float
+    ) -> list[Tome]:
+        pipeline: list[Mapping[str, Any]] = [
+            {
+                "$vectorSearch": {
+                    "index": "vectors",
+                    "path": "embedding",
+                    "queryVector": query_vector,
+                    "filter": {"confidence": {"$gte": min_confidence}},
+                    "numCandidates": top_k * 10,
+                    "limit": top_k * 2,
+                }
+            },
+        ]
+
+        results: list[Tome] = []
+        async for doc in self._collection.aggregate(pipeline):
+            results.append(MongoTome.model_validate(doc).to_tome())
+        return results
+
+    RRF_K = 60
+
+    @staticmethod
+    def _merge_results(
+        lexical: list[Tome],
+        vector: list[Tome],
+        top_k: int,
+    ) -> list[Tome]:
+        """Reciprocal Rank Fusion (RRF) over two ranked result lists.
+
+        Each list is assumed to be pre-sorted by its native score descending.
+        RRF score for a document is: sum(1 / (k + rank)) across the lists it
+        appears in, where rank is 1-based.
+        """
+        k = MongoTomeRepository.RRF_K
+
+        tome_by_id: dict[UUID, Tome] = {}
+        rrf_scores: dict[UUID, float] = {}
+
+        for rank, tome in enumerate(lexical, start=1):
+            tome_by_id[tome.id] = tome
+            rrf_scores[tome.id] = rrf_scores.get(tome.id, 0.0) + 1.0 / (k + rank)
+
+        for rank, tome in enumerate(vector, start=1):
+            tome_by_id[tome.id] = tome
+            rrf_scores[tome.id] = rrf_scores.get(tome.id, 0.0) + 1.0 / (k + rank)
+
+        combined = [(tome_by_id[tid], score) for tid, score in rrf_scores.items()]
+        combined.sort(key=lambda x: x[1], reverse=True)
+        return [t for (t, s) in combined[:top_k]]
 
     async def find_near_duplicates(self, tome: Tome, threshold: float = 0.3) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
-        query_vector = BinaryVector(
+        query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
 
