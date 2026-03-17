@@ -15,7 +15,7 @@ class DatabaseSettings(BaseSettings):
     uri: str = "localhost"
     database: str = "library"
     tomes_collection: str = "tomes"
-    tls_cert_path: str = "~/.edit_me"
+    tls_cert_path: str = "PATH_TO_PEM_FILE"
 
 
 class EmbeddingSettings(BaseSettings):
