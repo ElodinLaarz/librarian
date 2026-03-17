@@ -13,7 +13,10 @@ _DEDUP_SIMILARITY_THRESHOLD = 0.85
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity in [-1, 1]. Returns 0.0 if either vector is zero."""
+    """Cosine similarity in [-1, 1]. Returns 0.0 if either vector is zero or shapes differ."""
+    # If embeddings have different dimensionality, treat them as dissimilar.
+    if a.shape != b.shape:
+        return 0.0
     denom = float(np.linalg.norm(a) * np.linalg.norm(b))
     if denom == 0.0:
         return 0.0
