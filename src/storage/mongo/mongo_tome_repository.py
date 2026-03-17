@@ -55,9 +55,7 @@ class MongoTomeRepository(TomeRepository):
     async def search(self, query: str, top_k: int = 5, min_confidence: float = 0.5) -> list[Tome]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
-        Runs both pipelines concurrently, normalises scores to [0, 1], averages
-        them for documents that appear in both result sets, then returns the
-        top-k results sorted by combined score.
+        Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
         """
         query_embedding = await self._embedding_service.embed(query)
         query_vector = Binary.from_vector(
