@@ -63,9 +63,12 @@ async def library_search(params: SearchInput) -> SearchOutput:
         query=params.query,
         top_k=params.top_k,
         min_confidence=params.min_confidence,
+        category=params.category,
     )
 
     tomes = [tome for tome, _ in results]
+    if not params.include_summary:
+        tomes = [t.model_copy(update={"summary": ""}) for t in tomes]
     scores = [score for _, score in results]
 
     return SearchOutput(

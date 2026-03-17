@@ -33,6 +33,7 @@ class TomeRepository(ABC):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
+        category: str | None = None,
     ) -> list[tuple[Tome, float]]:
         """Perform ANN vector search. Returns (Tome, score) pairs sorted by similarity."""
         ...

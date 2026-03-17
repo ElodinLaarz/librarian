@@ -3,9 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+import numpy as np
+
 from src.config import DatabaseSettings
 from src.models.tome import Tome
 from src.storage.tome_repository import TomeRepository
+
+_DEDUP_SIMILARITY_THRESHOLD = 0.85
+
+
+def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity in [-1, 1]. Returns 0.0 if either vector is zero."""
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom == 0.0:
+        return 0.0
+    return float(np.dot(a, b) / denom)
 
 
 class FsTomeRepository(TomeRepository):
@@ -52,37 +64,38 @@ class FsTomeRepository(TomeRepository):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
+        category: str | None = None,
     ) -> list[tuple[Tome, float]]:
-        """Perform a brute-force search across all JSON files.
+        """Brute-force scan with confidence and category filters.
 
-        Note: In a real implementation, this would use the query embedding
-        to perform vector similarity search.
+        Scores are placeholder 1.0 until a query embedding is available
+        via the repository interface.
         """
         results: list[tuple[Tome, float]] = []
         for path in self._tomes_dir.glob("*.json"):
             try:
                 tome = Tome.model_validate_json(path.read_text())
-                if tome.confidence >= min_confidence:
-                    # Mock similarity score for skeleton
-                    results.append((tome, 1.0))
+                if tome.confidence < min_confidence:
+                    continue
+                if category is not None and tome.category != category:
+                    continue
+                results.append((tome, 1.0))
             except Exception:
                 continue
 
-        # Sort by score descending and limit to top_k
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
-        """Find existing Tomes with high similarity.
-
-        Scans all files to find potential duplicates.
-        """
+        """Find existing Tomes with cosine similarity above _DEDUP_SIMILARITY_THRESHOLD."""
         duplicates: list[Tome] = []
         for path in self._tomes_dir.glob("*.json"):
             try:
                 existing = Tome.model_validate_json(path.read_text())
-                # In a real implementation, compare embeddings here
-                if existing.id != tome.id and existing.title == tome.title:
+                if existing.id == tome.id:
+                    continue
+                sim = _cosine_similarity(existing.embedding, tome.embedding)
+                if sim >= _DEDUP_SIMILARITY_THRESHOLD:
                     duplicates.append(existing)
             except Exception:
                 continue

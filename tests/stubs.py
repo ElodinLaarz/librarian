@@ -59,6 +59,7 @@ class StubTomeRepository(TomeRepository):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
+        category: str | None = None,
     ) -> list[tuple[Tome, float]]:
         results = [(t, 1.0) for t in self._tomes.values() if t.confidence >= min_confidence]
         return results[:top_k]
