@@ -64,8 +64,7 @@ class StubTomeRepository(TomeRepository):
         results = [
             (t, 1.0)
             for t in self._tomes.values()
-            if t.confidence >= min_confidence
-            and (category is None or t.category == category)
+            if t.confidence >= min_confidence and (category is None or t.category == category)
         ]
         return results[:top_k]
 
