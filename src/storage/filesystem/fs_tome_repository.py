@@ -92,12 +92,20 @@ class FsTomeRepository(TomeRepository):
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with cosine similarity above _DEDUP_SIMILARITY_THRESHOLD."""
         duplicates: list[Tome] = []
+        # Precompute the candidate embedding norm once to avoid redundant work per existing Tome.
+        tome_embedding = tome.embedding
+        tome_norm = float(np.linalg.norm(tome_embedding))
         for path in self._tomes_dir.glob("*.json"):
             try:
                 existing = Tome.model_validate_json(path.read_text())
                 if existing.id == tome.id:
                     continue
-                sim = _cosine_similarity(existing.embedding, tome.embedding)
+                existing_embedding = existing.embedding
+                denom = float(np.linalg.norm(existing_embedding) * tome_norm)
+                if denom == 0.0:
+                    sim = 0.0
+                else:
+                    sim = float(np.dot(existing_embedding, tome_embedding) / denom)
                 if sim >= _DEDUP_SIMILARITY_THRESHOLD:
                     duplicates.append(existing)
             except Exception:
