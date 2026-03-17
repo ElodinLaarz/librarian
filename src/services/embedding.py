@@ -31,15 +31,12 @@ class EmbeddingService(ABC):
         """
         ...
 
-    @staticmethod
-    def noop(settings: EmbeddingSettings) -> EmbeddingService:
-        """Return a no-op EmbeddingService that produces zero vectors of the default dimension."""
 
-        class _NoopEmbeddingService(EmbeddingService):
-            async def initialize(self) -> None:
-                pass
+class DummyEmbeddingService(EmbeddingService):
+    """A placeholder embedding service that returns zero vectors for local dev/testing."""
 
-            async def embed(self, text: str) -> np.ndarray:
-                return np.zeros(settings.dimensions, dtype=np.float32)
+    async def initialize(self) -> None:
+        pass
 
-        return _NoopEmbeddingService(settings)
+    async def embed(self, text: str) -> np.ndarray:
+        return np.zeros(self._settings.dimensions, dtype=np.float32)

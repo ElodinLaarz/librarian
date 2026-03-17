@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime
 
+from src import constants
 from src.config import LibrarianConfig
-from src.models.enums import SourceType
+from src.models.enums import IngestStatus, SourceType
 from src.models.tome import Tome
+from src.models.tool_schemas import IngestOutput
 from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
 from src.storage.tome_repository import TomeRepository
 
 
+class ReshardError(Exception):
+    """Raised when a reshard operation cannot be completed safely."""
+
+    def __init__(self, message: str, tomes: list[Tome] | None = None) -> None:
+        super().__init__(message)
+        self.tomes = tomes or []
+
+
 class Ingestor:
-    """Receives raw knowledge, validates, chunks, embeds, and stores it as Tomes."""
+    """Receives raw knowledge, validates, reshards, embeds, and stores it as Tomes."""
 
     def __init__(
         self,
@@ -27,56 +38,221 @@ class Ingestor:
         self._verifier = verifier
         self._tome_repo = tome_repo
 
-    async def ingest(self, blob: str) -> list[Tome]:
-        """Convert unstructured text into a structured knowledge Tome
-        and save it in the collection."""
+    async def ingest(self, blob: str) -> IngestOutput:
+        """Convert unstructured text into one or more Tomes and save them."""
+        if not blob.strip():
+            return IngestOutput(
+                tomes=[],
+                status=IngestStatus.REJECTED,
+                reject_reason="Content is empty",
+            )
 
-        # Run async methods concurrently
-        classify_task = self._classify_and_tag(blob)
-        summarize_task = self._generate_title_and_summary(blob)
-        embed_task = self._embedding_service.embed(blob)
+        shards = await self._reshard(blob)
+        if not shards:
+            return IngestOutput(
+                tomes=[],
+                status=IngestStatus.REJECTED,
+                reject_reason=(
+                    f"Unable to re-shard content "
+                    f"({len(blob)} chars, shard_size={self._config.ingest.shard_size}, "
+                    f"shard_overlap={self._config.ingest.shard_overlap})"
+                ),
+            )
 
-        # Wait for all three to finish
-        (category, tags), (title, summary), embedding = await asyncio.gather(
-            classify_task, summarize_task, embed_task
+        tomes = await asyncio.gather(
+            *[self._process_text(s) for s in shards],
+            return_exceptions=True,
         )
 
-        timestamp = datetime.now(tz=UTC)
+        stored: list[Tome] = []
+        any_rejected = False
+        reject_reasons: list[str] = []
+
+        for result in tomes:
+            if isinstance(result, BaseException):
+                any_rejected = True
+                if isinstance(result, ReshardError):
+                    stored.extend(result.tomes)
+                    reject_reasons.append(str(result))
+                else:
+                    logging.error("Unhandled exception during ingest", exc_info=result)
+                    reject_reasons.append(f"Unexpected error: {result}")
+            elif not result:
+                any_rejected = True
+            else:
+                stored.extend(result)
+
+        if not stored:
+            reason = "All shards failed verification"
+            if reject_reasons:
+                reasons_str = constants.JOIN_SEPARATOR.join(reject_reasons)
+                reason = f"All shards failed verification (or had errors): {reasons_str}"
+            return IngestOutput(
+                tomes=[],
+                status=IngestStatus.REJECTED,
+                reject_reason=reason,
+            )
+
+        status = IngestStatus.PARTIAL if any_rejected else IngestStatus.STORED
+        final_reason = constants.JOIN_SEPARATOR.join(reject_reasons) if reject_reasons else None
+        return IngestOutput(tomes=stored, status=status, reject_reason=final_reason)
+
+    async def _process_text(self, text: str) -> list[Tome] | None:
+        """Verify, classify, embed, and dedup/store a single text.
+
+        Returns None if verification is enabled and confidence is below the reject
+        threshold.  When verification is disabled the text is stored unconditionally
+        with a confidence of ingest.unverified_confidence.
+        """
+        tome = await self._build_tome(text)
+        if tome is None:
+            return None
+        return await self._dedup_and_store(tome)
+
+    async def _build_tome(self, text: str) -> Tome | None:
+        """Verify, classify, and embed a text, returning a Tome ready for storage.
+
+        Returns None if verification rejects the text.  Does NOT persist anything.
+        """
+        if self._config.verification.enabled:
+            verification_result = await self._verifier.verify(text)
+            if verification_result.confidence < self._config.verification.reject_threshold:
+                return None
+            confidence = verification_result.confidence
+        else:
+            confidence = self._config.ingest.unverified_confidence
+
+        (category, tags), (title, summary), embedding = await asyncio.gather(
+            self._classify_and_tag(text),
+            self._generate_title_and_summary(text),
+            self._embedding_service.embed(text),
+        )
+
         tome = Tome(
             id=uuid.uuid4(),
-            content=blob,
+            content=text,
             summary=summary,
             title=title,
             category=category,
             tags=tags,
             embedding=embedding,
-            created_at=timestamp,
             source_url=None,
             source_type=SourceType.AGENT_INPUT,
-            confidence=0.5,
+            confidence=confidence,
+            created_at=datetime.now(UTC),
         )
+        try:
+            self._validate(tome)
+        except ValueError:
+            logging.error("Tome validation failed", exc_info=True)
+            return None
+        return tome
 
-        # Validate (sync method)
-        self._validate(tome)
+    async def _dedup_and_store(self, tome: Tome) -> list[Tome]:
+        """Insert tome, or reshard with any near-duplicates found in the repository.
 
-        # Store async
-        await self._tome_repo.insert(tome)
+        Reshard strategy (safe ordering):
+        1. Build and verify all replacement tomes from combined content.
+        2. Abort without touching existing tomes if no replacement survives verification.
+        3. Insert all replacements first to ensure no data loss if the operation is interrupted.
+        4. Delete old tomes only once all replacements are successfully persisted.
+        """
+        duplicates = await self._tome_repo.find_near_duplicates(tome)
+        if not duplicates:
+            await self._tome_repo.insert(tome)
+            return [tome]
 
-        return [tome]
+        # Step 1 — build replacements from combined content (nothing persisted yet).
+        combined = constants.CONTENT_SEPARATOR.join(
+            [d.content for d in duplicates] + [tome.content]
+        )
+        shards = await self._reshard(combined)
+        replacement_results = await asyncio.gather(*[self._build_tome(c) for c in shards])
+        replacements = [t for t in replacement_results if t is not None]
 
-    def _validate(self, params: Tome) -> None:
-        """Pre-flight checks: input length, required fields, HTML sanitisation."""
+        # Step 2 — abort if verification left us with nothing to store.
+        if not replacements:
+            return []
+
+        # Step 3 - Insert replacements.
+        await asyncio.gather(*[self._tome_repo.insert(r) for r in replacements])
+
+        # Step 4 - Delete old tomes.
+        # Technically if we fail here, we may end up with duplicate data in the
+        # library, but that seems like a better choice (IMO) than aborting.
+        delete_results = await asyncio.gather(
+            *[self._tome_repo.delete(dup.id) for dup in duplicates],
+            return_exceptions=True,
+        )
+        delete_errors = []
+        for dup, result in zip(duplicates, delete_results, strict=True):
+            if isinstance(result, Exception):
+                logging.warning("Exception deleting %s during reshard: %s", dup.id, result)
+                delete_errors.append(str(dup.id))
+            elif not result:
+                delete_errors.append(str(dup.id))
+
+        if delete_errors:
+            failed_ids = constants.ID_SEPARATOR.join(delete_errors)
+            msg = (
+                "Failed to delete tomes during reshard "
+                f"(duplicate data may exist for: {failed_ids})"
+            )
+            raise ReshardError(msg, tomes=replacements)
+
+        return replacements
+
+    async def _reshard(self, blob: str) -> list[str]:
+        """Split blob into atomic, self-contained fact shards.
+
+        For now, we just split into chunks of ingest.shard_size characters with
+        ingest.shard_overlap overlap, but this should be replaced with LLM-driven
+        decomposition that returns a list of atomic facts within the given
+        character limit.
+        """
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self._config.ingest.shard_size,
+            chunk_overlap=self._config.ingest.shard_overlap,
+        )
+        return splitter.split_text(blob)
 
     async def _classify_and_tag(
-        self, chunk: str, category_hint: str | None = None
+        self, text: str, category_hint: str | None = None
     ) -> tuple[str, list[str]]:
         """Auto-classify into a category and extract topic tags."""
-        return ("default_category", ["default_tag"])
+        return category_hint or self._config.ingest.default_category, list(
+            self._config.ingest.default_tags
+        )
 
-    async def _generate_title_and_summary(self, chunk: str) -> tuple[str, str]:
-        """Generate a short title and one-to-two sentence summary for a chunk."""
-        return chunk[:100], chunk[:150]
+    async def _generate_title_and_summary(self, text: str) -> tuple[str, str]:
+        """Generate a short title and one-to-two sentence summary for a text."""
+        clean_text = text.strip().replace("\n", " ")
+        if len(clean_text) > self._config.ingest.title_length:
+            suffix = constants.TRUNCATION_SUFFIX
+            title = clean_text[: self._config.ingest.title_length - len(suffix)] + suffix
+        else:
+            title = clean_text
+        summary = clean_text[: self._config.ingest.summary_length]
+        return title, summary
 
-    async def _dedup_and_store(self, tome: Tome, allow_update: bool) -> str:
-        """Check for near-duplicates; merge, skip, or insert accordingly. Returns the Tome ID."""
-        raise NotImplementedError
+    def _validate(self, tome: Tome) -> None:
+        """Post-construction checks; raises on failure."""
+        if not tome.content.strip():
+            raise ValueError("Tome content cannot be empty")
+        if len(tome.title) > self._config.ingest.title_length:
+            raise ValueError(
+                f"Tome title too long ({len(tome.title)} > {self._config.ingest.title_length})"
+            )
+
+        # In a real implementation we would enforce the embedding size.
+        # Here we skip the dimension check if a dummy/string embedding is supplied.
+        if (
+            hasattr(tome.embedding, "shape")
+            and tome.embedding.shape[0] != self._config.embedding.dimensions
+        ):
+            raise ValueError(
+                f"Tome embedding has dimension {tome.embedding.shape[0]}, "
+                f"expected {self._config.embedding.dimensions}"
+            )

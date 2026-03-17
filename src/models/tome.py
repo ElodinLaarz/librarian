@@ -7,16 +7,19 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from src import constants
 from src.models.enums import SourceType
 
 
 class Tome(BaseModel):
-    """A compact, single-topic knowledge document stored in the library."""
+    """A compact, single-topic knowledge document stored in the library.
+    This is the data model understood by "The Librarian" and public interfaces, although
+    the actual storage format may be different."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     id: UUID
-    title: str = Field(..., max_length=120)
+    title: str = Field(..., max_length=constants.TITLE_MAX_LENGTH)
     content: str
     summary: str
     category: str

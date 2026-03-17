@@ -5,17 +5,16 @@ from uuid import uuid4
 from mcp.server import FastMCP
 
 from src.config import LibrarianConfig
-from src.models.enums import IngestStatus
 from src.models.tool_schemas import (
     IngestInput,
     IngestOutput,
     SearchInput,
     SearchOutput,
 )
-from src.services import EmbeddingService
+from src.services.embedding import DummyEmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
-from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
+from src.storage.mongo import MongoTomeRepository
 from src.storage.tome_repository import TomeRepository
 
 config = LibrarianConfig()
@@ -29,10 +28,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     """Initialise and tear down services around the server lifetime."""
     global _ingestor, _tome_repo
 
-    embedding_service = EmbeddingService.noop(config.embedding)
+    embedding_service = DummyEmbeddingService(config.embedding)
     _tome_repo = MongoTomeRepository(config.database, embedding_service)
-
-    verifier = Verifier.noop()
+    verifier = Verifier(config)
     _ingestor = Ingestor(config, embedding_service, verifier, _tome_repo)
 
     yield
@@ -65,10 +63,6 @@ async def library_search(params: SearchInput) -> SearchOutput:
     tomes = [tome for tome, _ in results]
     scores = [score for _, score in results]
 
-    if params.include_summary:
-        for tome in tomes:
-            tome.content = tome.summary
-
     return SearchOutput(
         tomes=tomes,
         scores=scores,
@@ -81,10 +75,4 @@ async def library_search(params: SearchInput) -> SearchOutput:
 async def library_ingest(params: IngestInput) -> IngestOutput:
     """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
     assert _ingestor is not None, "Server not initialised"
-
-    tomes = await _ingestor.ingest(params.content)
-
-    return IngestOutput(
-        tomes=tomes,
-        status=IngestStatus.STORED,
-    )
+    return await _ingestor.ingest(params.content)
