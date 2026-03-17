@@ -28,7 +28,7 @@ class Tome(BaseModel):
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
 
-    embedding: Annotated[NDArray[np.float32], SkipJsonSchema()] = Field(exclude=True)
+    embedding: Annotated[NDArray[np.float32], SkipJsonSchema()] = Field()
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
