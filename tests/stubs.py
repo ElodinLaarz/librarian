@@ -6,7 +6,7 @@ from uuid import UUID
 
 import numpy as np
 
-from src.config import EmbeddingSettings, LibrarianConfig
+from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
 from src.models.enums import VerificationVerdict
 from src.models.tome import Tome
 from src.services.embedding import EmbeddingService
@@ -65,6 +65,10 @@ class StubTomeRepository(TomeRepository):
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         return list(self._near_duplicates)
+
+    def close(self) -> None:
+        self._tomes.clear()
+        self._near_duplicates.clear()
 
 
 class StubEmbeddingService(EmbeddingService):
@@ -127,7 +131,9 @@ def make_stub_ingestor(
     dimensions: int = 768,
 ) -> tuple[StubIngestor, StubTomeRepository, StubVerifier]:
     """Convenience factory — returns (ingestor, repo, verifier) wired together."""
-    config = config or LibrarianConfig()
+    config = config or LibrarianConfig(
+        database=DatabaseSettings(uri="mongodb://localhost:27017", tls_cert_path="/dev/null"),
+    )
     repo = repo or StubTomeRepository()
     verifier = StubVerifier(confidence=confidence)
     embedding_service = StubEmbeddingService(dimensions=dimensions)
