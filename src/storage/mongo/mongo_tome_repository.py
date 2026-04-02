@@ -174,4 +174,5 @@ class MongoTomeRepository(TomeRepository):
 
     async def ensure_indexes(self) -> None:
         """Create standard MongoDB indexes."""
+        # TODO: Create indexes for vectorSearch if they don't already exist
         ...
