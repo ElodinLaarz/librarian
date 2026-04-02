@@ -67,6 +67,7 @@ class FsTomeRepository(TomeRepository):
                     results.append(tome)
             except Exception:
                 continue
+        results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
