@@ -33,11 +33,16 @@ class TomeRepository(ABC):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
-    ) -> list[tuple[Tome, float]]:
-        """Perform ANN vector search. Returns (Tome, score) pairs sorted by similarity."""
+    ) -> list[Tome]:
+        """Perform ANN vector search. Returns Tomes sorted by similarity."""
         ...
 
     @abstractmethod
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold."""
         ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """Frees any resources held by the repository."""
+        pass

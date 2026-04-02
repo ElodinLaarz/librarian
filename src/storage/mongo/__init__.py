@@ -1,0 +1,1 @@
+from src.storage.mongo.mongo_tome_repository import MongoTomeRepository as MongoTomeRepository

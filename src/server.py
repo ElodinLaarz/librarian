@@ -1,5 +1,7 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 from mcp.server import FastMCP
@@ -14,10 +16,10 @@ from src.models.tool_schemas import (
 from src.services.embedding import DummyEmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
-from src.storage.filesystem.fs_tome_repository import FsTomeRepository
+from src.storage.mongo import MongoTomeRepository
 from src.storage.tome_repository import TomeRepository
 
-config = LibrarianConfig()
+config = LibrarianConfig.from_yaml(Path(os.path.relpath("config.yml", Path.cwd())))
 
 _ingestor: Ingestor | None = None
 _tome_repo: TomeRepository | None = None
@@ -28,20 +30,16 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     """Initialise and tear down services around the server lifetime."""
     global _ingestor, _tome_repo
 
-    _tome_repo = _build_tome_repository(config)
     embedding_service = DummyEmbeddingService(config.embedding)
+    _tome_repo = MongoTomeRepository(config.database, embedding_service)
     verifier = Verifier(config)
     _ingestor = Ingestor(config, embedding_service, verifier, _tome_repo)
 
     yield
 
+    _tome_repo.close()
     _ingestor = None
     _tome_repo = None
-
-
-def _build_tome_repository(config: LibrarianConfig) -> TomeRepository:
-    """Construct the active TomeRepository from config."""
-    return FsTomeRepository(config.database)
 
 
 mcp = FastMCP(
@@ -65,12 +63,8 @@ async def library_search(params: SearchInput) -> SearchOutput:
         min_confidence=params.min_confidence,
     )
 
-    tomes = [tome for tome, _ in results]
-    scores = [score for _, score in results]
-
     return SearchOutput(
-        tomes=tomes,
-        scores=scores,
+        tomes=results,
         query_id=uuid4().hex,
         from_cache=False,
     )

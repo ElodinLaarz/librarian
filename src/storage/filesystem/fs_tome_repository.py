@@ -52,7 +52,7 @@ class FsTomeRepository(TomeRepository):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
-    ) -> list[tuple[Tome, float]]:
+    ) -> list[Tome]:
         """Perform a brute-force search across all JSON files.
 
         Note: In a real implementation, this would use the query embedding
@@ -67,10 +67,8 @@ class FsTomeRepository(TomeRepository):
                     results.append((tome, 1.0))
             except Exception:
                 continue
-
-        # Sort by score descending and limit to top_k
         results.sort(key=lambda x: x[1], reverse=True)
-        return results[:top_k]
+        return [tome for (tome, score) in results[:top_k]]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with high similarity.
@@ -87,3 +85,6 @@ class FsTomeRepository(TomeRepository):
             except Exception:
                 continue
         return duplicates
+
+    def close(self) -> None:
+        pass

@@ -12,6 +12,7 @@ from src.config import LibrarianConfig, VerificationSettings
 from src.models.enums import IngestStatus, SourceType, VerificationVerdict
 from src.models.tome import Tome
 from src.services.verifier import ClaimResult, VerificationResult
+from tests.conftest import make_test_config
 from tests.stubs import (
     StubEmbeddingService,
     StubIngestor,
@@ -239,7 +240,7 @@ async def test_reshard_does_not_loop_infinitely(
 async def test_custom_reject_threshold_honoured() -> None:
     """Setting a high reject_threshold causes moderate-confidence content to be rejected."""
     strict_settings = VerificationSettings(reject_threshold=0.9)
-    config = LibrarianConfig(verification=strict_settings)
+    config = make_test_config(verification=strict_settings)
     repo = StubTomeRepository()
     ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.5, repo=repo)
 
@@ -252,7 +253,7 @@ async def test_custom_reject_threshold_honoured() -> None:
 async def test_confidence_at_threshold_boundary_accepted() -> None:
     """Confidence exactly equal to reject_threshold is accepted (ge, not gt)."""
     threshold = 0.3
-    config = LibrarianConfig(verification=VerificationSettings(reject_threshold=threshold))
+    config = make_test_config(verification=VerificationSettings(reject_threshold=threshold))
     repo = StubTomeRepository()
     ingestor, _, _ = make_stub_ingestor(config=config, confidence=threshold, repo=repo)
 
@@ -266,7 +267,7 @@ async def test_confidence_at_threshold_boundary_accepted() -> None:
 
 async def test_disabled_verification_stores_despite_low_confidence() -> None:
     """When verification is disabled, content is stored regardless of confidence."""
-    config = LibrarianConfig(
+    config = make_test_config(
         verification=VerificationSettings(enabled=False, reject_threshold=0.99)
     )
     repo = StubTomeRepository()
@@ -281,7 +282,7 @@ async def test_disabled_verification_stores_despite_low_confidence() -> None:
 
 async def test_disabled_verification_confidence_is_point_five() -> None:
     """Tomes stored without verification carry the default unverified confidence."""
-    config = LibrarianConfig(verification=VerificationSettings(enabled=False))
+    config = make_test_config(verification=VerificationSettings(enabled=False))
     repo = StubTomeRepository()
     ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.5, repo=repo)
 
@@ -349,7 +350,7 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
 
     # Wire a fresh ingestor that uses the fail-deletes repo.
     bad_repo_ingestor = StubIngestor(
-        LibrarianConfig(), StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+        make_test_config(), StubEmbeddingService(), StubVerifier(confidence=0.9), repo
     )
 
     output = await bad_repo_ingestor.ingest("Replacement content.")
