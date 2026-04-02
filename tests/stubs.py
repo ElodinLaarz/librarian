@@ -59,8 +59,13 @@ class StubTomeRepository(TomeRepository):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
+        category: str | None = None,
     ) -> list[Tome]:
-        results = [t for t in self._tomes.values() if t.confidence >= min_confidence]
+        results = [
+            t
+            for t in self._tomes.values()
+            if t.confidence >= min_confidence and (category is None or t.category == category)
+        ]
         return results[:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:

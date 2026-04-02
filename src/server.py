@@ -61,10 +61,18 @@ async def library_search(params: SearchInput) -> SearchOutput:
         query=params.query,
         top_k=params.top_k,
         min_confidence=params.min_confidence,
+        category=params.category,
     )
 
+    tomes = results
+    if not params.include_summary:
+        tomes = [t.model_copy(update={"summary": ""}) for t in tomes]
+    # Strip embeddings before returning tomes to clients; embeddings are storage-only.
+    tomes = [t.model_copy(update={"embedding": None}) for t in tomes]
+
     return SearchOutput(
-        tomes=results,
+        tomes=tomes,
+        scores=[1] * len(tomes),
         query_id=uuid4().hex,
         from_cache=False,
     )

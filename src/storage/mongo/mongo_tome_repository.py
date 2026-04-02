@@ -52,7 +52,13 @@ class MongoTomeRepository(TomeRepository):
             return None
         return MongoTome.model_validate(doc).to_tome()
 
-    async def search(self, query: str, top_k: int = 5, min_confidence: float = 0.5) -> list[Tome]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_confidence: float = 0.5,
+        category: str | None = None,
+    ) -> list[Tome]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
         Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
@@ -63,18 +69,26 @@ class MongoTomeRepository(TomeRepository):
         )
 
         lexical_results, vector_results = await asyncio.gather(
-            self._lexical_search(query, top_k, min_confidence),
-            self._vector_search(query_vector, top_k, min_confidence),
+            self._lexical_search(query, top_k, min_confidence, category),
+            self._vector_search(query_vector, top_k, min_confidence, category),
         )
 
         return self._merge_results(lexical_results, vector_results, top_k)
 
-    async def _lexical_search(self, query: str, top_k: int, min_confidence: float) -> list[Tome]:
+    async def _lexical_search(
+        self, query: str, top_k: int, min_confidence: float, category: str | None
+    ) -> list[Tome]:
+        filters: list[Mapping[str, Any]] = [
+            {"range": {"path": "confidence", "gte": min_confidence}},
+        ]
+        if category is not None:
+            filters.append({"text": {"query": category, "path": "category"}})
+
         pipeline: list[Mapping[str, Any]] = [
             {
                 "$search": {
                     "compound": {
-                        "filter": [{"range": {"path": "confidence", "gte": min_confidence}}],
+                        "filter": filters,
                         "should": [
                             {
                                 "text": {
@@ -95,15 +109,19 @@ class MongoTomeRepository(TomeRepository):
         return results
 
     async def _vector_search(
-        self, query_vector: Binary, top_k: int, min_confidence: float
+        self, query_vector: Binary, top_k: int, min_confidence: float, category: str | None
     ) -> list[Tome]:
+        vector_filter: dict[str, Any] = {"confidence": {"$gte": min_confidence}}
+        if category is not None:
+            vector_filter["category"] = category
+
         pipeline: list[Mapping[str, Any]] = [
             {
                 "$vectorSearch": {
                     "index": "vectors",
                     "path": "embedding",
                     "queryVector": query_vector,
-                    "filter": {"confidence": {"$gte": min_confidence}},
+                    "filter": vector_filter,
                     "numCandidates": top_k * 10,
                     "limit": top_k * 2,
                 }

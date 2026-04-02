@@ -4,7 +4,7 @@ from uuid import UUID
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from src import constants
@@ -28,17 +28,21 @@ class Tome(BaseModel):
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
 
-    embedding: Annotated[NDArray[np.float32], SkipJsonSchema()] = Field(exclude=True)
+    embedding: Annotated[NDArray[np.float32], SkipJsonSchema()] = Field()
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    @field_validator("embedding")
-    @classmethod
-    def validate_embedding(cls, v: NDArray[np.float32]) -> NDArray[np.float32]:
-        if not isinstance(v, np.ndarray):
-            raise TypeError("embedding must be a numpy.ndarray")
+    @field_serializer("embedding")
+    def serialize_embedding(self, v: NDArray[np.float32]) -> list[float]:
+        return v.tolist()  # type: ignore[no-any-return]
 
+    @field_validator("embedding", mode="before")
+    @classmethod
+    def validate_embedding(cls, v: object) -> NDArray[np.float32]:
+        if isinstance(v, list):
+            return np.array(v, dtype=np.float32)
+        if not isinstance(v, np.ndarray):
+            raise TypeError("embedding must be a numpy.ndarray or list of floats")
         if v.dtype != np.float32:
             raise ValueError("embedding must have dtype float32")
-
         return v

@@ -33,6 +33,7 @@ class TomeRepository(ABC):
         query: str,
         top_k: int = 5,
         min_confidence: float = 0.5,
+        category: str | None = None,
     ) -> list[Tome]:
         """Perform ANN vector search. Returns Tomes sorted by similarity."""
         ...
