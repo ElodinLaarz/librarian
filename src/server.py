@@ -64,7 +64,6 @@ async def library_search(params: SearchInput) -> SearchOutput:
 
     return SearchOutput(
         tomes=results,
-        scores=[1] * len(results),
         query_id=uuid4().hex,
         from_cache=False,
     )

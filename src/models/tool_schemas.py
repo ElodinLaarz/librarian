@@ -15,7 +15,6 @@ class SearchInput(BaseModel):
 
 class SearchOutput(BaseModel):
     tomes: list[Tome]
-    scores: list[float]
     query_id: str
     from_cache: bool
 
