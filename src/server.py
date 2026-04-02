@@ -1,5 +1,7 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 from mcp.server import FastMCP
@@ -17,7 +19,7 @@ from src.services.verifier import Verifier
 from src.storage.mongo import MongoTomeRepository
 from src.storage.tome_repository import TomeRepository
 
-config = LibrarianConfig()
+config = LibrarianConfig.from_yaml(Path(os.path.relpath("config.yml", Path.cwd())))
 
 _ingestor: Ingestor | None = None
 _tome_repo: TomeRepository | None = None
