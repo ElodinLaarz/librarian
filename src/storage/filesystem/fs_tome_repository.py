@@ -85,3 +85,6 @@ class FsTomeRepository(TomeRepository):
             except Exception:
                 continue
         return duplicates
+
+    def close(self) -> None:
+        pass

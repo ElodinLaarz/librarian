@@ -176,3 +176,7 @@ class MongoTomeRepository(TomeRepository):
         """Create standard MongoDB indexes."""
         # TODO: Create indexes for vectorSearch if they don't already exist
         ...
+
+    def close(self) -> None:
+        """Close the MongoDB client connection."""
+        self._client.close()

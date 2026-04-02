@@ -41,3 +41,8 @@ class TomeRepository(ABC):
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold."""
         ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """Frees any resources held by the repository."""
+        pass

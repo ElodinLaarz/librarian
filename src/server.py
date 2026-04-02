@@ -37,6 +37,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
 
     yield
 
+    _tome_repo.close()
     _ingestor = None
     _tome_repo = None
 
