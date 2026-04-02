@@ -58,17 +58,17 @@ class FsTomeRepository(TomeRepository):
         Note: In a real implementation, this would use the query embedding
         to perform vector similarity search.
         """
-        results: list[Tome] = []
+        results: list[tuple[Tome, float]] = []
         for path in self._tomes_dir.glob("*.json"):
             try:
                 tome = Tome.model_validate_json(path.read_text())
                 if tome.confidence >= min_confidence:
                     # Mock similarity score for skeleton
-                    results.append(tome)
+                    results.append((tome, 1.0))
             except Exception:
                 continue
         results.sort(key=lambda x: x[1], reverse=True)
-        return results[:top_k]
+        return [tome for (tome, score) in results[:top_k]]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with high similarity.
