@@ -81,7 +81,7 @@ class MongoTomeRepository(TomeRepository):
             {"range": {"path": "confidence", "gte": min_confidence}},
         ]
         if category is not None:
-            filters.append({"text": {"query": category, "path": "category"}})
+            filters.append({"equals": {"path": "category", "value": category}})
 
         pipeline: list[Mapping[str, Any]] = [
             {

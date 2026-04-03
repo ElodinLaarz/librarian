@@ -28,17 +28,21 @@ class Tome(BaseModel):
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
 
-    embedding: Annotated[NDArray[np.float32], SkipJsonSchema()] = Field()
+    embedding: Annotated[NDArray[np.float32] | None, SkipJsonSchema()] = Field(default=None)
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @field_serializer("embedding")
-    def serialize_embedding(self, v: NDArray[np.float32]) -> list[float]:
+    def serialize_embedding(self, v: NDArray[np.float32] | None) -> list[float] | None:
+        if v is None:
+            return None
         return v.tolist()  # type: ignore[no-any-return]
 
     @field_validator("embedding", mode="before")
     @classmethod
-    def validate_embedding(cls, v: object) -> NDArray[np.float32]:
+    def validate_embedding(cls, v: object) -> NDArray[np.float32] | None:
+        if v is None:
+            return None
         if isinstance(v, list):
             return np.array(v, dtype=np.float32)
         if not isinstance(v, np.ndarray):

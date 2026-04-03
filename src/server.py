@@ -70,14 +70,13 @@ class LibrarianServer:
                 category=params.category,
             )
 
-            tomes = [t for t, _ in results]
             scores = [s for _, s in results]
 
+            # Strip embeddings and optionally summaries before returning to clients.
+            update_data: dict[str, object] = {"embedding": None}
             if not params.include_summary:
-                tomes = [t.model_copy(update={"summary": ""}) for t in tomes]
-
-            # Strip embeddings before returning tomes to clients; embeddings are storage-only.
-            tomes = [t.model_copy(update={"embedding": None}) for t in tomes]
+                update_data["summary"] = ""
+            tomes = [t.model_copy(update=update_data) for t, _ in results]
 
             return SearchOutput(
                 tomes=tomes,

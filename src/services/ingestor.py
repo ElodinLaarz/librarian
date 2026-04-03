@@ -249,7 +249,7 @@ class Ingestor:
         # In a real implementation we would enforce the embedding size.
         # Here we skip the dimension check if a dummy/string embedding is supplied.
         if (
-            hasattr(tome.embedding, "shape")
+            tome.embedding is not None
             and tome.embedding.shape[0] != self._config.embedding.dimensions
         ):
             raise ValueError(

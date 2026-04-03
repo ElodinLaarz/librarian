@@ -46,7 +46,7 @@ class MongoTome(BaseModel):
             source_type=tome.source_type,
             confidence=tome.confidence,
             embedding=Binary.from_vector(
-                tome.embedding.astype(np.float32).tolist(), BinaryVectorDtype.FLOAT32
+                np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
             ),
             created_at=tome.created_at,
         )

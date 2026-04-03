@@ -56,6 +56,8 @@ async def test_embedding_survives_disk_roundtrip(repo: FsTomeRepository) -> None
 
     loaded = await repo.get_by_id(original.id)
     assert loaded is not None
+    assert loaded.embedding is not None
+    assert original.embedding is not None
     np.testing.assert_array_almost_equal(loaded.embedding, original.embedding, decimal=5)
 
 
@@ -66,6 +68,8 @@ async def test_embedding_in_search_results(repo: FsTomeRepository) -> None:
     results = await repo.search(query="anything")
     assert len(results) == 1
     tome, score = results[0]
+    assert tome.embedding is not None
+    assert original.embedding is not None
     np.testing.assert_array_almost_equal(tome.embedding, original.embedding, decimal=5)
     assert score == 1.0
 
