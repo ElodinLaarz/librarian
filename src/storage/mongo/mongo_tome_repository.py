@@ -25,10 +25,9 @@ class MongoTomeRepository(TomeRepository):
     """
 
     def __init__(self, settings: DatabaseSettings, embedding_service: EmbeddingService) -> None:
-        srv = f"mongodb+srv://{settings.uri}/?authSource=%24external&authMechanism=MONGODB-X509"
         cert = os.path.expanduser(settings.tls_cert_path)
         self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
-            srv, tls=True, tlsCertificateKeyFile=cert, uuidRepresentation="standard"
+            settings.uri, tls=True, tlsCertificateKeyFile=cert, uuidRepresentation="standard"
         )
         self._embedding_service = embedding_service
         db = self._client.get_database(settings.database)
@@ -100,12 +99,14 @@ class MongoTomeRepository(TomeRepository):
                     }
                 }
             },
+            {"$project": {"score": {"$meta": "searchScore"}, "document": "$$ROOT"}},
+            {"$sort": {"score": -1}},
             {"$limit": top_k * 10},
         ]
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
-            results.append(MongoTome.model_validate(doc).to_tome())
+            results.append(MongoTome.model_validate(doc["document"]).to_tome())
         return results
 
     async def _vector_search(
@@ -126,11 +127,13 @@ class MongoTomeRepository(TomeRepository):
                     "limit": top_k * 2,
                 }
             },
+            {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
+            {"$sort": {"score": -1}},
         ]
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
-            results.append(MongoTome.model_validate(doc).to_tome())
+            results.append(MongoTome.model_validate(doc["document"]).to_tome())
         return results
 
     RRF_K = 60

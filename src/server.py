@@ -19,7 +19,8 @@ from src.services.verifier import Verifier
 from src.storage.mongo import MongoTomeRepository
 from src.storage.tome_repository import TomeRepository
 
-config = LibrarianConfig.from_yaml(Path(os.path.relpath("config.yml", Path.cwd())))
+config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
+config = LibrarianConfig.from_yaml(config_path)
 
 _ingestor: Ingestor | None = None
 _tome_repo: TomeRepository | None = None
