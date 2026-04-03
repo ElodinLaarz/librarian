@@ -65,7 +65,9 @@ async def test_embedding_in_search_results(repo: FsTomeRepository) -> None:
 
     results = await repo.search(query="anything")
     assert len(results) == 1
-    np.testing.assert_array_almost_equal(results[0].embedding, original.embedding, decimal=5)
+    tome, score = results[0]
+    np.testing.assert_array_almost_equal(tome.embedding, original.embedding, decimal=5)
+    assert score == 1.0
 
 
 # ── category filter ───────────────────────────────────────────────────────────
@@ -85,7 +87,8 @@ async def test_search_filters_by_category(repo: FsTomeRepository) -> None:
 
     results = await repo.search(query="anything", category="science")
     assert len(results) == 1
-    assert results[0].category == "science"
+    tome, score = results[0]
+    assert tome.category == "science"
 
 
 async def test_search_category_no_match_returns_empty(repo: FsTomeRepository) -> None:

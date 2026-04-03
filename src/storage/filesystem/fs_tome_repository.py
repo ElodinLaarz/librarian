@@ -67,7 +67,7 @@ class FsTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
-    ) -> list[Tome]:
+    ) -> list[tuple[Tome, float]]:
         """Brute-force scan with confidence and category filters.
 
         Scores are placeholder until a query embedding is available
@@ -86,7 +86,7 @@ class FsTomeRepository(TomeRepository):
             except Exception:
                 continue
         results.sort(key=lambda x: x[1], reverse=True)
-        return [tome for (tome, score) in results[:top_k]]
+        return results[:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with cosine similarity above _DEDUP_SIMILARITY_THRESHOLD."""

@@ -60,9 +60,9 @@ class StubTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
-    ) -> list[Tome]:
+    ) -> list[tuple[Tome, float]]:
         results = [
-            t
+            (t, 1.0)
             for t in self._tomes.values()
             if t.confidence >= min_confidence and (category is None or t.category == category)
         ]

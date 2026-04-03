@@ -57,7 +57,7 @@ class MongoTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
-    ) -> list[Tome]:
+    ) -> list[tuple[Tome, float]]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
         Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
@@ -143,7 +143,7 @@ class MongoTomeRepository(TomeRepository):
         lexical: list[Tome],
         vector: list[Tome],
         top_k: int,
-    ) -> list[Tome]:
+    ) -> list[tuple[Tome, float]]:
         """Reciprocal Rank Fusion (RRF) over two ranked result lists.
 
         Each list is assumed to be pre-sorted by its native score descending.
@@ -165,7 +165,7 @@ class MongoTomeRepository(TomeRepository):
 
         combined = [(tome_by_id[tid], score) for tid, score in rrf_scores.items()]
         combined.sort(key=lambda x: x[1], reverse=True)
-        return [t for (t, s) in combined[:top_k]]
+        return combined[:top_k]
 
     async def find_near_duplicates(self, tome: Tome, threshold: float = 0.3) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
