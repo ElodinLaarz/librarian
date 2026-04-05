@@ -9,6 +9,8 @@ from uuid import UUID
 import numpy as np
 from bson.binary import Binary, BinaryVectorDtype
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from pymongo.errors import CollectionInvalid
+from pymongo.operations import SearchIndexModel
 
 from src.config import DatabaseSettings
 from src.models.tome import Tome
@@ -25,10 +27,17 @@ class MongoTomeRepository(TomeRepository):
     """
 
     def __init__(self, settings: DatabaseSettings, embedding_service: EmbeddingService) -> None:
-        cert = os.path.expanduser(settings.tls_cert_path)
+        kwargs: dict[str, Any] = {"uuidRepresentation": "standard"}
+        if settings.tls:
+            kwargs["tls"] = True
+            kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
+        else:
+            kwargs["tls"] = False
+
         self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
-            settings.uri, tls=True, tlsCertificateKeyFile=cert, uuidRepresentation="standard"
+            settings.uri, **kwargs
         )
+
         self._embedding_service = embedding_service
         db = self._client.get_database(settings.database)
         self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.tomes_collection]
@@ -167,7 +176,8 @@ class MongoTomeRepository(TomeRepository):
         combined.sort(key=lambda x: x[1], reverse=True)
         return combined[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome, threshold: float = 0.3) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome, threshold: float = 0.95) -> list[Tome]:
+
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
         query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
@@ -184,19 +194,73 @@ class MongoTomeRepository(TomeRepository):
                 }
             },
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
-            {"$match": {"score": {"$gte": threshold}, "document._id": {"$ne": tome.id}}},
         ]
 
         duplicates = []
         async for doc in self._collection.aggregate(pipeline):
-            duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
+            if doc['score'] >= threshold and doc['document']['_id'] != tome.id:
+                duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
 
         return duplicates
 
+
     async def ensure_indexes(self) -> None:
-        """Create standard MongoDB indexes."""
-        # TODO: Create indexes for vectorSearch if they don't already exist
-        ...
+        """Create search and vector indexes programmatically."""
+        # Ensure collection exists
+        try:
+            await self._collection.database.create_collection(self._collection.name)
+        except CollectionInvalid:
+            pass
+        except Exception:
+            # Ignore other errors (e.g. if collection already exists but throws different error)
+            pass
+
+        existing_search_indexes = []
+
+        try:
+            async for index in self._collection.aggregate([{"$listSearchIndexes": {}}]):
+                existing_search_indexes.append(index["name"])
+        except Exception:
+            # If $listSearchIndexes is not supported (e.g. non-Atlas/non-local-mock), skip
+            return
+
+        # 2. Define Vector Search Index
+        if "vectors" not in existing_search_indexes:
+            vector_model = SearchIndexModel(
+                definition={
+                    "fields": [
+                        {
+                            "type": "vector",
+                            "path": "embedding",
+                            "numDimensions": 768,
+                            "similarity": "cosine"
+                        },
+                        {
+                            "type": "filter",
+                            "path": "confidence"
+                        },
+                        {
+                            "type": "filter",
+                            "path": "category"
+                        }
+                    ]
+
+                },
+                name="vectors",
+                type="vectorSearch"
+            )
+            await self._collection.create_search_index(model=vector_model)
+
+        # 3. Define Lexical Search Index
+        if "default" not in existing_search_indexes:
+            lexical_model = SearchIndexModel(
+                definition={
+                    "mappings": {"dynamic": True}
+                },
+                name="default"
+            )
+            await self._collection.create_search_index(model=lexical_model)
+
 
     def close(self) -> None:
         """Close the MongoDB client connection."""

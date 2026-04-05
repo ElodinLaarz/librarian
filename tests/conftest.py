@@ -9,7 +9,13 @@ import pytest
 from src.config import DatabaseSettings, LibrarianConfig
 from tests.stubs import StubEmbeddingService, StubIngestor, StubTomeRepository, StubVerifier
 
-_TEST_DB_SETTINGS = DatabaseSettings(uri="mongodb://localhost:27017", tls_cert_path="/dev/null")
+_TEST_DB_SETTINGS = DatabaseSettings(
+    uri="mongodb://localhost:27017/?directConnection=true",
+    tls=False,
+    tls_cert_path="/dev/null",
+)
+
+
 
 
 def make_test_config(**overrides: Any) -> LibrarianConfig:
