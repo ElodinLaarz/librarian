@@ -46,6 +46,7 @@ async def mongo_repo():
     await repo._collection.delete_many({})
     repo.close()
 
+
 @pytest.mark.asyncio
 async def test_insert_and_get(mongo_repo):
     tome = Tome(
@@ -66,6 +67,7 @@ async def test_insert_and_get(mongo_repo):
     assert retrieved is not None
     assert retrieved.id == tome.id
     assert retrieved.title == tome.title
+
 
 @pytest.mark.asyncio
 async def test_find_near_duplicates(mongo_repo):
@@ -93,17 +95,16 @@ async def test_find_near_duplicates(mongo_repo):
         confidence=0.9,
     )
 
-
     await mongo_repo.insert(tome1)
     await mongo_repo.insert(tome2)
 
     # Wait for indexing
     await asyncio.sleep(10)
 
-
     duplicates = await mongo_repo.find_near_duplicates(tome1, threshold=0.9)
     assert len(duplicates) == 1
     assert duplicates[0].id == tome2.id
+
 
 @pytest.mark.asyncio
 async def test_search(mongo_repo):
@@ -127,7 +128,6 @@ async def test_search(mongo_repo):
 
     # Wait for indexing
     await asyncio.sleep(10)
-
 
     results = await mongo_repo.search("quantum ducks", top_k=5)
     assert len(results) > 0

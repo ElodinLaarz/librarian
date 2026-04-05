@@ -16,8 +16,6 @@ _TEST_DB_SETTINGS = DatabaseSettings(
 )
 
 
-
-
 def make_test_config(**overrides: Any) -> LibrarianConfig:
     """Build a LibrarianConfig with dummy database credentials for tests."""
     overrides.setdefault("database", _TEST_DB_SETTINGS)

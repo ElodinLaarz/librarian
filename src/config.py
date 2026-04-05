@@ -19,7 +19,6 @@ class DatabaseSettings(BaseSettings):
     tls_cert_path: str
 
 
-
 class EmbeddingSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_EMBEDDING_")
     dimensions: int = 768
