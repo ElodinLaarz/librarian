@@ -48,6 +48,8 @@ class LibrarianServer:
         verifier = Verifier(self.config)
         self.ingestor = Ingestor(self.config, embedding_service, verifier, self.tome_repo)
 
+        await self.tome_repo.ensure_indexes()
+
         yield
 
         if self.tome_repo:

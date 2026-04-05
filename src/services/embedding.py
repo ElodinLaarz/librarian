@@ -18,6 +18,11 @@ class EmbeddingService(ABC):
     def __init__(self, settings: EmbeddingSettings) -> None:
         self._settings = settings
 
+    @property
+    def dimensions(self) -> int:
+        """Get the dimensions of the embedding vector."""
+        return self._settings.dimensions
+
     @abstractmethod
     async def initialize(self) -> None:
         """Load the embedding model and warm up the provider connection."""

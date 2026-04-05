@@ -179,6 +179,9 @@ class MongoTomeRepository(TomeRepository):
     async def find_near_duplicates(self, tome: Tome, threshold: float = 0.95) -> list[Tome]:
 
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
+        if tome.embedding is None:
+            return []
+
         query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
@@ -194,12 +197,17 @@ class MongoTomeRepository(TomeRepository):
                 }
             },
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
+            {
+                "$match": {
+                    "score": {"$gte": threshold},
+                    "document._id": {"$ne": tome.id}
+                }
+            }
         ]
 
         duplicates = []
         async for doc in self._collection.aggregate(pipeline):
-            if doc['score'] >= threshold and doc['document']['_id'] != tome.id:
-                duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
+            duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
 
         return duplicates
 
@@ -232,7 +240,7 @@ class MongoTomeRepository(TomeRepository):
                         {
                             "type": "vector",
                             "path": "embedding",
-                            "numDimensions": 768,
+                            "numDimensions": self._embedding_service.dimensions,
                             "similarity": "cosine"
                         },
                         {
