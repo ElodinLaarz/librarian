@@ -9,6 +9,8 @@ from uuid import UUID
 import numpy as np
 from bson.binary import Binary, BinaryVectorDtype
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from pymongo.errors import CollectionInvalid
+from pymongo.operations import SearchIndexModel
 
 from src.config import DatabaseSettings
 from src.models.tome import Tome
@@ -25,11 +27,17 @@ class MongoTomeRepository(TomeRepository):
     """
 
     def __init__(self, settings: DatabaseSettings, embedding_service: EmbeddingService) -> None:
-        srv = f"mongodb+srv://{settings.uri}/?authSource=%24external&authMechanism=MONGODB-X509"
-        cert = os.path.expanduser(settings.tls_cert_path)
+        kwargs: dict[str, Any] = {"uuidRepresentation": "standard"}
+        if settings.tls:
+            kwargs["tls"] = True
+            kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
+        else:
+            kwargs["tls"] = False
+
         self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
-            srv, tls=True, tlsCertificateKeyFile=cert, uuidRepresentation="standard"
+            settings.uri, **kwargs
         )
+
         self._embedding_service = embedding_service
         db = self._client.get_database(settings.database)
         self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.tomes_collection]
@@ -52,7 +60,13 @@ class MongoTomeRepository(TomeRepository):
             return None
         return MongoTome.model_validate(doc).to_tome()
 
-    async def search(self, query: str, top_k: int = 5, min_confidence: float = 0.5) -> list[Tome]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_confidence: float = 0.5,
+        category: str | None = None,
+    ) -> list[tuple[Tome, float]]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
         Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
@@ -63,18 +77,26 @@ class MongoTomeRepository(TomeRepository):
         )
 
         lexical_results, vector_results = await asyncio.gather(
-            self._lexical_search(query, top_k, min_confidence),
-            self._vector_search(query_vector, top_k, min_confidence),
+            self._lexical_search(query, top_k, min_confidence, category),
+            self._vector_search(query_vector, top_k, min_confidence, category),
         )
 
         return self._merge_results(lexical_results, vector_results, top_k)
 
-    async def _lexical_search(self, query: str, top_k: int, min_confidence: float) -> list[Tome]:
+    async def _lexical_search(
+        self, query: str, top_k: int, min_confidence: float, category: str | None
+    ) -> list[Tome]:
+        filters: list[Mapping[str, Any]] = [
+            {"range": {"path": "confidence", "gte": min_confidence}},
+        ]
+        if category is not None:
+            filters.append({"equals": {"path": "category", "value": category}})
+
         pipeline: list[Mapping[str, Any]] = [
             {
                 "$search": {
                     "compound": {
-                        "filter": [{"range": {"path": "confidence", "gte": min_confidence}}],
+                        "filter": filters,
                         "should": [
                             {
                                 "text": {
@@ -86,33 +108,41 @@ class MongoTomeRepository(TomeRepository):
                     }
                 }
             },
+            {"$project": {"score": {"$meta": "searchScore"}, "document": "$$ROOT"}},
+            {"$sort": {"score": -1}},
             {"$limit": top_k * 10},
         ]
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
-            results.append(MongoTome.model_validate(doc).to_tome())
+            results.append(MongoTome.model_validate(doc["document"]).to_tome())
         return results
 
     async def _vector_search(
-        self, query_vector: Binary, top_k: int, min_confidence: float
+        self, query_vector: Binary, top_k: int, min_confidence: float, category: str | None
     ) -> list[Tome]:
+        vector_filter: dict[str, Any] = {"confidence": {"$gte": min_confidence}}
+        if category is not None:
+            vector_filter["category"] = category
+
         pipeline: list[Mapping[str, Any]] = [
             {
                 "$vectorSearch": {
                     "index": "vectors",
                     "path": "embedding",
                     "queryVector": query_vector,
-                    "filter": {"confidence": {"$gte": min_confidence}},
+                    "filter": vector_filter,
                     "numCandidates": top_k * 10,
                     "limit": top_k * 2,
                 }
             },
+            {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
+            {"$sort": {"score": -1}},
         ]
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
-            results.append(MongoTome.model_validate(doc).to_tome())
+            results.append(MongoTome.model_validate(doc["document"]).to_tome())
         return results
 
     RRF_K = 60
@@ -122,7 +152,7 @@ class MongoTomeRepository(TomeRepository):
         lexical: list[Tome],
         vector: list[Tome],
         top_k: int,
-    ) -> list[Tome]:
+    ) -> list[tuple[Tome, float]]:
         """Reciprocal Rank Fusion (RRF) over two ranked result lists.
 
         Each list is assumed to be pre-sorted by its native score descending.
@@ -144,10 +174,13 @@ class MongoTomeRepository(TomeRepository):
 
         combined = [(tome_by_id[tid], score) for tid, score in rrf_scores.items()]
         combined.sort(key=lambda x: x[1], reverse=True)
-        return [t for (t, s) in combined[:top_k]]
+        return combined[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome, threshold: float = 0.3) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome, threshold: float = 0.95) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
+        if tome.embedding is None:
+            return []
+
         query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
@@ -173,9 +206,51 @@ class MongoTomeRepository(TomeRepository):
         return duplicates
 
     async def ensure_indexes(self) -> None:
-        """Create standard MongoDB indexes."""
-        # TODO: Create indexes for vectorSearch if they don't already exist
-        ...
+        """Create search and vector indexes programmatically."""
+        # Ensure collection exists
+        try:
+            await self._collection.database.create_collection(self._collection.name)
+        except CollectionInvalid:
+            pass
+        except Exception:
+            # Ignore other errors (e.g. if collection already exists but throws different error)
+            pass
+
+        existing_search_indexes = []
+
+        try:
+            async for index in self._collection.aggregate([{"$listSearchIndexes": {}}]):
+                existing_search_indexes.append(index["name"])
+        except Exception:
+            # If $listSearchIndexes is not supported (e.g. non-Atlas/non-local-mock), skip
+            return
+
+        # 2. Define Vector Search Index
+        if "vectors" not in existing_search_indexes:
+            vector_model = SearchIndexModel(
+                definition={
+                    "fields": [
+                        {
+                            "type": "vector",
+                            "path": "embedding",
+                            "numDimensions": self._embedding_service.dimensions,
+                            "similarity": "cosine",
+                        },
+                        {"type": "filter", "path": "confidence"},
+                        {"type": "filter", "path": "category"},
+                    ]
+                },
+                name="vectors",
+                type="vectorSearch",
+            )
+            await self._collection.create_search_index(model=vector_model)
+
+        # 3. Define Lexical Search Index
+        if "default" not in existing_search_indexes:
+            lexical_model = SearchIndexModel(
+                definition={"mappings": {"dynamic": True}}, name="default"
+            )
+            await self._collection.create_search_index(model=lexical_model)
 
     def close(self) -> None:
         """Close the MongoDB client connection."""

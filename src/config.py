@@ -15,6 +15,7 @@ class DatabaseSettings(BaseSettings):
     uri: str
     database: str = "library"
     tomes_collection: str = "tomes"
+    tls: bool = True
     tls_cert_path: str
 
 
