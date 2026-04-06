@@ -133,7 +133,7 @@ def make_stub_ingestor(
     config: LibrarianConfig | None = None,
     confidence: float = 0.8,
     repo: StubTomeRepository | None = None,
-    dimensions: int = 768,
+    dimensions: int | None = None,
 ) -> tuple[StubIngestor, StubTomeRepository, StubVerifier]:
     """Convenience factory — returns (ingestor, repo, verifier) wired together."""
     config = config or LibrarianConfig(
@@ -141,6 +141,8 @@ def make_stub_ingestor(
     )
     repo = repo or StubTomeRepository()
     verifier = StubVerifier(confidence=confidence)
+    if dimensions is None:
+        dimensions = config.embedding.dimensions
     embedding_service = StubEmbeddingService(dimensions=dimensions)
     ingestor = StubIngestor(config, embedding_service, verifier, repo)
     return ingestor, repo, verifier

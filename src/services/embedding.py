@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import asyncio
-from collections import OrderedDict
 import hashlib
+from abc import ABC, abstractmethod
+from collections import OrderedDict
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -78,17 +78,14 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
             return self._cache[key]
 
         # Generate embedding in thread
-        embedding = await asyncio.to_thread(self._model.encode, text)
-        
+        embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
+
         # Ensure it's a numpy array of float32
-        if isinstance(embedding, list):
-            embedding = np.array(embedding[0], dtype=np.float32)
-        else:
-            embedding = embedding.astype(np.float32)
+        embedding = np.asarray(embedding, dtype=np.float32)
 
         # Cache it
         self._cache[key] = embedding
-        
+
         # Enforce cache size
         if len(self._cache) > self._settings.cache_size:
             self._cache.popitem(last=False)  # Pop oldest (LRU)

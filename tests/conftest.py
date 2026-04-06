@@ -38,8 +38,8 @@ def verifier() -> StubVerifier:
 
 
 @pytest.fixture
-def embedding_service() -> StubEmbeddingService:
-    return StubEmbeddingService()
+def embedding_service(config: LibrarianConfig) -> StubEmbeddingService:
+    return StubEmbeddingService(dimensions=config.embedding.dimensions)
 
 
 @pytest.fixture
