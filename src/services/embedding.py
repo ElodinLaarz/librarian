@@ -73,7 +73,8 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
 
     async def embed(self, text: str) -> np.ndarray:
         """Produce embedding with LRU cache."""
-        assert self._model is not None, "Model not initialized"
+        if self._model is None:
+            raise RuntimeError("Model not initialized. Call initialize() before embed().")
 
         # Compute SHA-256 hash of text for key
         key = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -87,8 +88,12 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
             # Generate embedding in thread
             embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
 
-            # Ensure it's a numpy array of float32
+            # Ensure it's a 1-D numpy array of float32
             embedding = np.asarray(embedding, dtype=np.float32)
+            if embedding.ndim == 2 and embedding.shape[0] == 1:
+                embedding = embedding[0]
+            else:
+                embedding = np.squeeze(embedding)
 
             # Cache it
             self._cache[key] = embedding

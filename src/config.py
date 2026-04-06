@@ -24,6 +24,7 @@ class EmbeddingSettings(BaseSettings):
     model_name: str = "all-MiniLM-L6-v2"
     dimensions: int = 384
     cache_size: int = 10_000
+    provider: str = "auto"
 
 
 class SearchSettings(BaseSettings):

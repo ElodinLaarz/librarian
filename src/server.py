@@ -13,7 +13,7 @@ from src.models.tool_schemas import (
     SearchInput,
     SearchOutput,
 )
-from src.services.embedding import SentenceTransformerEmbeddingService
+from src.services.embedding import DummyEmbeddingService, EmbeddingService, SentenceTransformerEmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
 from src.storage.mongo import MongoTomeRepository
@@ -43,8 +43,23 @@ class LibrarianServer:
     @asynccontextmanager
     async def lifespan(self, server: FastMCP) -> AsyncIterator[None]:
         """Initialise and tear down services around the server lifetime."""
-        embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
-        await embedding_service.initialize()
+        provider = self.config.embedding.provider
+        embedding_service: EmbeddingService
+
+        if provider == "dummy":
+            embedding_service = DummyEmbeddingService(self.config.embedding)
+        elif provider == "sentence-transformers":
+            embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
+            await embedding_service.initialize()
+        elif provider == "auto":
+            try:
+                embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
+                await embedding_service.initialize()
+            except ImportError:
+                print("sentence-transformers not available, falling back to dummy embeddings.")
+                embedding_service = DummyEmbeddingService(self.config.embedding)
+        else:
+            raise ValueError(f"Unknown embedding provider: {provider}")
         self.tome_repo = MongoTomeRepository(self.config.database, embedding_service)
         verifier = Verifier(self.config)
         self.ingestor = Ingestor(self.config, embedding_service, verifier, self.tome_repo)
