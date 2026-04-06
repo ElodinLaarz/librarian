@@ -58,6 +58,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
         super().__init__(settings)
         self._model: SentenceTransformer | None = None
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Load the model."""
@@ -72,22 +73,23 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
         # Compute SHA-256 hash of text for key
         key = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-        if key in self._cache:
-            # Move to end (MRU)
-            self._cache.move_to_end(key)
-            return self._cache[key]
+        async with self._lock:
+            if key in self._cache:
+                # Move to end (MRU)
+                self._cache.move_to_end(key)
+                return self._cache[key]
 
-        # Generate embedding in thread
-        embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
+            # Generate embedding in thread
+            embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
 
-        # Ensure it's a numpy array of float32
-        embedding = np.asarray(embedding, dtype=np.float32)
+            # Ensure it's a numpy array of float32
+            embedding = np.asarray(embedding, dtype=np.float32)
 
-        # Cache it
-        self._cache[key] = embedding
+            # Cache it
+            self._cache[key] = embedding
 
-        # Enforce cache size
-        if len(self._cache) > self._settings.cache_size:
-            self._cache.popitem(last=False)  # Pop oldest (LRU)
+            # Enforce cache size
+            if len(self._cache) > self._settings.cache_size:
+                self._cache.popitem(last=False)  # Pop oldest (LRU)
 
-        return embedding
+            return embedding
