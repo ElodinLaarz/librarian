@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from src import constants
-from src.config import LibrarianConfig, VerificationSettings
+from src.config import EmbeddingSettings, LibrarianConfig, VerificationSettings
 from src.models.enums import IngestStatus, SourceType, VerificationVerdict
 from src.models.tome import Tome
 from src.services.verifier import ClaimResult, VerificationResult
@@ -36,7 +36,7 @@ def _make_tome(content: str, confidence: float = 0.8) -> Tome:
         source_url=None,
         source_type=SourceType.AGENT_INPUT,
         confidence=confidence,
-        embedding=np.zeros(768, dtype=np.float32),
+        embedding=np.zeros(EmbeddingSettings().dimensions, dtype=np.float32),
     )
 
 
@@ -156,7 +156,12 @@ async def test_partial_status_when_some_chunks_fail(
             )
 
     repo = StubTomeRepository()
-    ingestor = StubIngestor(config, StubEmbeddingService(), VariableVerifier(), repo)
+    ingestor = StubIngestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        VariableVerifier(),
+        repo,
+    )
 
     output = await ingestor.ingest("Good chunk.\n\nBad chunk (low confidence).")
 
@@ -349,8 +354,12 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     repo.seed_near_duplicates([existing])
 
     # Wire a fresh ingestor that uses the fail-deletes repo.
+    test_config = make_test_config()
     bad_repo_ingestor = StubIngestor(
-        make_test_config(), StubEmbeddingService(), StubVerifier(confidence=0.9), repo
+        test_config,
+        StubEmbeddingService(dimensions=test_config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
     )
 
     output = await bad_repo_ingestor.ingest("Replacement content.")

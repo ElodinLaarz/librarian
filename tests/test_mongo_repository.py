@@ -1,18 +1,20 @@
 import asyncio
 import uuid
-from unittest.mock import AsyncMock
+from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
 
 from src.config import DatabaseSettings
+from src.models.enums import SourceType
 from src.models.tome import Tome
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from tests.stubs import StubEmbeddingService
 
 
 @pytest.fixture
-async def mongo_repo():
+async def mongo_repo() -> AsyncIterator[MongoTomeRepository]:
     settings = DatabaseSettings(
         uri="mongodb://localhost:27017/?directConnection=true",
         tls=False,
@@ -48,16 +50,16 @@ async def mongo_repo():
 
 
 @pytest.mark.asyncio
-async def test_insert_and_get(mongo_repo):
+async def test_insert_and_get(mongo_repo: MongoTomeRepository) -> None:
     tome = Tome(
         id=uuid.uuid4(),
         title="Test Tome",
         content="Test Content",
         summary="Test Summary",
         category="test",
-        source_type="manual",
+        source_type=SourceType.MANUAL,
         tags=["test"],
-        embedding=[0.1] * 768,
+        embedding=np.array([0.1] * 768, dtype=np.float32),
         confidence=0.9,
     )
     inserted_id = await mongo_repo.insert(tome)
@@ -70,15 +72,15 @@ async def test_insert_and_get(mongo_repo):
 
 
 @pytest.mark.asyncio
-async def test_find_near_duplicates(mongo_repo):
-    random_embedding = np.random.rand(768).tolist()
+async def test_find_near_duplicates(mongo_repo: MongoTomeRepository) -> None:
+    random_embedding = np.random.rand(768).astype(np.float32)
     tome1 = Tome(
         id=uuid.uuid4(),
         title="Doc 1",
         content="Content 1",
         summary="Summary 1",
         category="test",
-        source_type="manual",
+        source_type=SourceType.MANUAL,
         tags=["tag"],
         embedding=random_embedding,
         confidence=0.9,
@@ -89,7 +91,7 @@ async def test_find_near_duplicates(mongo_repo):
         content="Content 2",
         summary="Summary 2",
         category="test",
-        source_type="manual",
+        source_type=SourceType.MANUAL,
         tags=["tag"],
         embedding=random_embedding,  # Identical embedding
         confidence=0.9,
@@ -107,28 +109,29 @@ async def test_find_near_duplicates(mongo_repo):
 
 
 @pytest.mark.asyncio
-async def test_search(mongo_repo):
+async def test_search(mongo_repo: MongoTomeRepository) -> None:
     tome = Tome(
         id=uuid.uuid4(),
         title="Unique Title",
         content="This is unique content about quantum ducks.",
         summary="Summary",
         category="test",
-        source_type="manual",
+        source_type=SourceType.MANUAL,
         tags=["quantum"],
-        embedding=[0.2] * 768,
+        embedding=np.array([0.2] * 768, dtype=np.float32),
         confidence=0.9,
     )
     await mongo_repo.insert(tome)
 
     # Mock embedding service to return matching vector for query
-    mongo_repo._embedding_service.embed = AsyncMock(
-        return_value=np.array([0.2] * 768, dtype=np.float32)
-    )
+    with patch.object(
+        mongo_repo._embedding_service,
+        "embed",
+        AsyncMock(return_value=np.array([0.2] * 768, dtype=np.float32)),
+    ):
+        # Wait for indexing
+        await asyncio.sleep(10)
 
-    # Wait for indexing
-    await asyncio.sleep(10)
-
-    results = await mongo_repo.search("quantum ducks", top_k=5)
-    assert len(results) > 0
-    assert results[0][0].id == tome.id
+        results = await mongo_repo.search("quantum ducks", top_k=5)
+        assert len(results) > 0
+        assert results[0][0].id == tome.id
