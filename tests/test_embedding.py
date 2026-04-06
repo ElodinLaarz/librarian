@@ -1,4 +1,5 @@
 import asyncio
+
 import numpy as np
 import pytest
 
@@ -52,7 +53,9 @@ async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_sentence_transformer_embedding_cache_eviction(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sentence_transformer_embedding_cache_eviction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pytest.importorskip("sentence_transformers")
 
     class FakeSentenceTransformer:
@@ -65,6 +68,7 @@ async def test_sentence_transformer_embedding_cache_eviction(monkeypatch: pytest
 
     fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
     import sentence_transformers
+
     monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
 
     settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2", cache_size=2)
@@ -100,11 +104,13 @@ async def test_sentence_transformer_embedding_concurrency(monkeypatch: pytest.Mo
         def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
             self.encode_calls += 1
             import time
+
             time.sleep(0.1)  # Simulate slow computation
             return np.zeros(384, dtype=np.float32)
 
     fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
     import sentence_transformers
+
     monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
 
     settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2")
