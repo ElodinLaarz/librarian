@@ -41,7 +41,6 @@ class WebSearchSettings(BaseSettings):
     api_key: str | None = None
 
 
-
 class VerificationSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_VERIFICATION_")
     enabled: bool = True
@@ -89,7 +88,6 @@ class LibrarianConfig(BaseSettings):
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
-
 
     @classmethod
     def from_yaml(cls, path: Path | str) -> "LibrarianConfig":

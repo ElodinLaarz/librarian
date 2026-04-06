@@ -15,9 +15,11 @@ def test_config():
         verification={"enabled": True, "mock_confidence": 0.6},
     )
 
+
 @pytest.fixture
 def verifier(test_config):
     return Verifier(test_config)
+
 
 @pytest.mark.asyncio
 async def test_aggregate_confidence(verifier):
@@ -29,9 +31,11 @@ async def test_aggregate_confidence(verifier):
     # (1.0 + 0.0 + 0.5) / 3 = 1.5 / 3 = 0.5
     assert verifier._aggregate_confidence(results) == 0.5
 
+
 @pytest.mark.asyncio
 async def test_aggregate_confidence_empty(verifier):
-    assert verifier._aggregate_confidence([]) == 0.6 # mock_confidence
+    assert verifier._aggregate_confidence([]) == 0.6  # mock_confidence
+
 
 @pytest.mark.asyncio
 @patch("src.services.verifier.AsyncOpenAI")
@@ -64,13 +68,13 @@ async def test_check_claim(mock_instructor_from_openai, mock_async_openai, test_
     verifier = Verifier(test_config)
     # Mock search client
     from unittest.mock import Mock
+
     verifier._search_client = Mock()
     verifier._search_client.is_available.return_value = True
     verifier._search_client.search = AsyncMock()
 
-
-
     from src.services.web_search import WebSearchResult
+
     verifier._search_client.search.return_value = [
         WebSearchResult(title="t1", url="u1", snippet="s1")
     ]
@@ -80,6 +84,7 @@ async def test_check_claim(mock_instructor_from_openai, mock_async_openai, test_
     assert result.verdict == VerificationVerdict.SUPPORTED
     assert result.evidence == "evidence"
 
+
 @pytest.mark.asyncio
 async def test_verify_disabled(test_config):
     test_config.verification.enabled = False
@@ -87,4 +92,3 @@ async def test_verify_disabled(test_config):
     result = await verifier.verify("content")
     assert result.confidence == 1.0
     assert result.skipped
-

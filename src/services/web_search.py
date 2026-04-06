@@ -48,7 +48,6 @@ class BraveWebSearchClient(WebSearchClient):
         self._config = config
         self._api_key = config.web_search.api_key
 
-
     async def search(
         self, query: str, max_results: int = constants.DEFAULT_MAX_RESULTS
     ) -> list[WebSearchResult]:
@@ -59,14 +58,12 @@ class BraveWebSearchClient(WebSearchClient):
         url = "https://api.search.brave.com/res/v1/web/search"
         params: dict[str, str | int] = {"q": query, "count": max_results}
 
-
         try:
             headers = {"X-Subscription-Token": self._api_key} if self._api_key else {}
             async with httpx.AsyncClient(headers=headers) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()
-
 
             results = []
             web_results = data.get("web", {}).get("results", [])
@@ -93,7 +90,6 @@ class BraveWebSearchClient(WebSearchClient):
                 response.raise_for_status()
                 html = response.text
 
-
             # Use trafilatura to extract text
             text = trafilatura.extract(html)
             return text or ""
@@ -103,5 +99,3 @@ class BraveWebSearchClient(WebSearchClient):
 
     def is_available(self) -> bool:
         return bool(self._api_key)
-
-

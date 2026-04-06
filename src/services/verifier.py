@@ -24,9 +24,6 @@ class ClaimEvaluation(BaseModel):
     )
 
 
-
-
-
 @dataclass
 class ClaimResult:
     claim: str
@@ -55,8 +52,6 @@ class Verifier:
             )
         )
 
-
-
     async def verify(self, content: str) -> VerificationResult:
         """Run the full verification pipeline on a piece of content."""
         if not self._config.verification.enabled:
@@ -66,13 +61,11 @@ class Verifier:
                 skipped=True,
             )
 
-
         claims = await self._extract_claims(content)
         if not claims:
             return self._make_offline_result()
 
         results = await asyncio.gather(*[self._check_claim(claim) for claim in claims])
-
 
         confidence = self._aggregate_confidence(results)
 
@@ -81,7 +74,6 @@ class Verifier:
             claims=results,
             skipped=False,
         )
-
 
     async def _extract_claims(self, content: str) -> list[str]:
         """Extract a few key factual claims using a zero-shot claim extraction prompt."""
@@ -106,8 +98,6 @@ class Verifier:
             print(f"Error extracting claims: {e}")
             return []
 
-
-
     async def _check_claim(self, claim: str) -> ClaimResult:
         """Search the web for a single claim and score it as supported/contradicted/unverifiable."""
         if not self._search_client.is_available():
@@ -121,7 +111,6 @@ class Verifier:
             claim, max_results=self._config.web_search.default_max_results
         )
         if not results:
-
             return ClaimResult(
                 claim=claim,
                 verdict=VerificationVerdict.UNVERIFIABLE,
@@ -148,9 +137,7 @@ class Verifier:
                     }
                 ],
             )
-            return ClaimResult(
-                claim=claim, verdict=response.verdict, evidence=response.evidence
-            )
+            return ClaimResult(claim=claim, verdict=response.verdict, evidence=response.evidence)
         except Exception as e:
             print(f"Error evaluating claim: {e}")
             return ClaimResult(
@@ -158,9 +145,6 @@ class Verifier:
                 verdict=VerificationVerdict.UNVERIFIABLE,
                 evidence="Error during evaluation.",
             )
-
-
-
 
     def _aggregate_confidence(self, results: list[ClaimResult]) -> float:
         """Compute an aggregate confidence score from individual claim results."""
@@ -177,7 +161,6 @@ class Verifier:
                 total_score += 0.5
 
         return total_score / len(results)
-
 
     def _make_offline_result(self) -> VerificationResult:
         """Return a synthetic confidence result when verification is unavailable."""
