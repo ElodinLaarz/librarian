@@ -31,7 +31,7 @@ def _make_researcher(
     ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.8)
     jobs = StubResearchJobRepository()
     web = StubWebSearchClient(results=web_results)
-    researcher = Researcher(config, web, ingestor, jobs)  # type: ignore[arg-type]
+    researcher = Researcher(config, web, ingestor, jobs)
     return researcher, jobs
 
 
@@ -107,7 +107,7 @@ async def test_run_job_fails_when_web_unavailable() -> None:
     from tests.stubs import StubWebSearchClient
 
     web = StubWebSearchClient(results=None)
-    researcher = Researcher(config, web, ingestor, jobs)  # type: ignore[arg-type]
+    researcher = Researcher(config, web, ingestor, jobs)
 
     job = _make_job()
     await jobs.insert(job)
@@ -182,13 +182,13 @@ async def test_run_job_respects_depth_budget() -> None:
     shallow_q, _ = Researcher(
         config,
         StubWebSearchClient(results=[]),
-        make_stub_ingestor(config=config)[0],  # type: ignore[arg-type]
+        make_stub_ingestor(config=config)[0],
         StubResearchJobRepository(),
     )._budget(ResearchDepth.SHALLOW)
     deep_q, _ = Researcher(
         config,
         StubWebSearchClient(results=[]),
-        make_stub_ingestor(config=config)[0],  # type: ignore[arg-type]
+        make_stub_ingestor(config=config)[0],
         StubResearchJobRepository(),
     )._budget(ResearchDepth.DEEP)
     assert shallow_q < deep_q

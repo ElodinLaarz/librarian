@@ -69,9 +69,7 @@ def test_heuristic_falls_back_to_blob_when_all_fragments_too_short() -> None:
 
 
 async def test_extract_claims_uses_heuristic_when_llm_disabled() -> None:
-    config = make_test_config(
-        verification=VerificationSettings(use_llm_claims=False)
-    )
+    config = make_test_config(verification=VerificationSettings(use_llm_claims=False))
     claims = await extract_claims(
         "Photosynthesis converts sunlight into sugar. Chlorophyll absorbs light energy.", config
     )
@@ -133,9 +131,7 @@ async def test_extract_claims_uses_llm_when_valid_response(
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
     mock_response.json = MagicMock(
-        return_value={
-            "choices": [{"message": {"content": json.dumps({"claims": llm_claims})}}]
-        }
+        return_value={"choices": [{"message": {"content": json.dumps({"claims": llm_claims})}}]}
     )
 
     mock_client = AsyncMock()

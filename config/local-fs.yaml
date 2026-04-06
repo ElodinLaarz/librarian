@@ -1,0 +1,12 @@
+database:
+  uri: file:///home/elodin/.librarian_mcp
+
+embedding:
+  provider: sentence-transformers
+  model_name: all-MiniLM-L6-v2
+  dimensions: 384
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  transport: stdio

@@ -96,14 +96,22 @@ class LibrarianServer:
         else:
             raise ValueError(f"Unknown embedding provider: {provider}")
         self._embedding_service = embedding_service
-        self.tome_repo = MongoTomeRepository(self.config.database, embedding_service)
+
+        if self.config.database.uri.startswith("mongodb"):
+            self.tome_repo = MongoTomeRepository(self.config.database, embedding_service)
+            self.job_repo = MongoResearchJobRepository(self.config.database)
+            await self.tome_repo.ensure_indexes()
+        else:
+            from src.storage.filesystem.fs_research_job_repository import FsResearchJobRepository
+            from src.storage.filesystem.fs_tome_repository import FsTomeRepository
+
+            self.tome_repo = FsTomeRepository(self.config.database)
+            self.job_repo = FsResearchJobRepository(self.config.database)
+
         web_client = build_web_search_client(self.config)
         verifier = Verifier(self.config, web_client)
         self.ingestor = Ingestor(self.config, embedding_service, verifier, self.tome_repo)
-        self.job_repo = MongoResearchJobRepository(self.config.database)
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
-
-        await self.tome_repo.ensure_indexes()
 
         yield
 
