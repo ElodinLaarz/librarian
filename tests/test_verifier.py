@@ -1,8 +1,11 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from src.services.verifier import Verifier, ClaimResult, VerificationResult
+
+import pytest
+
+from src.config import DatabaseSettings, LibrarianConfig
 from src.models.enums import VerificationVerdict
-from src.config import LibrarianConfig, DatabaseSettings
+from src.services.verifier import ClaimResult, Verifier
+
 
 @pytest.fixture
 def test_config():
@@ -36,11 +39,11 @@ async def test_aggregate_confidence_empty(verifier):
 async def test_extract_claims(mock_instructor_from_openai, mock_async_openai, test_config):
     mock_client = AsyncMock()
     mock_instructor_from_openai.return_value = mock_client
-    
+
     mock_call = AsyncMock()
     mock_call.claims = ["claim 1", "claim 2"]
     mock_client.chat.completions.create.return_value = mock_call
-    
+
     verifier = Verifier(test_config)
     claims = await verifier._extract_claims("some content")
     assert claims == ["claim 1", "claim 2"]
@@ -52,12 +55,12 @@ async def test_extract_claims(mock_instructor_from_openai, mock_async_openai, te
 async def test_check_claim(mock_instructor_from_openai, mock_async_openai, test_config):
     mock_client = AsyncMock()
     mock_instructor_from_openai.return_value = mock_client
-    
+
     mock_call = AsyncMock()
     mock_call.verdict = VerificationVerdict.SUPPORTED
     mock_call.evidence = "evidence"
     mock_client.chat.completions.create.return_value = mock_call
-    
+
     verifier = Verifier(test_config)
     # Mock search client
     from unittest.mock import Mock
@@ -66,12 +69,12 @@ async def test_check_claim(mock_instructor_from_openai, mock_async_openai, test_
     verifier._search_client.search = AsyncMock()
 
 
-    
+
     from src.services.web_search import WebSearchResult
     verifier._search_client.search.return_value = [
         WebSearchResult(title="t1", url="u1", snippet="s1")
     ]
-    
+
     result = await verifier._check_claim("some claim")
     assert result.claim == "some claim"
     assert result.verdict == VerificationVerdict.SUPPORTED
@@ -83,4 +86,5 @@ async def test_verify_disabled(test_config):
     verifier = Verifier(test_config)
     result = await verifier.verify("content")
     assert result.confidence == 1.0
-    assert result.skipped == True
+    assert result.skipped
+

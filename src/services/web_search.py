@@ -102,5 +102,6 @@ class BraveWebSearchClient(WebSearchClient):
             return ""
 
     def is_available(self) -> bool:
-        return self._api_key is not None
+        return bool(self._api_key)
+
 

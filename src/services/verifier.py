@@ -60,7 +60,12 @@ class Verifier:
     async def verify(self, content: str) -> VerificationResult:
         """Run the full verification pipeline on a piece of content."""
         if not self._config.verification.enabled:
-            return VerificationResult(confidence=1.0, claims=[], skipped=True)
+            return VerificationResult(
+                confidence=self._config.verification.noop_confidence,
+                claims=[],
+                skipped=True,
+            )
+
 
         claims = await self._extract_claims(content)
         if not claims:
@@ -95,7 +100,8 @@ class Verifier:
                     }
                 ],
             )
-            return response.claims
+            return response.claims[: constants.MAX_CLAIMS]
+
         except Exception as e:
             print(f"Error extracting claims: {e}")
             return []
@@ -111,8 +117,11 @@ class Verifier:
                 evidence="Search client not available.",
             )
 
-        results = await self._search_client.search(claim)
+        results = await self._search_client.search(
+            claim, max_results=self._config.web_search.default_max_results
+        )
         if not results:
+
             return ClaimResult(
                 claim=claim,
                 verdict=VerificationVerdict.UNVERIFIABLE,
@@ -147,8 +156,9 @@ class Verifier:
             return ClaimResult(
                 claim=claim,
                 verdict=VerificationVerdict.UNVERIFIABLE,
-                evidence=f"Error during evaluation: {e}",
+                evidence="Error during evaluation.",
             )
+
 
 
 
