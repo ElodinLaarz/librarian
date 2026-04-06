@@ -13,7 +13,11 @@ from src.models.tool_schemas import (
     SearchInput,
     SearchOutput,
 )
-from src.services.embedding import DummyEmbeddingService, EmbeddingService, SentenceTransformerEmbeddingService
+from src.services.embedding import (
+    DummyEmbeddingService,
+    EmbeddingService,
+    SentenceTransformerEmbeddingService,
+)
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
 from src.storage.mongo import MongoTomeRepository

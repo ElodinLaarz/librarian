@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-import src.services.embedding as embedding_module
 from src.config import EmbeddingSettings
 from src.services.embedding import SentenceTransformerEmbeddingService
 
