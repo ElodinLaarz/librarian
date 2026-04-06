@@ -38,6 +38,8 @@ class SearchSettings(BaseSettings):
 class WebSearchSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_WEB_SEARCH_")
     default_max_results: int = constants.DEFAULT_MAX_RESULTS
+    api_key: str | None = None
+
 
 
 class VerificationSettings(BaseSettings):
@@ -67,6 +69,14 @@ class ServerSettings(BaseSettings):
     log_level: LogLevel = LogLevel.INFO
 
 
+class LLMSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIBRARIAN_LLM_")
+    provider: str = "ollama"
+    base_url: str = "http://localhost:11434/v1"
+    model_name: str = "gemma:2b"
+    api_key: str = "ollama"
+
+
 # --- Top-level config ---
 class LibrarianConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_", env_nested_delimiter="__")
@@ -78,6 +88,8 @@ class LibrarianConfig(BaseSettings):
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+
 
     @classmethod
     def from_yaml(cls, path: Path | str) -> "LibrarianConfig":
