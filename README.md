@@ -87,6 +87,16 @@ python -m src
 # Server starts on http://localhost:8000
 ```
 
+## Setup guides (Cursor, Claude, Gemini / Antigravity)
+
+Step-by-step guides and helper scripts live under **[docs/setup/](docs/setup/README.md)**. Quick start:
+
+```bash
+chmod +x scripts/*.sh
+./scripts/dev-up.sh              # config + docker stack + HTTP MCP snippets
+./scripts/mcp-config-cursor.sh   # or the Claude / HTTP scripts listed in docs/setup
+```
+
 ## MCP Client Configuration
 
 The server supports three transports selectable via `--transport` flag or the `LIBRARIAN_SERVER_TRANSPORT` env var (or `server.transport` in `librarian.config.yaml`):

@@ -12,7 +12,6 @@ from tests.stubs import StubEmbeddingService, StubIngestor, StubTomeRepository, 
 _TEST_DB_SETTINGS = DatabaseSettings(
     uri="mongodb://localhost:27017/?directConnection=true",
     tls=False,
-    tls_cert_path="/dev/null",
 )
 
 

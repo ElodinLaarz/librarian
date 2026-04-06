@@ -16,8 +16,8 @@ class DatabaseSettings(BaseSettings):
     database: str = "library"
     tomes_collection: str = "tomes"
     jobs_collection: str = "research_jobs"
-    tls: bool = True
-    tls_cert_path: str
+    tls: bool = False
+    tls_cert_path: str = ""
 
 
 class EmbeddingSettings(BaseSettings):
@@ -118,13 +118,25 @@ class LibrarianConfig(BaseSettings):
         validated_sections = {}
         errors = []
 
-        # Validate each nested section separately to preserve nested errors
+        # Validate each nested section separately to preserve nested errors.
+        # Use the BaseSettings constructor (not model_validate) so each section
+        # merges YAML values with its env_prefix sources (e.g. LIBRARIAN_DATABASE_URI).
         for field_name, field_info in cls.model_fields.items():
-            section_data = raw.get(field_name, {})
+            section_raw = raw.get(field_name)
+            if section_raw is None:
+                section_data: dict[str, Any] = {}
+            elif not isinstance(section_raw, dict):
+                errors.append(
+                    f"{field_name}: expected a mapping in YAML, got {type(section_raw).__name__}"
+                )
+                continue
+            else:
+                section_data = section_raw
+
             section_type: type[BaseSettings] = field_info.annotation
 
             try:
-                validated_sections[field_name] = section_type.model_validate(section_data)
+                validated_sections[field_name] = section_type(**section_data)
             except ValidationError as exc:
                 for err in exc.errors():
                     loc = [field_name, *err["loc"]]  # e.g., ['database', 'uri']

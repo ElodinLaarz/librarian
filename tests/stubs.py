@@ -8,10 +8,13 @@ import numpy as np
 
 from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
 from src.models.enums import VerificationVerdict
+from src.models.research_job import ResearchJob
 from src.models.tome import Tome
 from src.services.embedding import EmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import ClaimResult, VerificationResult, Verifier
+from src.services.web_search import WebSearchClient, WebSearchResult
+from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
 
 
@@ -133,6 +136,40 @@ class StubIngestor(Ingestor):
         return (title, summary)
 
 
+class StubWebSearchClient(WebSearchClient):
+    """Returns a fixed list of results without making any network calls."""
+
+    def __init__(self, results: list[WebSearchResult] | None = None) -> None:
+        self._results = results or []
+        self._available = bool(results is not None)
+
+    async def search(self, query: str, max_results: int = 3) -> list[WebSearchResult]:
+        return self._results[:max_results]
+
+    def is_available(self) -> bool:
+        return self._available
+
+
+class StubResearchJobRepository(ResearchJobRepository):
+    """In-memory research job store."""
+
+    def __init__(self) -> None:
+        self._jobs: dict[UUID, ResearchJob] = {}
+
+    async def insert(self, job: ResearchJob) -> UUID:
+        self._jobs[job.id] = job
+        return job.id
+
+    async def update(self, job: ResearchJob) -> None:
+        self._jobs[job.id] = job
+
+    async def get_by_id(self, job_id: UUID) -> ResearchJob | None:
+        return self._jobs.get(job_id)
+
+    def all_jobs(self) -> list[ResearchJob]:
+        return list(self._jobs.values())
+
+
 def make_stub_ingestor(
     *,
     config: LibrarianConfig | None = None,
@@ -142,7 +179,7 @@ def make_stub_ingestor(
 ) -> tuple[StubIngestor, StubTomeRepository, StubVerifier]:
     """Convenience factory — returns (ingestor, repo, verifier) wired together."""
     config = config or LibrarianConfig(
-        database=DatabaseSettings(uri="mongodb://localhost:27017", tls_cert_path="/dev/null"),
+        database=DatabaseSettings(uri="mongodb://localhost:27017"),
     )
     repo = repo or StubTomeRepository()
     verifier = StubVerifier(confidence=confidence)
