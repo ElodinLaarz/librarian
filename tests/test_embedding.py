@@ -24,6 +24,7 @@ async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -
 
     fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
     import sentence_transformers
+
     monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
 
     settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2")
