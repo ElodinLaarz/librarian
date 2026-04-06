@@ -1,4 +1,6 @@
+import asyncio
 from dataclasses import dataclass
+
 import instructor
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
@@ -10,12 +12,17 @@ from src.services.web_search import BraveWebSearchClient
 
 
 class ClaimsList(BaseModel):
-    claims: list[str] = Field(..., description="List of key factual claims extracted from the content.")
+    claims: list[str] = Field(
+        ..., description="List of key factual claims extracted from the content."
+    )
 
 
 class ClaimEvaluation(BaseModel):
     verdict: VerificationVerdict
-    evidence: str = Field(..., description="A short summary of the evidence found or why it is unverifiable.")
+    evidence: str = Field(
+        ..., description="A short summary of the evidence found or why it is unverifiable."
+    )
+
 
 
 
@@ -41,6 +48,13 @@ class Verifier:
     def __init__(self, config: LibrarianConfig) -> None:
         self._config = config
         self._search_client = BraveWebSearchClient(config)
+        self._llm_client = instructor.from_openai(
+            AsyncOpenAI(
+                base_url=self._config.llm.base_url,
+                api_key=self._config.llm.api_key,
+            )
+        )
+
 
 
     async def verify(self, content: str) -> VerificationResult:
@@ -52,13 +66,11 @@ class Verifier:
         if not claims:
             return self._make_offline_result()
 
-        results = []
-        for claim in claims:
-            res = await self._check_claim(claim)
-            results.append(res)
+        results = await asyncio.gather(*[self._check_claim(claim) for claim in claims])
+
 
         confidence = self._aggregate_confidence(results)
-        
+
         return VerificationResult(
             confidence=confidence,
             claims=results,
@@ -68,25 +80,18 @@ class Verifier:
 
     async def _extract_claims(self, content: str) -> list[str]:
         """Extract a few key factual claims using a zero-shot claim extraction prompt."""
-        if self._config.llm.provider != "ollama":
-            print(f"Unsupported LLM provider: {self._config.llm.provider}. Skipping claim extraction.")
-            return []
-
         try:
-            client = instructor.from_openai(
-                AsyncOpenAI(
-                    base_url=self._config.llm.base_url,
-                    api_key=self._config.llm.api_key,
-                )
+            prompt = (
+                f"Extract {constants.MIN_CLAIMS} to {constants.MAX_CLAIMS} key factual claims "
+                f"from the following text that can be verified independently:\n\n{content}"
             )
-            
-            response = await client.chat.completions.create(
+            response = await self._llm_client.chat.completions.create(
                 model=self._config.llm.model_name,
                 response_model=ClaimsList,
                 messages=[
                     {
                         "role": "user",
-                        "content": f"Extract {constants.MIN_CLAIMS} to {constants.MAX_CLAIMS} key factual claims from the following text that can be verified independently:\n\n{content}",
+                        "content": prompt,
                     }
                 ],
             )
@@ -94,6 +99,7 @@ class Verifier:
         except Exception as e:
             print(f"Error extracting claims: {e}")
             return []
+
 
 
     async def _check_claim(self, claim: str) -> ClaimResult:
@@ -117,23 +123,19 @@ class Verifier:
         context = "\n".join([f"- {r.snippet}" for r in results])
 
         try:
-            client = instructor.from_openai(
-                AsyncOpenAI(
-                    base_url=self._config.llm.base_url,
-                    api_key=self._config.llm.api_key,
-                )
+            prompt = (
+                f"Evaluate the following claim based on the provided search results.\n"
+                f"Claim: {claim}\n\n"
+                f"Search Results:\n{context}\n\n"
+                f"Provide a verdict and evidence."
             )
-            
-            response = await client.chat.completions.create(
+            response = await self._llm_client.chat.completions.create(
                 model=self._config.llm.model_name,
                 response_model=ClaimEvaluation,
                 messages=[
                     {
                         "role": "user",
-                        "content": f"Evaluate the following claim based on the provided search results.\n"
-                        f"Claim: {claim}\n\n"
-                        f"Search Results:\n{context}\n\n"
-                        f"Provide a verdict and evidence.",
+                        "content": prompt,
                     }
                 ],
             )
@@ -149,6 +151,7 @@ class Verifier:
             )
 
 
+
     def _aggregate_confidence(self, results: list[ClaimResult]) -> float:
         """Compute an aggregate confidence score from individual claim results."""
         if not results:
@@ -162,7 +165,7 @@ class Verifier:
                 total_score += 0.0
             elif r.verdict == VerificationVerdict.UNVERIFIABLE:
                 total_score += 0.5
-        
+
         return total_score / len(results)
 
 

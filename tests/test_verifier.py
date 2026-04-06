@@ -33,34 +33,38 @@ async def test_aggregate_confidence_empty(verifier):
 @pytest.mark.asyncio
 @patch("src.services.verifier.AsyncOpenAI")
 @patch("instructor.from_openai")
-async def test_extract_claims(mock_instructor_from_openai, mock_async_openai, verifier):
+async def test_extract_claims(mock_instructor_from_openai, mock_async_openai, test_config):
     mock_client = AsyncMock()
     mock_instructor_from_openai.return_value = mock_client
     
-    mock_response = AsyncMock()
-    mock_response.claims = ["claim 1", "claim 2"]
-    mock_client.chat.completions.create.return_value = mock_response
+    mock_call = AsyncMock()
+    mock_call.claims = ["claim 1", "claim 2"]
+    mock_client.chat.completions.create.return_value = mock_call
     
+    verifier = Verifier(test_config)
     claims = await verifier._extract_claims("some content")
     assert claims == ["claim 1", "claim 2"]
+
 
 @pytest.mark.asyncio
 @patch("src.services.verifier.AsyncOpenAI")
 @patch("instructor.from_openai")
-async def test_check_claim(mock_instructor_from_openai, mock_async_openai, verifier):
+async def test_check_claim(mock_instructor_from_openai, mock_async_openai, test_config):
     mock_client = AsyncMock()
     mock_instructor_from_openai.return_value = mock_client
     
-    mock_response = AsyncMock()
-    mock_response.verdict = VerificationVerdict.SUPPORTED
-    mock_response.evidence = "evidence"
-    mock_client.chat.completions.create.return_value = mock_response
+    mock_call = AsyncMock()
+    mock_call.verdict = VerificationVerdict.SUPPORTED
+    mock_call.evidence = "evidence"
+    mock_client.chat.completions.create.return_value = mock_call
     
+    verifier = Verifier(test_config)
     # Mock search client
     from unittest.mock import Mock
     verifier._search_client = Mock()
     verifier._search_client.is_available.return_value = True
     verifier._search_client.search = AsyncMock()
+
 
     
     from src.services.web_search import WebSearchResult

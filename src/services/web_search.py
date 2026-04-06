@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+
 import httpx
 import trafilatura
-
 from pydantic import BaseModel
 
 from src import constants
@@ -47,9 +47,7 @@ class BraveWebSearchClient(WebSearchClient):
     def __init__(self, config: LibrarianConfig) -> None:
         self._config = config
         self._api_key = config.web_search.api_key
-        self._client = httpx.AsyncClient(
-            headers={"X-Subscription-Token": self._api_key} if self._api_key else {}
-        )
+
 
     async def search(
         self, query: str, max_results: int = constants.DEFAULT_MAX_RESULTS
@@ -59,13 +57,17 @@ class BraveWebSearchClient(WebSearchClient):
             return []
 
         url = "https://api.search.brave.com/res/v1/web/search"
-        params = {"q": query, "count": max_results}
-        
+        params: dict[str, str | int] = {"q": query, "count": max_results}
+
+
         try:
-            response = await self._client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
+            headers = {"X-Subscription-Token": self._api_key} if self._api_key else {}
+            async with httpx.AsyncClient(headers=headers) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+
+
             results = []
             web_results = data.get("web", {}).get("results", [])
             for r in web_results:
@@ -86,10 +88,12 @@ class BraveWebSearchClient(WebSearchClient):
 
     async def fetch_page_content(self, url: str) -> str:
         try:
-            response = await self._client.get(url)
-            response.raise_for_status()
-            html = response.text
-            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                html = response.text
+
+
             # Use trafilatura to extract text
             text = trafilatura.extract(html)
             return text or ""
