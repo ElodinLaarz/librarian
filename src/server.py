@@ -57,6 +57,9 @@ class LibrarianServer:
                 "is thin on a topic."
             ),
             lifespan=self.lifespan,
+            host=config.server.host,
+            port=config.server.port,
+            log_level=config.server.log_level.value.upper(),  # type: ignore[arg-type]
         )
         self._setup_tools()
 

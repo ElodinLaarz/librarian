@@ -7,8 +7,8 @@ An MCP server that gives AI agents a persistent, searchable knowledge base. The 
 | Tool | Status | Description |
 | --- | --- | --- |
 | `library.search` | Implemented | Hybrid vector + lexical search over stored tomes, with optional category and confidence filtering |
-| `library.ingest` | Implemented | Chunks content, generates embeddings, deduplicates, and stores tomes; optional `skip_verify` and metadata hints |
-| `library.research` | Implemented | Web search + fetch, optional Ollama query planning, ingest with `source_type=researcher`; supports `async` (background job + `job_id` polling) |
+| `library.ingest` | Implemented | Chunks content, generates embeddings, deduplicates, and stores tomes; optional `skip_verify`, `category`, `tags`, `source_url` |
+| `library.research` | Implemented | Plans queries (Ollama optional), searches the web, fetches pages, ingests findings; `async: true` returns a `job_id` for polling |
 
 ### Usage pattern
 
