@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.11
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.11
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
       - run: uv run mypy src
 
   test:
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.11
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
       - run: uv run pytest
         env:
           MONGODB_URI: mongodb://localhost:27017
