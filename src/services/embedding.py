@@ -85,15 +85,21 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
                 self._cache.move_to_end(key)
                 return self._cache[key]
 
-            # Generate embedding in thread
-            embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
+        # Generate embedding in thread (outside lock to not block other lookups)
+        embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
 
-            # Ensure it's a 1-D numpy array of float32
-            embedding = np.asarray(embedding, dtype=np.float32)
-            if embedding.ndim == 2 and embedding.shape[0] == 1:
-                embedding = embedding[0]
-            else:
-                embedding = np.squeeze(embedding)
+        # Ensure it's a 1-D numpy array of float32
+        embedding = np.asarray(embedding, dtype=np.float32)
+        if embedding.ndim == 2 and embedding.shape[0] == 1:
+            embedding = embedding[0]
+        else:
+            embedding = np.squeeze(embedding)
+
+        async with self._lock:
+            # Another task might have computed and cached it while we were yielding
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
 
             # Cache it
             self._cache[key] = embedding

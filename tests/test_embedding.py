@@ -1,3 +1,4 @@
+import asyncio
 import numpy as np
 import pytest
 
@@ -47,4 +48,75 @@ async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -
     # Test different text - should call encode again
     embedding3 = await service.embed("Different text")
     assert not np.array_equal(embedding, embedding3)
+    assert fake_model.encode_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_sentence_transformer_embedding_cache_eviction(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("sentence_transformers")
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name: str) -> None:
+            self.encode_calls = 0
+
+        def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
+            self.encode_calls += 1
+            return np.zeros(384, dtype=np.float32)
+
+    fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
+    import sentence_transformers
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+
+    settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2", cache_size=2)
+    service = SentenceTransformerEmbeddingService(settings)
+    await service.initialize()
+
+    await service.embed("text1")
+    await service.embed("text2")
+    assert fake_model.encode_calls == 2
+
+    # text1 and text2 are in cache.
+    # Now embed text3, should evict text1 (oldest).
+    await service.embed("text3")
+    assert fake_model.encode_calls == 3
+
+    # Now embed text2 again, should NOT call encode because it was retained!
+    await service.embed("text2")
+    assert fake_model.encode_calls == 3
+
+    # Now embed text1 again, should call encode because it was evicted!
+    await service.embed("text1")
+    assert fake_model.encode_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_sentence_transformer_embedding_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("sentence_transformers")
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name: str) -> None:
+            self.encode_calls = 0
+
+        def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
+            self.encode_calls += 1
+            import time
+            time.sleep(0.1)  # Simulate slow computation
+            return np.zeros(384, dtype=np.float32)
+
+    fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
+    import sentence_transformers
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+
+    settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2")
+    service = SentenceTransformerEmbeddingService(settings)
+    await service.initialize()
+
+    # Fire two concurrent requests for the same text
+    t1 = asyncio.create_task(service.embed("concurrent_text"))
+    t2 = asyncio.create_task(service.embed("concurrent_text"))
+
+    await asyncio.gather(t1, t2)
+
+    # In our current implementation, both will miss cache initially and call encode!
+    # So encode_calls should be 2!
     assert fake_model.encode_calls == 2
