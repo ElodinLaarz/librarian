@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import AsyncIterator
 import uuid
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
 import numpy as np

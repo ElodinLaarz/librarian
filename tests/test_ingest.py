@@ -156,7 +156,12 @@ async def test_partial_status_when_some_chunks_fail(
             )
 
     repo = StubTomeRepository()
-    ingestor = StubIngestor(config, StubEmbeddingService(dimensions=config.embedding.dimensions), VariableVerifier(), repo)
+    ingestor = StubIngestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        VariableVerifier(),
+        repo,
+    )
 
     output = await ingestor.ingest("Good chunk.\n\nBad chunk (low confidence).")
 
@@ -351,7 +356,10 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     # Wire a fresh ingestor that uses the fail-deletes repo.
     test_config = make_test_config()
     bad_repo_ingestor = StubIngestor(
-        test_config, StubEmbeddingService(dimensions=test_config.embedding.dimensions), StubVerifier(confidence=0.9), repo
+        test_config,
+        StubEmbeddingService(dimensions=test_config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
     )
 
     output = await bad_repo_ingestor.ingest("Replacement content.")
