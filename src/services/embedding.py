@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import asyncio
+from collections import OrderedDict
+import hashlib
 
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
 from src.config import EmbeddingSettings
 
@@ -45,3 +49,48 @@ class DummyEmbeddingService(EmbeddingService):
 
     async def embed(self, text: str) -> np.ndarray:
         return np.zeros(self._settings.dimensions, dtype=np.float32)
+
+
+class SentenceTransformerEmbeddingService(EmbeddingService):
+    """Real embedding service using sentence-transformers."""
+
+    def __init__(self, settings: EmbeddingSettings) -> None:
+        super().__init__(settings)
+        self._model: SentenceTransformer | None = None
+        self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
+
+    async def initialize(self) -> None:
+        """Load the model."""
+        if self._model is None:
+            # Loading model can be slow, run in thread
+            self._model = await asyncio.to_thread(SentenceTransformer, self._settings.model_name)
+
+    async def embed(self, text: str) -> np.ndarray:
+        """Produce embedding with LRU cache."""
+        assert self._model is not None, "Model not initialized"
+
+        # Compute SHA-256 hash of text for key
+        key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        if key in self._cache:
+            # Move to end (MRU)
+            self._cache.move_to_end(key)
+            return self._cache[key]
+
+        # Generate embedding in thread
+        embedding = await asyncio.to_thread(self._model.encode, text)
+        
+        # Ensure it's a numpy array of float32
+        if isinstance(embedding, list):
+            embedding = np.array(embedding[0], dtype=np.float32)
+        else:
+            embedding = embedding.astype(np.float32)
+
+        # Cache it
+        self._cache[key] = embedding
+        
+        # Enforce cache size
+        if len(self._cache) > self._settings.cache_size:
+            self._cache.popitem(last=False)  # Pop oldest (LRU)
+
+        return embedding

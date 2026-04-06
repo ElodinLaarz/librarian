@@ -21,7 +21,8 @@ class DatabaseSettings(BaseSettings):
 
 class EmbeddingSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_EMBEDDING_")
-    dimensions: int = 768
+    model_name: str = "all-MiniLM-L6-v2"
+    dimensions: int = 384
     cache_size: int = 10_000
 
 

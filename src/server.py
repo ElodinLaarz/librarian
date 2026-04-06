@@ -13,7 +13,7 @@ from src.models.tool_schemas import (
     SearchInput,
     SearchOutput,
 )
-from src.services.embedding import DummyEmbeddingService
+from src.services.embedding import SentenceTransformerEmbeddingService
 from src.services.ingestor import Ingestor
 from src.services.verifier import Verifier
 from src.storage.mongo import MongoTomeRepository
@@ -43,7 +43,8 @@ class LibrarianServer:
     @asynccontextmanager
     async def lifespan(self, server: FastMCP) -> AsyncIterator[None]:
         """Initialise and tear down services around the server lifetime."""
-        embedding_service = DummyEmbeddingService(self.config.embedding)
+        embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
+        await embedding_service.initialize()
         self.tome_repo = MongoTomeRepository(self.config.database, embedding_service)
         verifier = Verifier(self.config)
         self.ingestor = Ingestor(self.config, embedding_service, verifier, self.tome_repo)
