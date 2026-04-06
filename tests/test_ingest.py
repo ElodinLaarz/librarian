@@ -8,9 +8,14 @@ import numpy as np
 import pytest
 
 from src import constants
-from src.config import EmbeddingSettings, LibrarianConfig, VerificationSettings
+from src.config import (
+    EmbeddingSettings,
+    LibrarianConfig,
+    VerificationSettings,
+)
 from src.models.enums import IngestStatus, SourceType, VerificationVerdict
 from src.models.tome import Tome
+from src.services.ingestor import IngestCallOptions, Ingestor
 from src.services.verifier import ClaimResult, VerificationResult
 from tests.conftest import make_test_config
 from tests.stubs import (
@@ -293,6 +298,23 @@ async def test_disabled_verification_confidence_is_point_five() -> None:
 
     output = await ingestor.ingest("Unverified fact.")
 
+    assert output.tomes[0].confidence == pytest.approx(constants.DEFAULT_UNVERIFIED_CONFIDENCE)
+
+
+async def test_skip_verify_bypasses_stub_verifier(config: LibrarianConfig) -> None:
+    """Per-request skip_verify stores content even if the verifier would reject."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.01),
+        repo,
+    )
+    output = await ingestor.ingest(
+        "Content that would be rejected if verified.",
+        IngestCallOptions(skip_verify=True),
+    )
+    assert output.status == IngestStatus.STORED
     assert output.tomes[0].confidence == pytest.approx(constants.DEFAULT_UNVERIFIED_CONFIDENCE)
 
 

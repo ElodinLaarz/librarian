@@ -29,6 +29,7 @@ class MongoTome(BaseModel):
     source_url: str | None = None
     source_type: SourceType
     confidence: float
+    research_job_id: UUID | None = None
     embedding: Binary | BinaryVector
     created_at: datetime
 
@@ -45,6 +46,7 @@ class MongoTome(BaseModel):
             source_url=tome.source_url,
             source_type=tome.source_type,
             confidence=tome.confidence,
+            research_job_id=tome.research_job_id,
             embedding=Binary.from_vector(
                 np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
             ),
@@ -63,6 +65,7 @@ class MongoTome(BaseModel):
             source_url=self.source_url,
             source_type=self.source_type,
             confidence=self.confidence,
+            research_job_id=self.research_job_id,
             embedding=np.array(
                 self.embedding.as_vector().data
                 if isinstance(self.embedding, Binary)

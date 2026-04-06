@@ -118,9 +118,14 @@ class StubIngestor(Ingestor):
         return [seg.strip() for seg in blob.split("\n\n") if seg.strip()]
 
     async def _classify_and_tag(
-        self, chunk: str, category_hint: str | None = None
+        self,
+        chunk: str,
+        category_hint: str | None = None,
+        tags_hint: list[str] | None = None,
     ) -> tuple[str, list[str]]:
-        return ("general", ["stub"])
+        if tags_hint:
+            return category_hint or "general", list(tags_hint)
+        return category_hint or "general", ["stub"]
 
     async def _generate_title_and_summary(self, chunk: str) -> tuple[str, str]:
         title = chunk[:50].strip()

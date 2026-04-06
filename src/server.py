@@ -1,26 +1,36 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from mcp.server import FastMCP
 
 from src.config import LibrarianConfig
+from src.models.enums import ResearchJobStatus
+from src.models.research_job import ResearchJob
 from src.models.tool_schemas import (
     IngestInput,
     IngestOutput,
+    ResearchInput,
+    ResearchOutput,
     SearchInput,
     SearchOutput,
 )
 from src.services.embedding import (
     DummyEmbeddingService,
     EmbeddingService,
+    OllamaEmbeddingService,
     SentenceTransformerEmbeddingService,
 )
-from src.services.ingestor import Ingestor
+from src.services.ingestor import IngestCallOptions, Ingestor
+from src.services.researcher import Researcher
 from src.services.verifier import Verifier
+from src.services.web_search import build_web_search_client
 from src.storage.mongo import MongoTomeRepository
+from src.storage.mongo.mongo_research_job_repository import MongoResearchJobRepository
+from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
 
 config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
@@ -34,24 +44,37 @@ class LibrarianServer:
         self.config = config
         self.ingestor: Ingestor | None = None
         self.tome_repo: TomeRepository | None = None
+        self.job_repo: ResearchJobRepository | None = None
+        self.researcher: Researcher | None = None
+        self._embedding_service: EmbeddingService | None = None
+        self._bg_tasks: set[asyncio.Task[None]] = set()
         self.mcp = FastMCP(
             "The Librarian",
             instructions=(
                 "An intelligent knowledge management server. Use library_search to "
-                "find information and library_ingest to store new knowledge."
+                "find information, library_ingest to store new knowledge, and "
+                "library_research to gather information from the web when the library "
+                "is thin on a topic."
             ),
             lifespan=self.lifespan,
         )
         self._setup_tools()
 
+    def _track_background_task(self, task: asyncio.Task[None]) -> None:
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
     @asynccontextmanager
-    async def lifespan(self, server: FastMCP) -> AsyncIterator[None]:
+    async def lifespan(self, _server_mcp: FastMCP) -> AsyncIterator[None]:
         """Initialise and tear down services around the server lifetime."""
         provider = self.config.embedding.provider
         embedding_service: EmbeddingService
 
         if provider == "dummy":
             embedding_service = DummyEmbeddingService(self.config.embedding)
+        elif provider == "ollama":
+            embedding_service = OllamaEmbeddingService(self.config.embedding)
+            await embedding_service.initialize()
         elif provider == "sentence-transformers":
             embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
             await embedding_service.initialize()
@@ -60,22 +83,67 @@ class LibrarianServer:
                 embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
                 await embedding_service.initialize()
             except ImportError:
-                print("sentence-transformers not available, falling back to dummy embeddings.")
-                embedding_service = DummyEmbeddingService(self.config.embedding)
+                print("sentence-transformers not available, trying Ollama embeddings.")
+                try:
+                    embedding_service = OllamaEmbeddingService(self.config.embedding)
+                    await embedding_service.initialize()
+                except Exception as exc:
+                    print(f"Ollama embeddings unavailable ({exc!s}), using dummy embeddings.")
+                    embedding_service = DummyEmbeddingService(self.config.embedding)
         else:
             raise ValueError(f"Unknown embedding provider: {provider}")
+        self._embedding_service = embedding_service
         self.tome_repo = MongoTomeRepository(self.config.database, embedding_service)
-        verifier = Verifier(self.config)
+        web_client = build_web_search_client(self.config)
+        verifier = Verifier(self.config, web_client)
         self.ingestor = Ingestor(self.config, embedding_service, verifier, self.tome_repo)
+        self.job_repo = MongoResearchJobRepository(self.config.database)
+        self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
 
         await self.tome_repo.ensure_indexes()
 
         yield
 
+        for t in list(self._bg_tasks):
+            t.cancel()
+        self._bg_tasks.clear()
+
+        if self.job_repo:
+            self.job_repo.close()
+            self.job_repo = None
         if self.tome_repo:
             self.tome_repo.close()
+        if isinstance(self._embedding_service, OllamaEmbeddingService):
+            await self._embedding_service.aclose()
+        self._embedding_service = None
         self.ingestor = None
         self.tome_repo = None
+        self.researcher = None
+
+    async def _research_poll(self, job_id: UUID) -> ResearchOutput:
+        assert self.job_repo is not None
+        job = await self.job_repo.get_by_id(job_id)
+        if job is None:
+            return ResearchOutput(
+                job_id=str(job_id),
+                status="not_found",
+                error="Unknown job_id",
+            )
+        tomes = []
+        if job.status == ResearchJobStatus.COMPLETED and self.tome_repo is not None:
+            for tid in job.tome_ids:
+                t = await self.tome_repo.get_by_id(tid)
+                if t:
+                    tomes.append(t.model_copy(update={"embedding": None}))
+        return ResearchOutput(
+            job_id=str(job.id),
+            status=job.status.value,
+            tome_ids=[str(x) for x in job.tome_ids],
+            tomes=tomes,
+            sources=job.sources,
+            query_count=job.query_count,
+            error=job.error,
+        )
 
     def _setup_tools(self) -> None:
         """Register MCP tools."""
@@ -111,7 +179,60 @@ class LibrarianServer:
         async def library_ingest(params: IngestInput) -> IngestOutput:
             """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
             assert self.ingestor is not None, "Server not initialised"
-            return await self.ingestor.ingest(params.content)
+            opts = IngestCallOptions(
+                skip_verify=params.skip_verify,
+                category_hint=params.category,
+                tags_hint=params.tags,
+                source_url=params.source_url,
+            )
+            return await self.ingestor.ingest(params.content, opts)
+
+        @self.mcp.tool()
+        async def library_research(params: ResearchInput) -> ResearchOutput:
+            """Research a topic on the web and ingest findings as new Tomes."""
+            assert self.job_repo is not None and self.researcher is not None, (
+                "Server not initialised"
+            )
+
+            if params.job_id:
+                job_id_str = params.job_id.strip()
+                try:
+                    jid = UUID(hex=job_id_str)
+                except ValueError:
+                    return ResearchOutput(
+                        job_id=job_id_str,
+                        status="invalid_job_id",
+                        error="job_id must be a UUID hex string",
+                    )
+                return await self._research_poll(jid)
+
+            if not params.topic or not params.topic.strip():
+                return ResearchOutput(
+                    job_id="",
+                    status="invalid_input",
+                    error="topic is required when job_id is not set",
+                )
+
+            job = ResearchJob(
+                id=uuid4(),
+                topic=params.topic.strip(),
+                context=params.context.strip() if params.context else None,
+                depth=params.depth,
+                max_tomes=params.max_tomes,
+                category=params.category,
+            )
+            await self.job_repo.insert(job)
+
+            if params.async_:
+                task = asyncio.create_task(self.researcher.run_job(job.id))
+                self._track_background_task(task)
+                return ResearchOutput(
+                    job_id=str(job.id),
+                    status=ResearchJobStatus.PENDING.value,
+                )
+
+            await self.researcher.run_job(job.id)
+            return await self._research_poll(job.id)
 
 
 _server = LibrarianServer(config)

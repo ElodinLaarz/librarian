@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field
-from src.models.enums import IngestStatus
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+from src.models.enums import IngestStatus, ResearchDepth
 from src.models.tome import Tome
 
 # ── library.search ──────────────────────────────────────────────────
@@ -24,10 +25,45 @@ class SearchOutput(BaseModel):
 
 
 class IngestInput(BaseModel):
-    content: str
+    content: str = Field(..., max_length=500_000)
+    skip_verify: bool = False
+    category: str | None = None
+    tags: list[str] | None = None
+    source_url: str | None = None
 
 
 class IngestOutput(BaseModel):
     tomes: list[Tome]
     status: IngestStatus
     reject_reason: str | None = None
+
+
+# ── library.research ────────────────────────────────────────────────
+
+
+class ResearchInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: str | None = Field(
+        default=None,
+        description="When set, return status/results for this job instead of starting a new run.",
+    )
+    topic: str | None = Field(default=None, max_length=2000)
+    context: str | None = Field(default=None, max_length=8000)
+    depth: ResearchDepth = ResearchDepth.STANDARD
+    max_tomes: int = Field(default=10, ge=1, le=50)
+    category: str | None = None
+    async_: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("async", "async_"),
+    )
+
+
+class ResearchOutput(BaseModel):
+    job_id: str
+    status: str
+    tome_ids: list[str] = Field(default_factory=list)
+    tomes: list[Tome] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    query_count: int = 0
+    error: str | None = None

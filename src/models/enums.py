@@ -24,3 +24,16 @@ class VerificationVerdict(StrEnum):
     SUPPORTED = "supported"
     CONTRADICTED = "contradicted"
     UNVERIFIABLE = "unverifiable"
+
+
+class ResearchJobStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ResearchDepth(StrEnum):
+    SHALLOW = "shallow"
+    STANDARD = "standard"
+    DEEP = "deep"

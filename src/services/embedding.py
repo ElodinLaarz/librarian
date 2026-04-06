@@ -4,8 +4,9 @@ import asyncio
 import hashlib
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+import httpx
 import numpy as np
 
 from src.config import EmbeddingSettings
@@ -52,6 +53,53 @@ class DummyEmbeddingService(EmbeddingService):
 
     async def embed(self, text: str) -> np.ndarray:
         return np.zeros(self._settings.dimensions, dtype=np.float32)
+
+
+class OllamaEmbeddingService(EmbeddingService):
+    """Embedding service backed by a local Ollama instance."""
+
+    def __init__(self, settings: EmbeddingSettings) -> None:
+        super().__init__(settings)
+        self._client = httpx.AsyncClient(base_url=settings.ollama_url, timeout=30.0)
+        self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        """Verify Ollama is reachable and the model is available."""
+        try:
+            response = await self._client.get("/api/tags")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Cannot connect to Ollama at {self._settings.ollama_url}: {exc}"
+            ) from exc
+
+    async def embed(self, text: str) -> np.ndarray:
+        key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        async with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+
+        response = await self._client.post(
+            "/api/embeddings",
+            json={"model": self._settings.model_name, "prompt": text},
+        )
+        response.raise_for_status()
+        vector = np.array(response.json()["embedding"], dtype=np.float32)
+
+        async with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            self._cache[key] = vector
+            if len(self._cache) > self._settings.cache_size:
+                self._cache.popitem(last=False)
+            return vector
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
 
 class SentenceTransformerEmbeddingService(EmbeddingService):
@@ -108,4 +156,4 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
             if len(self._cache) > self._settings.cache_size:
                 self._cache.popitem(last=False)  # Pop oldest (LRU)
 
-            return embedding
+            return cast(np.ndarray, embedding)

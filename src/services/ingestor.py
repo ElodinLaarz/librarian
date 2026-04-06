@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 from src import constants
 from src.config import LibrarianConfig
@@ -13,6 +15,16 @@ from src.models.tool_schemas import IngestOutput
 from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
 from src.storage.tome_repository import TomeRepository
+
+
+@dataclass
+class IngestCallOptions:
+    skip_verify: bool = False
+    source_type: SourceType = SourceType.AGENT_INPUT
+    source_url: str | None = None
+    research_job_id: UUID | None = None
+    category_hint: str | None = None
+    tags_hint: list[str] | None = None
 
 
 class ReshardError(Exception):
@@ -38,8 +50,9 @@ class Ingestor:
         self._verifier = verifier
         self._tome_repo = tome_repo
 
-    async def ingest(self, blob: str) -> IngestOutput:
+    async def ingest(self, blob: str, options: IngestCallOptions | None = None) -> IngestOutput:
         """Convert unstructured text into one or more Tomes and save them."""
+        opts = options or IngestCallOptions()
         if not blob.strip():
             return IngestOutput(
                 tomes=[],
@@ -60,7 +73,7 @@ class Ingestor:
             )
 
         tomes = await asyncio.gather(
-            *[self._process_text(s) for s in shards],
+            *[self._process_text(s, opts) for s in shards],
             return_exceptions=True,
         )
 
@@ -97,24 +110,25 @@ class Ingestor:
         final_reason = constants.JOIN_SEPARATOR.join(reject_reasons) if reject_reasons else None
         return IngestOutput(tomes=stored, status=status, reject_reason=final_reason)
 
-    async def _process_text(self, text: str) -> list[Tome] | None:
+    async def _process_text(self, text: str, opts: IngestCallOptions) -> list[Tome] | None:
         """Verify, classify, embed, and dedup/store a single text.
 
         Returns None if verification is enabled and confidence is below the reject
         threshold.  When verification is disabled the text is stored unconditionally
         with a confidence of ingest.unverified_confidence.
         """
-        tome = await self._build_tome(text)
+        tome = await self._build_tome(text, opts)
         if tome is None:
             return None
-        return await self._dedup_and_store(tome)
+        return await self._dedup_and_store(tome, opts)
 
-    async def _build_tome(self, text: str) -> Tome | None:
+    async def _build_tome(self, text: str, opts: IngestCallOptions) -> Tome | None:
         """Verify, classify, and embed a text, returning a Tome ready for storage.
 
         Returns None if verification rejects the text.  Does NOT persist anything.
         """
-        if self._config.verification.enabled:
+        should_verify = self._config.verification.enabled and not opts.skip_verify
+        if should_verify:
             verification_result = await self._verifier.verify(text)
             if verification_result.confidence < self._config.verification.reject_threshold:
                 return None
@@ -123,7 +137,7 @@ class Ingestor:
             confidence = self._config.ingest.unverified_confidence
 
         (category, tags), (title, summary), embedding = await asyncio.gather(
-            self._classify_and_tag(text),
+            self._classify_and_tag(text, opts.category_hint, opts.tags_hint),
             self._generate_title_and_summary(text),
             self._embedding_service.embed(text),
         )
@@ -136,9 +150,10 @@ class Ingestor:
             category=category,
             tags=tags,
             embedding=embedding,
-            source_url=None,
-            source_type=SourceType.AGENT_INPUT,
+            source_url=opts.source_url,
+            source_type=opts.source_type,
             confidence=confidence,
+            research_job_id=opts.research_job_id,
             created_at=datetime.now(UTC),
         )
         try:
@@ -148,7 +163,7 @@ class Ingestor:
             return None
         return tome
 
-    async def _dedup_and_store(self, tome: Tome) -> list[Tome]:
+    async def _dedup_and_store(self, tome: Tome, opts: IngestCallOptions) -> list[Tome]:
         """Insert tome, or reshard with any near-duplicates found in the repository.
 
         Reshard strategy (safe ordering):
@@ -167,7 +182,7 @@ class Ingestor:
             [d.content for d in duplicates] + [tome.content]
         )
         shards = await self._reshard(combined)
-        replacement_results = await asyncio.gather(*[self._build_tome(c) for c in shards])
+        replacement_results = await asyncio.gather(*[self._build_tome(c, opts) for c in shards])
         replacements = [t for t in replacement_results if t is not None]
 
         # Step 2 — abort if verification left us with nothing to store.
@@ -219,12 +234,17 @@ class Ingestor:
         return splitter.split_text(blob)
 
     async def _classify_and_tag(
-        self, text: str, category_hint: str | None = None
+        self,
+        text: str,
+        category_hint: str | None = None,
+        tags_hint: list[str] | None = None,
     ) -> tuple[str, list[str]]:
         """Auto-classify into a category and extract topic tags."""
-        return category_hint or self._config.ingest.default_category, list(
-            self._config.ingest.default_tags
-        )
+        category = category_hint or self._config.ingest.default_category
+        if tags_hint:
+            merged = list(dict.fromkeys([*tags_hint, *self._config.ingest.default_tags]))
+            return category, merged
+        return category, list(self._config.ingest.default_tags)
 
     async def _generate_title_and_summary(self, text: str) -> tuple[str, str]:
         """Generate a short title and one-to-two sentence summary for a text."""

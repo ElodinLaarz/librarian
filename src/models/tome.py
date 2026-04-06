@@ -27,6 +27,7 @@ class Tome(BaseModel):
     source_url: str | None = None
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
+    research_job_id: UUID | None = None
 
     embedding: Annotated[NDArray[np.float32] | None, SkipJsonSchema()] = Field(default=None)
 

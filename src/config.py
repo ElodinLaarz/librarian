@@ -15,6 +15,7 @@ class DatabaseSettings(BaseSettings):
     uri: str
     database: str = "library"
     tomes_collection: str = "tomes"
+    jobs_collection: str = "research_jobs"
     tls: bool = True
     tls_cert_path: str
 
@@ -24,7 +25,8 @@ class EmbeddingSettings(BaseSettings):
     model_name: str = "all-MiniLM-L6-v2"
     dimensions: int = 384
     cache_size: int = 10_000
-    provider: str = "auto"
+    provider: str = "auto"  # "auto", "sentence-transformers", "ollama", or "dummy"
+    ollama_url: str = "http://localhost:11434"
 
 
 class SearchSettings(BaseSettings):
@@ -38,6 +40,11 @@ class SearchSettings(BaseSettings):
 class WebSearchSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_WEB_SEARCH_")
     default_max_results: int = constants.DEFAULT_MAX_RESULTS
+    provider: str = "brave"
+    api_key: str | None = None
+    brave_api_base: str = "https://api.search.brave.com/res/v1/web/search"
+    serper_api_base: str = "https://google.serper.dev"
+    tavily_api_base: str = "https://api.tavily.com"
 
 
 class VerificationSettings(BaseSettings):
@@ -47,6 +54,9 @@ class VerificationSettings(BaseSettings):
     store_threshold: float = 0.7
     mock_confidence: float = constants.DEFAULT_MOCK_CONFIDENCE
     noop_confidence: float = constants.DEFAULT_NOOP_CONFIDENCE
+    ollama_base_url: str = "http://localhost:11434"
+    claim_model: str = "llama3.2"
+    use_llm_claims: bool = True
 
 
 class IngestSettings(BaseSettings):
@@ -60,11 +70,23 @@ class IngestSettings(BaseSettings):
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
 
 
+class ResearcherSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIBRARIAN_RESEARCHER_")
+    max_synthesis_chars: int = 24_000
+    shallow_queries: int = 3
+    standard_queries: int = 5
+    deep_queries: int = 8
+    shallow_urls_per_query: int = 2
+    standard_urls_per_query: int = 3
+    deep_urls_per_query: int = 4
+
+
 class ServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_SERVER_")
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: LogLevel = LogLevel.INFO
+    transport: str = "stdio"  # "stdio", "sse", or "streamable-http"
 
 
 # --- Top-level config ---
@@ -77,6 +99,7 @@ class LibrarianConfig(BaseSettings):
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
+    researcher: ResearcherSettings = Field(default_factory=ResearcherSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod

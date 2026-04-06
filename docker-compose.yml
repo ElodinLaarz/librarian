@@ -4,12 +4,40 @@ services:
     image: mongodb/mongodb-atlas-local:latest
     ports: ['27017:27017']
     volumes: ['mongo_data:/data/db']
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   ollama:
     image: ollama/ollama:latest
     ports: ['11434:11434']
     volumes: ['ollama_data:/root/.ollama']
     command: serve
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  librarian:
+    build: .
+    ports: ['8000:8000']
+    environment:
+      LIBRARIAN_DATABASE_URI: mongodb://mongo:27017
+      LIBRARIAN_DATABASE_TLS: "false"
+      LIBRARIAN_DATABASE_TLS_CERT_PATH: ""
+      LIBRARIAN_EMBEDDING_PROVIDER: ollama
+      LIBRARIAN_EMBEDDING_MODEL_NAME: nomic-embed-text
+      LIBRARIAN_EMBEDDING_DIMENSIONS: "768"
+      LIBRARIAN_EMBEDDING_OLLAMA_URL: http://ollama:11434
+      LIBRARIAN_SERVER_TRANSPORT: sse
+    depends_on:
+      mongo:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
 
 volumes:
   mongo_data:
