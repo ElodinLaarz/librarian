@@ -7,7 +7,7 @@ from src.services.embedding import SentenceTransformerEmbeddingService
 
 
 @pytest.mark.asyncio
-async def test_sentence_transformer_embedding(monkeypatch) -> None:
+async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("sentence_transformers")
 
     class FakeSentenceTransformer:
@@ -24,7 +24,8 @@ async def test_sentence_transformer_embedding(monkeypatch) -> None:
             return values
 
     fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
-    monkeypatch.setattr(embedding_module, "SentenceTransformer", lambda name: fake_model)
+    import sentence_transformers
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
 
     settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2")
     service = SentenceTransformerEmbeddingService(settings)

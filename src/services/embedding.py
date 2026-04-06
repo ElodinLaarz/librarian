@@ -4,11 +4,14 @@ import asyncio
 import hashlib
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from typing import TYPE_CHECKING
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from src.config import EmbeddingSettings
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 
 class EmbeddingService(ABC):
@@ -63,6 +66,8 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
     async def initialize(self) -> None:
         """Load the model."""
         if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
             # Loading model can be slow, run in thread
             self._model = await asyncio.to_thread(SentenceTransformer, self._settings.model_name)
 
