@@ -40,11 +40,13 @@ Restart **Claude Desktop** after changing the file.
 
 ### Claude Code
 
+#### Option A — Global (recommended)
+
 ```bash
 ./scripts/mcp-config-claude-code.sh
 ```
 
-This **merges** into **`~/.claude.json`** under `mcpServers.librarian` (override with **`CLAUDE_CODE_JSON`** if your build stores MCP elsewhere).
+This **merges** a `librarian` entry into **`~/.claude.json`** under `mcpServers.librarian`, making Librarian available in all Claude Code sessions regardless of project.
 
 Custom repo path:
 
@@ -52,7 +54,32 @@ Custom repo path:
 ./scripts/mcp-config-claude-code.sh /path/to/librarian
 ```
 
-If your Claude Code version uses a different config location, open **`~/.claude.json`**, copy the `librarian` object from `mcpServers`, and paste it into the file your app documents.
+Override the target config file:
+
+```bash
+CLAUDE_CODE_JSON=/path/to/config.json ./scripts/mcp-config-claude-code.sh
+```
+
+#### Option B — Project-level (`.mcp.json`)
+
+Claude Code also supports a per-project `.mcp.json` in the repo root. This is picked up automatically when you open the project, with no global config changes. Create or edit `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "librarian": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "src"],
+      "cwd": "/path/to/librarian",
+      "env": {
+        "LIBRARIAN_CONFIG": "/path/to/librarian/librarian.config.yaml"
+      }
+    }
+  }
+}
+```
+
+> `.mcp.json` is gitignored in this repo — it's personal/machine-specific. Each developer creates their own.
 
 Each entry includes:
 

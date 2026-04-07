@@ -3,6 +3,8 @@ CLAUDE.md
 GEMINI.md
 .claude/
 .gemini/
+# Project-level MCP config (personal/machine-specific)
+.mcp.json
 
 # --- IDE & Editors ---
 .idea/
