@@ -5,10 +5,10 @@ from pathlib import Path
 # Add src to path
 sys.path.append(os.path.abspath("src"))
 
-from storage.filesystem.utils import resolve_base_path
+from src.storage.filesystem.utils import resolve_base_path
 
 
-def test_resolve_base_path():
+def test_resolve_base_path() -> None:
     home = Path.home()
 
     test_cases = [

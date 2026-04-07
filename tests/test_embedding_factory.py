@@ -10,7 +10,7 @@ from src.services.embedding import (
 
 
 @pytest.mark.asyncio
-async def test_build_embedding_service_auto_fallback_to_ollama():
+async def test_build_embedding_service_auto_fallback_to_ollama() -> None:
     settings = EmbeddingSettings(provider="auto", dimensions=384)
 
     # Mock SentenceTransformerEmbeddingService to fail during initialize
@@ -31,7 +31,7 @@ async def test_build_embedding_service_auto_fallback_to_ollama():
 
 
 @pytest.mark.asyncio
-async def test_build_embedding_service_auto_fallback_to_dummy():
+async def test_build_embedding_service_auto_fallback_to_dummy() -> None:
     settings = EmbeddingSettings(provider="auto", dimensions=384)
 
     # Mock ST to fail
@@ -60,7 +60,7 @@ async def test_build_embedding_service_auto_fallback_to_dummy():
 
 
 @pytest.mark.asyncio
-async def test_build_embedding_service_auto_fallback_on_value_error_and_os_error():
+async def test_build_embedding_service_auto_fallback_on_value_error_and_os_error() -> None:
     settings = EmbeddingSettings(provider="auto", dimensions=384)
 
     # 1. Test SentenceTransformers falling back on ValueError

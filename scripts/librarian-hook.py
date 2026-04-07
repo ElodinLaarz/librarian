@@ -54,6 +54,7 @@ async def _search(query: str) -> list[tuple[str, str, float]]:
     try:
         from src.config import LibrarianConfig
         from src.services.embedding import build_embedding_service
+        from src.storage.tome_repository import TomeRepository
 
         config = LibrarianConfig.from_yaml(config_path)
         embedding_service = await build_embedding_service(config.embedding)
@@ -61,16 +62,14 @@ async def _search(query: str) -> list[tuple[str, str, float]]:
         if config.database.uri.startswith("mongodb"):
             from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 
-            repo: object = MongoTomeRepository(config.database, embedding_service)
+            repo: TomeRepository = MongoTomeRepository(config.database, embedding_service)
             await repo.ensure_indexes()  # type: ignore[attr-defined]
         else:
             from src.storage.filesystem.fs_tome_repository import FsTomeRepository
 
             repo = FsTomeRepository(config.database, embedding_service)
 
-        results = await repo.search(  # type: ignore[union-attr]
-            query, top_k=MAX_RESULTS, min_confidence=MIN_CONFIDENCE
-        )
+        results = await repo.search(query, top_k=MAX_RESULTS, min_confidence=MIN_CONFIDENCE)
         return [(t.summary, t.content, s) for t, s in results]
 
     except Exception as exc:  # noqa: BLE001
