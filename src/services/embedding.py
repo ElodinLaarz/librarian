@@ -23,6 +23,7 @@ async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingServi
     fails to initialize.
     """
     provider = settings.provider
+    service: EmbeddingService
 
     if provider == "dummy":
         service = DummyEmbeddingService(settings)
