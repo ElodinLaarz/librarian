@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import httpx
 import numpy as np
@@ -13,6 +14,65 @@ from src.config import EmbeddingSettings
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
+
+
+logger = logging.getLogger(__name__)
+
+
+async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
+    """Factory to instantiate the correct embedding service based on settings.
+
+    In 'auto' mode, it attempts to load SentenceTransformers first, then Ollama,
+    and finally falls back to Dummy embeddings if neither is available or
+    fails to initialize.
+    """
+    provider = settings.provider
+    service: EmbeddingService
+
+    if provider == "dummy":
+        service = DummyEmbeddingService(settings)
+        await service.initialize()
+        return service
+
+    if provider == "ollama":
+        service = OllamaEmbeddingService(settings)
+        await service.initialize()
+        return service
+
+    if provider == "sentence-transformers":
+        service = SentenceTransformerEmbeddingService(settings)
+        await service.initialize()
+        return service
+
+    if provider == "auto":
+        # 1. Try SentenceTransformers
+        try:
+            service = SentenceTransformerEmbeddingService(settings)
+            await service.initialize()
+            return service
+        except Exception as exc:
+            logger.warning(
+                "SentenceTransformers initialization failed, falling back to Ollama: %s",
+                exc,
+            )
+
+        # 2. Try Ollama
+        try:
+            service = OllamaEmbeddingService(settings)
+            await service.initialize()
+            return service
+        except Exception as exc:
+            logger.warning(
+                "Ollama initialization failed, falling back to dummy: %s",
+                exc,
+            )
+
+        # 3. Fallback to Dummy
+        service = DummyEmbeddingService(settings)
+        await service.initialize()
+        return service
+
+    raise ValueError(f"Unknown embedding provider: {provider}")
 
 
 class EmbeddingService(ABC):
@@ -137,11 +197,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
         embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
 
         # Ensure it's a 1-D numpy array of float32
-        embedding = np.asarray(embedding, dtype=np.float32)
-        if embedding.ndim == 2 and embedding.shape[0] == 1:
-            embedding = embedding[0]
-        else:
-            embedding = np.squeeze(embedding)
+        embedding = np.atleast_1d(np.squeeze(np.asarray(embedding, dtype=np.float32)))
 
         async with self._lock:
             # Another task might have computed and cached it while we were yielding
@@ -156,4 +212,4 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
             if len(self._cache) > self._settings.cache_size:
                 self._cache.popitem(last=False)  # Pop oldest (LRU)
 
-            return cast(np.ndarray, embedding)
+            return embedding

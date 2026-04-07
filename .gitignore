@@ -3,14 +3,20 @@ CLAUDE.md
 GEMINI.md
 .claude/
 .gemini/
+# Project-level MCP config (personal/machine-specific)
+.mcp.json
 
-# IDE
+# --- IDE & Editors ---
 .idea/
+.vscode/
 *.iml
 *.iws
 *.ipr
+*.swp
+*.swo
+.cursor/
 
-# Python
+# --- Python & uv ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,6 +28,8 @@ build/
 eggs/
 *.manifest
 *.spec
+.python-version
+.ipynb_checkpoints/
 
 # Virtual environments
 .venv/
@@ -30,35 +38,48 @@ ENV/
 env/
 .uv/
 
-# Environment / secrets
-.env
-.env.*
-*.pem
-credentials.json
-librarian.config.yaml
-
-# Distribution / packaging
-sdist/
-wheels/
-pip-wheel-metadata/
-
-# Testing
+# --- Testing & Linting ---
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
 .nox/
-
-# Type checkers
 .mypy_cache/
 .pytype/
-
-# Ruff
 .ruff_cache/
+.pyre/
 
-# OS
-.DS_Store
-Thumbs.db
+# --- Environment & Secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
+# Local config override
+librarian.config.yaml
+# We should keep a template instead
+# !librarian.config.example.yaml
 
-# Local data
+# --- Databases & Data ---
+# Local MongoDB data
 data/
+db/
+mongod.log
+*.db
+*.sqlite3
+*.rdb
+
+# --- Scratch & Temporary ---
+pr_comments.json
+*.log
+*.tmp
+
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

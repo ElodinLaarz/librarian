@@ -1,0 +1,20 @@
+# Copy to repo root as librarian.config.yaml (scripts/init-config.sh does this).
+# Tuned for: MongoDB + Ollama from docker compose on localhost.
+
+database:
+  uri: mongodb://localhost:27017
+  tls: false
+  tls_cert_path: /dev/null
+
+embedding:
+  provider: ollama
+  ollama_url: http://localhost:11434
+  model_name: nomic-embed-text
+  dimensions: 768
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  transport: stdio
+
+# Optional: set via env instead — LIBRARIAN_WEB_SEARCH_PROVIDER, LIBRARIAN_WEB_SEARCH_API_KEY, etc.

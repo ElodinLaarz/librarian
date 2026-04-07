@@ -8,9 +8,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.config import DatabaseSettings
+from src.config import DatabaseSettings, EmbeddingSettings
 from src.models.enums import SourceType
 from src.models.tome import Tome
+from src.services.embedding import DummyEmbeddingService, OllamaEmbeddingService
 from src.storage.filesystem.fs_tome_repository import FsTomeRepository, _cosine_similarity
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -21,6 +22,7 @@ RNG = np.random.default_rng(12345)
 def _make_tome(
     *,
     category: str = "general",
+    title: str = "Test Tome",
     confidence: float = 0.8,
     embedding: np.ndarray | None = None,
 ) -> Tome:
@@ -29,7 +31,7 @@ def _make_tome(
         embedding /= np.linalg.norm(embedding)
     return Tome(
         id=uuid.uuid4(),
-        title="Test Tome",
+        title=title,
         content="Some content.",
         summary="A summary.",
         category=category,
@@ -42,9 +44,14 @@ def _make_tome(
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> FsTomeRepository:
+def embedding_service() -> DummyEmbeddingService:
+    return DummyEmbeddingService(EmbeddingSettings(dimensions=8))
+
+
+@pytest.fixture
+def repo(tmp_path: Path, embedding_service: DummyEmbeddingService) -> FsTomeRepository:
     settings = DatabaseSettings(uri=str(tmp_path), tomes_collection="tomes", tls_cert_path="")
-    return FsTomeRepository(settings)
+    return FsTomeRepository(settings, embedding_service)
 
 
 # ── embedding round-trip ─────────────────────────────────────────────────────
@@ -65,13 +72,14 @@ async def test_embedding_in_search_results(repo: FsTomeRepository) -> None:
     original = _make_tome()
     await repo.insert(original)
 
-    results = await repo.search(query="anything")
+    results = await repo.search(query="anything", min_confidence=0.0)
     assert len(results) == 1
     tome, score = results[0]
     assert tome.embedding is not None
     assert original.embedding is not None
     np.testing.assert_array_almost_equal(tome.embedding, original.embedding, decimal=5)
-    assert score == 1.0
+    # DummyEmbeddingService returns zero vectors → cosine similarity is 0.0
+    assert score == pytest.approx(0.0)
 
 
 # ── category filter ───────────────────────────────────────────────────────────
@@ -81,7 +89,7 @@ async def test_search_returns_all_when_no_category_filter(repo: FsTomeRepository
     await repo.insert(_make_tome(category="science"))
     await repo.insert(_make_tome(category="history"))
 
-    results = await repo.search(query="anything")
+    results = await repo.search(query="anything", min_confidence=0.0)
     assert len(results) == 2
 
 
@@ -89,7 +97,7 @@ async def test_search_filters_by_category(repo: FsTomeRepository) -> None:
     await repo.insert(_make_tome(category="science"))
     await repo.insert(_make_tome(category="history"))
 
-    results = await repo.search(query="anything", category="science")
+    results = await repo.search(query="anything", category="science", min_confidence=0.0)
     assert len(results) == 1
     tome, score = results[0]
     assert tome.category == "science"
@@ -98,7 +106,7 @@ async def test_search_filters_by_category(repo: FsTomeRepository) -> None:
 async def test_search_category_no_match_returns_empty(repo: FsTomeRepository) -> None:
     await repo.insert(_make_tome(category="science"))
 
-    results = await repo.search(query="anything", category="philosophy")
+    results = await repo.search(query="anything", category="philosophy", min_confidence=0.0)
     assert results == []
 
 
@@ -157,3 +165,33 @@ async def test_find_near_duplicates_excludes_self(repo: FsTomeRepository) -> Non
 
     duplicates = await repo.find_near_duplicates(tome)
     assert duplicates == []
+
+
+@pytest.fixture
+def repo_ollama(
+    tmp_path: Path, ollama_embedding_service: OllamaEmbeddingService
+) -> FsTomeRepository:
+    settings = DatabaseSettings(uri=str(tmp_path), tomes_collection="tomes", tls_cert_path="")
+    return FsTomeRepository(settings, ollama_embedding_service)
+
+
+async def test_search_real_embeddings(
+    repo_ollama: FsTomeRepository, ollama_embedding_service: OllamaEmbeddingService
+) -> None:
+    embed_dog = await ollama_embedding_service.embed("The dog ran through the park")
+    embed_physics = await ollama_embedding_service.embed("Quantum physics is hard")
+
+    await repo_ollama.insert(_make_tome(title="Dog", embedding=embed_dog))
+    await repo_ollama.insert(_make_tome(title="Physics", embedding=embed_physics))
+
+    results = await repo_ollama.search(query="a puppy played outside", min_confidence=0.0)
+    assert len(results) == 2
+
+    tome0, score0 = results[0]
+    tome1, score1 = results[1]
+
+    # Dog should be more similar to "puppy played outside" than Physics
+    assert tome0.title == "Dog"
+    assert tome1.title == "Physics"
+    assert score0 > score1
+    assert score0 > 0.0

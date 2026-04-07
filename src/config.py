@@ -1,12 +1,43 @@
+import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import yaml
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src import constants
 from src.models.enums import LogLevel
+
+
+def _load_dotenv() -> None:
+    """Merge ``Path.cwd()/.env`` into the process env (does not override existing keys).
+
+    Pydantic's per-model ``env_file`` applies the whole file to every nested
+    ``BaseSettings`` section, which breaks prefix scoping; loading once here
+    matches normal dotenv behavior. See ``.env.example``.
+    """
+    path = Path.cwd() / ".env"
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value_raw = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        v = value_raw.strip()
+        if v.startswith('"'):
+            value = v[1:].partition('"')[0]
+        elif v.startswith("'"):
+            value = v[1:].partition("'")[0]
+        else:
+            value = v.partition("#")[0].strip()
+        os.environ.setdefault(key, value)
 
 
 # --- Nested config models ---
@@ -16,8 +47,14 @@ class DatabaseSettings(BaseSettings):
     database: str = "library"
     tomes_collection: str = "tomes"
     jobs_collection: str = "research_jobs"
-    tls: bool = True
-    tls_cert_path: str
+    tls: bool = False
+    tls_cert_path: str = ""
+
+    @model_validator(mode="after")
+    def tls_requires_cert_path(self) -> Self:
+        if self.tls and not self.tls_cert_path.strip():
+            raise ValueError("tls_cert_path must be non-empty when tls is enabled")
+        return self
 
 
 class EmbeddingSettings(BaseSettings):
@@ -108,23 +145,40 @@ class LibrarianConfig(BaseSettings):
         if TYPE_CHECKING:
             return cls()
 
+        _load_dotenv()
         path = Path(path)
         raw: dict[str, Any] = {}
 
         # Load YAML if it exists
         if path.exists():
-            raw = yaml.safe_load(path.read_text()) or {}
+            raw = yaml.safe_load(path.read_text())
+            if raw is None:
+                raw = {}
+            if not isinstance(raw, dict):
+                raise ValueError(f"YAML root in {path} must be a mapping, got {type(raw).__name__}")
 
         validated_sections = {}
         errors = []
 
-        # Validate each nested section separately to preserve nested errors
+        # Validate each nested section separately to preserve nested errors.
+        # Use the BaseSettings constructor (not model_validate) so each section
+        # merges YAML values with its env_prefix sources (e.g. LIBRARIAN_DATABASE_URI).
         for field_name, field_info in cls.model_fields.items():
-            section_data = raw.get(field_name, {})
+            section_raw = raw.get(field_name)
+            if section_raw is None:
+                section_data: dict[str, Any] = {}
+            elif not isinstance(section_raw, dict):
+                errors.append(
+                    f"{field_name}: expected a mapping in YAML, got {type(section_raw).__name__}"
+                )
+                continue
+            else:
+                section_data = section_raw
+
             section_type: type[BaseSettings] = field_info.annotation
 
             try:
-                validated_sections[field_name] = section_type.model_validate(section_data)
+                validated_sections[field_name] = section_type(**section_data)
             except ValidationError as exc:
                 for err in exc.errors():
                     loc = [field_name, *err["loc"]]  # e.g., ['database', 'uri']

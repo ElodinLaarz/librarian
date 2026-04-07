@@ -52,7 +52,8 @@ class Researcher:
         if not self._web.is_available():
             job.status = ResearchJobStatus.FAILED
             job.error = (
-                "Web search is not configured (set LIBRARIAN_WEB_SEARCH__API_KEY or BRAVE_API_KEY)."
+                "Web search is not configured (set LIBRARIAN_WEB_SEARCH_API_KEY, or "
+                "BRAVE_API_KEY / SERPER_API_KEY / TAVILY_API_KEY for the chosen provider)."
             )
             job.finished_at = datetime.now(UTC)
             await self._jobs.update(job)
