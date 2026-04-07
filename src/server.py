@@ -62,8 +62,9 @@ class LibrarianServer:
             port=config.server.port,
             log_level=config.server.log_level.value.upper(),  # type: ignore[arg-type]
         )
-        
+
         import logging
+
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
 

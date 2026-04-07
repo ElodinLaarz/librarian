@@ -56,8 +56,7 @@ def test_dotenv_supplies_database_when_yaml_section_empty(
     ):
         monkeypatch.delenv(key, raising=False)
     (tmp_path / ".env").write_text(
-        "LIBRARIAN_DATABASE_URI=mongodb://envfile-test:27017\n"
-        "LIBRARIAN_DATABASE_TLS=false\n"
+        "LIBRARIAN_DATABASE_URI=mongodb://envfile-test:27017\nLIBRARIAN_DATABASE_TLS=false\n"
     )
     (tmp_path / "cfg.yml").write_text("database: {}\n")
     monkeypatch.chdir(tmp_path)
@@ -70,11 +69,7 @@ def test_from_yaml_tls_true_without_cert_path_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     path = tmp_path / "tls-no-cert.yml"
-    path.write_text(
-        "database:\n"
-        "  uri: mongodb://localhost:27017\n"
-        "  tls: true\n"
-    )
+    path.write_text("database:\n  uri: mongodb://localhost:27017\n  tls: true\n")
     monkeypatch.delenv("LIBRARIAN_DATABASE_TLS_CERT_PATH", raising=False)
 
     with pytest.raises(ValueError, match="tls_cert_path must be non-empty"):

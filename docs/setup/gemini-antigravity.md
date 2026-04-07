@@ -80,7 +80,7 @@ asyncio.run(smoke_test())
 "
 ```
 
----
+______________________________________________________________________
 
 ## Option B — Docker + HTTP (SSE/streamable-http)
 
@@ -121,7 +121,7 @@ Override the SSE URL:
 LIBRARIAN_SSE_URL=https://your-host:8000/sse ./scripts/mcp-config-http-clients.sh
 ```
 
----
+______________________________________________________________________
 
 ## Troubleshooting
 

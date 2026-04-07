@@ -29,9 +29,7 @@ from src.storage.filesystem.fs_tome_repository import FsTomeRepository
 class DemoWebSearchClient(WebSearchClient):
     """Single canned search result; offline body text (no HTTP)."""
 
-    async def search(
-        self, query: str, max_results: int = 5
-    ) -> list[WebSearchResult]:
+    async def search(self, query: str, max_results: int = 5) -> list[WebSearchResult]:
         _ = query
         return [
             WebSearchResult(

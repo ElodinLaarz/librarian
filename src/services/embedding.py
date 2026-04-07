@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -28,6 +27,7 @@ def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
         return SentenceTransformerEmbeddingService(settings)
     if provider == "auto":
         import importlib.util
+
         if importlib.util.find_spec("sentence_transformers"):
             return SentenceTransformerEmbeddingService(settings)
         # Fallback to Ollama; connectivity will be checked during initialize()
