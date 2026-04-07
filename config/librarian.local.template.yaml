@@ -17,4 +17,4 @@ server:
   port: 8000
   transport: stdio
 
-# Optional: set via env instead — LIBRARIAN_WEB_SEARCH__API_KEY, etc.
+# Optional: set via env instead — LIBRARIAN_WEB_SEARCH_PROVIDER, LIBRARIAN_WEB_SEARCH_API_KEY, etc.

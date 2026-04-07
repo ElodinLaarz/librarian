@@ -26,7 +26,7 @@ Before storing, a Verifier cross-references key factual claims against web searc
 - **confidence 0.3–0.7** — stored with a low-confidence flag
 - **confidence < 0.3** — rejected
 
-Set `skip_verify: true` on ingest to bypass (useful for notes or fictional content). With no search API key, verification is skipped and a synthetic confidence of `0.6` is assigned. To enable live checks and `library.research`, set `LIBRARIAN_WEB_SEARCH__PROVIDER` (`brave` / `serper` / `tavily`) and an API key (`LIBRARIAN_WEB_SEARCH__API_KEY`, or `BRAVE_API_KEY` / `SERPER_API_KEY` / `TAVILY_API_KEY`). Claim extraction uses Ollama’s OpenAI-compatible chat JSON when reachable (`LIBRARIAN_VERIFICATION__OLLAMA_BASE_URL`, `LIBRARIAN_VERIFICATION__CLAIM_MODEL`); otherwise text is split into sentence-like claims.
+Set `skip_verify: true` on ingest to bypass (useful for notes or fictional content). With no search API key, verification is skipped and a synthetic confidence of `0.6` is assigned. To enable live checks and `library.research`, set `LIBRARIAN_WEB_SEARCH_PROVIDER` (`brave` / `serper` / `tavily`) and an API key (`LIBRARIAN_WEB_SEARCH_API_KEY`, or `BRAVE_API_KEY` / `SERPER_API_KEY` / `TAVILY_API_KEY`). Claim extraction uses Ollama’s OpenAI-compatible chat JSON when reachable (`LIBRARIAN_VERIFICATION__OLLAMA_BASE_URL`, `LIBRARIAN_VERIFICATION__CLAIM_MODEL`); otherwise text is split into sentence-like claims.
 
 ## Stack
 

@@ -102,6 +102,9 @@ You should see `OK:` and your database URI. If this fails, fix config/uv before 
 - **Connection refused to Mongo / server errors on tools**: Start the stack — **`./scripts/start-stack.sh`**. If you use the compose **MongoDB Atlas Local** image from the host, you may need **`directConnection=true`** in the URI — see **`.env.example`**.
 - **Embedding errors**: Ensure Ollama has the model:\
   `docker compose exec ollama ollama pull nomic-embed-text`
+- **`library_research` / “Web search is not configured”**: The MCP process loads **`Path.cwd()/.env`** when it starts. Your **`mcp-config-cursor.sh`** entry sets **`cwd`** to this repo, so a repo-root **`.env`** is enough — you do **not** have to duplicate keys under **`~/.cursor/mcp.json`** unless you prefer that. For **Tavily**, set **`LIBRARIAN_WEB_SEARCH_PROVIDER=tavily`** and **`LIBRARIAN_WEB_SEARCH_API_KEY=…`**, or **`TAVILY_API_KEY=…`** (see **`src/services/web_search.py`**). Reload the MCP server / window after editing **`.env`**. If it still fails, verify from the repo:\
+  `uv run python -c "from pathlib import Path; from src.config import LibrarianConfig; from src.services.web_search import build_web_search_client; c=LibrarianConfig.from_yaml(Path('librarian.config.yaml')); print(build_web_search_client(c).is_available())"`\
+  (should print **`True`**).
 - **`librarian.config.yaml`**: Edit for your machine; it is not committed (gitignored). **`init-config.sh`** seeds it from **`config/librarian.local.template.yaml`**.
 - **Existing MCP servers disappeared**: **`mcp-config-cursor.sh`** merges into **`mcpServers`**; it should keep other keys. If your file was invalid JSON, back it up and re-run the script.
 
