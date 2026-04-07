@@ -17,3 +17,8 @@ class ResearchJobRepository(ABC):
 
     @abstractmethod
     async def get_by_id(self, job_id: UUID) -> ResearchJob | None: ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """Frees any resources held by the repository."""
+        pass

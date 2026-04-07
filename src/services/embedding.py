@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import httpx
 import numpy as np
@@ -13,6 +14,35 @@ from src.config import EmbeddingSettings
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
+
+
+def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
+    """Factory to instantiate the correct embedding service based on settings."""
+    provider = settings.provider
+
+    if provider == "dummy":
+        return DummyEmbeddingService(settings)
+    if provider == "ollama":
+        return OllamaEmbeddingService(settings)
+    if provider == "sentence-transformers":
+        return SentenceTransformerEmbeddingService(settings)
+    if provider == "auto":
+        # First try Sentence Transformers
+        try:
+            return SentenceTransformerEmbeddingService(settings)
+        except ImportError:
+            logging.info("sentence-transformers not available, falling back")
+
+        # Then try Ollama
+        try:
+            return OllamaEmbeddingService(settings)
+        except Exception as exc:
+            logging.warning(f"Ollama embeddings unavailable ({exc!s}), using dummy")
+
+        # Finally fallback to dummy
+        return DummyEmbeddingService(settings)
+
+    raise ValueError(f"Unknown embedding provider: {provider}")
 
 
 class EmbeddingService(ABC):
@@ -137,11 +167,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
         embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
 
         # Ensure it's a 1-D numpy array of float32
-        embedding = np.asarray(embedding, dtype=np.float32)
-        if embedding.ndim == 2 and embedding.shape[0] == 1:
-            embedding = embedding[0]
-        else:
-            embedding = np.squeeze(embedding)
+        embedding = np.atleast_1d(np.squeeze(np.asarray(embedding, dtype=np.float32)))
 
         async with self._lock:
             # Another task might have computed and cached it while we were yielding
@@ -156,4 +182,4 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
             if len(self._cache) > self._settings.cache_size:
                 self._cache.popitem(last=False)  # Pop oldest (LRU)
 
-            return cast(np.ndarray, embedding)
+            return embedding

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from src.config import EmbeddingSettings
-from src.services.embedding import SentenceTransformerEmbeddingService
+from src.services.embedding import OllamaEmbeddingService, SentenceTransformerEmbeddingService
 
 
 @pytest.mark.asyncio
@@ -126,3 +126,22 @@ async def test_sentence_transformer_embedding_concurrency(monkeypatch: pytest.Mo
     # In our current implementation, both will miss cache initially and call encode!
     # So encode_calls should be 2!
     assert fake_model.encode_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_ollama_embed_real_scores(
+    ollama_embedding_service: OllamaEmbeddingService,
+) -> None:
+    embed1 = await ollama_embedding_service.embed("The dog ran through the park.")
+    embed2 = await ollama_embedding_service.embed("A puppy sprinted across the field.")
+    embed3 = await ollama_embedding_service.embed("Quantum physics is a difficult subject.")
+
+    def cos_sim(a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+    sim_related = cos_sim(embed1, embed2)
+    sim_unrelated = cos_sim(embed1, embed3)
+
+    assert sim_related > 0.0
+    assert sim_unrelated > 0.0
+    assert sim_related > sim_unrelated

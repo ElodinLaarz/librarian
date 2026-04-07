@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from src.config import LibrarianConfig
+from src.config import DatabaseSettings, LibrarianConfig
 
 
 def test_from_yaml_missing_file_uses_database_uri_from_env(
@@ -32,6 +33,52 @@ def test_from_yaml_partial_database_merges_env(
     cfg = LibrarianConfig.from_yaml(path)
     assert cfg.database.uri == "mongodb://merge-test:27017"
     assert cfg.database.tls is False
+
+
+def test_database_settings_tls_requires_non_empty_cert_path() -> None:
+    with pytest.raises(ValidationError, match="tls_cert_path must be non-empty"):
+        DatabaseSettings(uri="mongodb://localhost:27017", tls=True)
+
+
+def test_database_settings_tls_false_allows_empty_cert_path() -> None:
+    s = DatabaseSettings(uri="mongodb://localhost:27017", tls=False, tls_cert_path="")
+    assert s.tls_cert_path == ""
+
+
+def test_dotenv_supplies_database_when_yaml_section_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Path.cwd()/.env` is merged (via setdefault) before nested sections are built."""
+    for key in (
+        "LIBRARIAN_DATABASE_URI",
+        "LIBRARIAN_DATABASE_TLS",
+        "LIBRARIAN_DATABASE_TLS_CERT_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "LIBRARIAN_DATABASE_URI=mongodb://envfile-test:27017\n"
+        "LIBRARIAN_DATABASE_TLS=false\n"
+    )
+    (tmp_path / "cfg.yml").write_text("database: {}\n")
+    monkeypatch.chdir(tmp_path)
+    cfg = LibrarianConfig.from_yaml(tmp_path / "cfg.yml")
+    assert cfg.database.uri == "mongodb://envfile-test:27017"
+    assert cfg.database.tls is False
+
+
+def test_from_yaml_tls_true_without_cert_path_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "tls-no-cert.yml"
+    path.write_text(
+        "database:\n"
+        "  uri: mongodb://localhost:27017\n"
+        "  tls: true\n"
+    )
+    monkeypatch.delenv("LIBRARIAN_DATABASE_TLS_CERT_PATH", raising=False)
+
+    with pytest.raises(ValueError, match="tls_cert_path must be non-empty"):
+        LibrarianConfig.from_yaml(path)
 
 
 def test_from_yaml_rejects_non_mapping_section(tmp_path: Path) -> None:

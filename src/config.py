@@ -1,12 +1,37 @@
+import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import yaml
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src import constants
 from src.models.enums import LogLevel
+
+
+def _load_dotenv() -> None:
+    """Merge ``Path.cwd()/.env`` into the process env (does not override existing keys).
+
+    Pydantic's per-model ``env_file`` applies the whole file to every nested
+    ``BaseSettings`` section, which breaks prefix scoping; loading once here
+    matches normal dotenv behavior. See ``.env.example``.
+    """
+    path = Path.cwd() / ".env"
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip("'").strip('"')
+        os.environ.setdefault(key, value)
 
 
 # --- Nested config models ---
@@ -18,6 +43,12 @@ class DatabaseSettings(BaseSettings):
     jobs_collection: str = "research_jobs"
     tls: bool = False
     tls_cert_path: str = ""
+
+    @model_validator(mode="after")
+    def tls_requires_cert_path(self) -> Self:
+        if self.tls and not self.tls_cert_path.strip():
+            raise ValueError("tls_cert_path must be non-empty when tls is enabled")
+        return self
 
 
 class EmbeddingSettings(BaseSettings):
@@ -108,6 +139,7 @@ class LibrarianConfig(BaseSettings):
         if TYPE_CHECKING:
             return cls()
 
+        _load_dotenv()
         path = Path(path)
         raw: dict[str, Any] = {}
 

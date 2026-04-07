@@ -19,17 +19,18 @@ from src.models.tool_schemas import (
     SearchOutput,
 )
 from src.services.embedding import (
-    DummyEmbeddingService,
     EmbeddingService,
     OllamaEmbeddingService,
-    SentenceTransformerEmbeddingService,
+    build_embedding_service,
 )
 from src.services.ingestor import IngestCallOptions, Ingestor
 from src.services.researcher import Researcher
 from src.services.verifier import Verifier
 from src.services.web_search import build_web_search_client
-from src.storage.mongo import MongoTomeRepository
+from src.storage.filesystem.fs_research_job_repository import FsResearchJobRepository
+from src.storage.filesystem.fs_tome_repository import FsTomeRepository
 from src.storage.mongo.mongo_research_job_repository import MongoResearchJobRepository
+from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
 
@@ -70,47 +71,20 @@ class LibrarianServer:
     @asynccontextmanager
     async def lifespan(self, _server_mcp: FastMCP) -> AsyncIterator[None]:
         """Initialise and tear down services around the server lifetime."""
-        provider = self.config.embedding.provider
-        embedding_service: EmbeddingService
-
-        if provider == "dummy":
-            embedding_service = DummyEmbeddingService(self.config.embedding)
-        elif provider == "ollama":
-            embedding_service = OllamaEmbeddingService(self.config.embedding)
-            await embedding_service.initialize()
-        elif provider == "sentence-transformers":
-            embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
-            await embedding_service.initialize()
-        elif provider == "auto":
-            try:
-                embedding_service = SentenceTransformerEmbeddingService(self.config.embedding)
-                await embedding_service.initialize()
-            except ImportError:
-                print("sentence-transformers not available, trying Ollama embeddings.")
-                try:
-                    embedding_service = OllamaEmbeddingService(self.config.embedding)
-                    await embedding_service.initialize()
-                except Exception as exc:
-                    print(f"Ollama embeddings unavailable ({exc!s}), using dummy embeddings.")
-                    embedding_service = DummyEmbeddingService(self.config.embedding)
-        else:
-            raise ValueError(f"Unknown embedding provider: {provider}")
-        self._embedding_service = embedding_service
+        self._embedding_service = build_embedding_service(self.config.embedding)
+        await self._embedding_service.initialize()
 
         if self.config.database.uri.startswith("mongodb"):
-            self.tome_repo = MongoTomeRepository(self.config.database, embedding_service)
+            self.tome_repo = MongoTomeRepository(self.config.database, self._embedding_service)
             self.job_repo = MongoResearchJobRepository(self.config.database)
             await self.tome_repo.ensure_indexes()
         else:
-            from src.storage.filesystem.fs_research_job_repository import FsResearchJobRepository
-            from src.storage.filesystem.fs_tome_repository import FsTomeRepository
-
-            self.tome_repo = FsTomeRepository(self.config.database)
+            self.tome_repo = FsTomeRepository(self.config.database, self._embedding_service)
             self.job_repo = FsResearchJobRepository(self.config.database)
 
         web_client = build_web_search_client(self.config)
         verifier = Verifier(self.config, web_client)
-        self.ingestor = Ingestor(self.config, embedding_service, verifier, self.tome_repo)
+        self.ingestor = Ingestor(self.config, self._embedding_service, verifier, self.tome_repo)
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
 
         yield

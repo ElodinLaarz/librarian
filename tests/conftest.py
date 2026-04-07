@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
 
-from src.config import DatabaseSettings, LibrarianConfig
+from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
+from src.services.embedding import OllamaEmbeddingService
 from tests.stubs import StubEmbeddingService, StubIngestor, StubTomeRepository, StubVerifier
 
 _TEST_DB_SETTINGS = DatabaseSettings(
@@ -49,3 +51,21 @@ def ingestor(
     repo: StubTomeRepository,
 ) -> StubIngestor:
     return StubIngestor(config, embedding_service, verifier, repo)
+
+
+@pytest.fixture
+async def ollama_embedding_service() -> AsyncGenerator[OllamaEmbeddingService, None]:
+    """Provides a real Ollama embedding service if available locally, else skips."""
+    settings = EmbeddingSettings(
+        provider="ollama",
+        model_name="nomic-embed-text",
+        dimensions=768,
+    )
+    service = OllamaEmbeddingService(settings)
+    try:
+        await service.initialize()
+    except Exception as exc:
+        pytest.skip(f"Ollama is unavailable locally {exc}")
+
+    yield service
+    await service.aclose()

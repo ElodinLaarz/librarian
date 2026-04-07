@@ -2,9 +2,10 @@ database:
   uri: file:///home/elodin/.librarian_mcp
 
 embedding:
-  provider: sentence-transformers
-  model_name: all-MiniLM-L6-v2
-  dimensions: 384
+  provider: ollama
+  ollama_url: http://localhost:11434
+  model_name: nomic-embed-text
+  dimensions: 768
 
 server:
   host: 0.0.0.0

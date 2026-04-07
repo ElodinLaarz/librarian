@@ -1,13 +1,94 @@
-# Gemini CLI / Antigravity — Librarian MCP (HTTP)
+# Gemini CLI / Antigravity — Librarian MCP Setup
 
-These clients typically connect to a **running** MCP server over **HTTP** (often **SSE**). The Docker Compose **`librarian`** service already sets **`LIBRARIAN_SERVER_TRANSPORT=sse`** and listens on port **8000**.
+Antigravity connects to the Librarian via **`stdio`** transport — no Docker or HTTP server needed. The MCP process is launched automatically by Antigravity using `uv run`.
 
-## Prerequisites
+## Option A — Local (no Docker, recommended for Antigravity)
 
-- Docker and uv (for local dev) — or any host where Librarian runs with **`sse`** (or **`streamable-http`**) transport
-- jq (for generating snippet files)
+This uses the filesystem storage backend and Ollama for embeddings. Tomes are persisted to `~/.librarian_mcp/` and are accessible to any agent on the machine.
 
-## First-time setup
+### Prerequisites
+
+| Requirement | Notes |
+| --- | --- |
+| [uv](https://docs.astral.sh/uv/) | Python package manager |
+| [Ollama](https://ollama.com) | Local embedding inference |
+| `nomic-embed-text` model | Pulled via `ollama pull` |
+
+### First-time setup
+
+```bash
+# 1. Clone and install dependencies
+git clone https://github.com/ElodinLaarz/librarian
+cd librarian
+uv sync
+
+# 2. Pull the embedding model
+ollama pull nomic-embed-text
+
+# 3. The local config already exists at config/local-fs.yaml
+#    (uses file:///~/.librarian_mcp storage + Ollama embeddings)
+
+# 4. Register the MCP in Antigravity
+#    ~/.gemini/antigravity/mcp_config.json should contain:
+cat > ~/.gemini/antigravity/mcp_config.json << 'EOF'
+{
+  "mcpServers": {
+    "librarian": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "src"],
+      "env": {
+        "LIBRARIAN_CONFIG": "/path/to/librarian/config/local-fs.yaml"
+      },
+      "cwd": "/path/to/librarian"
+    }
+  }
+}
+EOF
+```
+
+Replace `/path/to/librarian` with the actual repo path (e.g. `/home/elodin/github/librarian`).
+
+### Storage layout
+
+```
+~/.librarian_mcp/
+├── tomes/          ← one JSON file per Tome (searchable by all agents)
+└── research_jobs/  ← async research job state
+```
+
+### Verify it works
+
+```bash
+cd /path/to/librarian
+LIBRARIAN_CONFIG=config/local-fs.yaml uv run python -c "
+import asyncio
+from src.config import LibrarianConfig
+from src.server import LibrarianServer
+from src.services.ingestor import IngestCallOptions
+
+config = LibrarianConfig.from_yaml('config/local-fs.yaml')
+
+async def smoke_test():
+    server = LibrarianServer(config)
+    async with server.lifespan(server.mcp):
+        result = await server.ingestor.ingest('Hello from Librarian!', IngestCallOptions(skip_verify=True))
+        print('status:', result.status, '| tomes:', len(result.tomes))
+        hits = await server.tome_repo.search('Hello', top_k=1, min_confidence=0.0)
+        print('search hit:', hits[0][0].summary if hits else 'none')
+
+asyncio.run(smoke_test())
+"
+```
+
+---
+
+## Option B — Docker + HTTP (SSE/streamable-http)
+
+> Use this if you want MongoDB vector search, a shared server, or remote access.
+
+The Docker Compose **`librarian`** service sets **`LIBRARIAN_SERVER_TRANSPORT=sse`** and listens on port **8000**.
+
+### First-time setup
 
 ```bash
 chmod +x scripts/*.sh scripts/lib/common.sh
@@ -15,74 +96,40 @@ chmod +x scripts/*.sh scripts/lib/common.sh
 ./scripts/mcp-config-http-clients.sh
 ```
 
-- **`dev-up.sh`** starts the stack and ensures **`librarian.config.yaml`** exists on the host (for reference; the **container** uses compose `environment` for DB/embeddings).
-- **`mcp-config-http-clients.sh`** writes:
+`mcp-config-http-clients.sh` writes:
 
 | File | Purpose |
 | --- | --- |
-| **`~/.librarian/mcp-http-librarian.json`** | SSE URL (default **`http://localhost:8000/sse`**) |
-| **`~/.librarian/mcp-streamable-librarian.json`** | Alternate URL for **streamable-http** clients (default **`http://localhost:8000/mcp`**) |
+| **`~/.librarian/mcp-http-librarian.json`** | SSE URL (`http://localhost:8000/sse`) |
+| **`~/.librarian/mcp-streamable-librarian.json`** | Alternate streamable-http URL |
 
-Override the SSE base URL:
+### Every time you work
+
+```bash
+cd /path/to/librarian
+./scripts/start-stack.sh   # start
+./scripts/stop-stack.sh    # stop
+```
+
+### Point Antigravity at the HTTP server
+
+Merge the `mcpServers` entry from `~/.librarian/mcp-http-librarian.json` into `~/.gemini/antigravity/mcp_config.json`, or use the URL directly: **`http://localhost:8000/sse`**.
+
+Override the SSE URL:
 
 ```bash
 LIBRARIAN_SSE_URL=https://your-host:8000/sse ./scripts/mcp-config-http-clients.sh
 ```
 
-Override streamable URL:
-
-```bash
-LIBRARIAN_STREAMABLE_HTTP_URL=https://your-host:8000/mcp ./scripts/mcp-config-http-clients.sh
-```
-
-Output directory:
-
-```bash
-LIBRARIAN_MCP_SNIPPET_DIR=/tmp/librarian-mcp ./scripts/mcp-config-http-clients.sh
-```
-
-## Every time you work
-
-Start (or ensure) the stack is up:
-
-```bash
-cd /path/to/librarian
-./scripts/start-stack.sh
-```
-
-Stop:
-
-```bash
-./scripts/stop-stack.sh
-```
-
-No need to run a separate MCP bash process for HTTP clients: the **librarian** container serves MCP over HTTP.
-
-## Point Gemini / Antigravity at the server
-
-Exact UI and config file paths change between products and versions. Use the generated JSON as the source of truth:
-
-1. Open **`~/.librarian/mcp-http-librarian.json`**.
-1. Merge the `mcpServers` entry into your client’s MCP configuration, **or** set the server URL to **`http://localhost:8000/sse`** (or your published host/port).
-
-If the client fails to connect:
-
-- Try **`streamable-http`** and the URL in **`mcp-streamable-librarian.json`**.
-- Confirm the port is reachable (firewall, Docker publish, reverse proxy).
-- For **remote** Antigravity, replace `localhost` with a tunnel or public hostname.
-
-## Run HTTP MCP on the host (without Docker librarian service)
-
-```bash
-export LIBRARIAN_SERVER_TRANSPORT=sse
-export LIBRARIAN_CONFIG=/path/to/librarian.config.yaml
-uv run python -m src --transport sse
-```
-
-Ensure **`librarian.config.yaml`** matches your MongoDB and embedding setup.
+---
 
 ## Troubleshooting
 
-- **404 on `/sse` or `/mcp`**: Check FastMCP / version for the exact path; try the other snippet file.
-- **Connection reset**: Confirm **`LIBRARIAN_SERVER_TRANSPORT`** is **`sse`** (or **`streamable-http`**) for the process you are hitting, not **stdio**.
-- **TLS termination**: Put HTTPS on a reverse proxy and set **`LIBRARIAN_SSE_URL`** to the public **`https://.../sse`** URL when regenerating snippets.
+| Symptom | Fix |
+| --- | --- |
+| `Missing required config: [database.uri]` | `LIBRARIAN_CONFIG` env var is not set or points to wrong file |
+| `ModuleNotFoundError: sentence_transformers` | Use `provider: ollama` in config (or `uv pip install sentence-transformers`) |
+| Ollama embedding error | Ensure Ollama is running (`ollama serve`) and model is pulled (`ollama pull nomic-embed-text`) |
+| All search scores `1.00` | Old tomes stored with dummy embeddings — delete `~/.librarian_mcp/tomes/*.json` and re-ingest |
+| HTTP 404 on `/sse` | Try `/mcp` endpoint (streamable-http); check FastMCP version |
+| Connection reset | Confirm `LIBRARIAN_SERVER_TRANSPORT=sse` (not `stdio`) for the HTTP process |

@@ -169,6 +169,9 @@ class StubResearchJobRepository(ResearchJobRepository):
     def all_jobs(self) -> list[ResearchJob]:
         return list(self._jobs.values())
 
+    def close(self) -> None:
+        pass
+
 
 def make_stub_ingestor(
     *,

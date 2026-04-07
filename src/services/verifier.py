@@ -89,12 +89,13 @@ class Verifier:
         if not results:
             return self._config.verification.mock_confidence
 
+        impact = {
+            VerificationVerdict.SUPPORTED: 0.12,
+            VerificationVerdict.CONTRADICTED: -0.22,
+        }
         score = 0.5
         for r in results:
-            if r.verdict == VerificationVerdict.SUPPORTED:
-                score += 0.12
-            elif r.verdict == VerificationVerdict.CONTRADICTED:
-                score -= 0.22
+            score += impact.get(r.verdict, 0.0)
         return max(0.0, min(1.0, score))
 
     def _make_offline_result(self) -> VerificationResult:
