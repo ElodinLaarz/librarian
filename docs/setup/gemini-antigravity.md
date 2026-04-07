@@ -1,12 +1,8 @@
 # Gemini CLI / Antigravity — Librarian MCP Setup
 
-Antigravity connects to the Librarian via **`stdio`** transport — no Docker or HTTP server needed. The MCP process is launched automatically by Antigravity using `uv run`.
+Gemini CLI and Antigravity connect to the Librarian via **`stdio`** transport — no Docker or HTTP server needed. The MCP process is launched automatically using `uv run`.
 
-## Option A — Local (no Docker, recommended for Antigravity)
-
-This uses the filesystem storage backend and Ollama for embeddings. Tomes are persisted to `~/.librarian_mcp/` and are accessible to any agent on the machine.
-
-### Prerequisites
+## Prerequisites
 
 | Requirement | Notes |
 | --- | --- |
@@ -14,7 +10,7 @@ This uses the filesystem storage backend and Ollama for embeddings. Tomes are pe
 | [Ollama](https://ollama.com) | Local embedding inference |
 | `nomic-embed-text` model | Pulled via `ollama pull` |
 
-### First-time setup
+## First-time setup
 
 ```bash
 # 1. Clone and install dependencies
@@ -25,70 +21,53 @@ uv sync
 # 2. Pull the embedding model
 ollama pull nomic-embed-text
 
-# 3. The local config already exists at config/local-fs.yaml
-#    (uses file:///~/.librarian_mcp storage + Ollama embeddings)
+# 3. Initialize config (creates librarian.config.yaml)
+./scripts/init-config.sh
+```
 
-# 4. Register the MCP in Antigravity
-#    ~/.gemini/antigravity/mcp_config.json should contain:
-cat > ~/.gemini/antigravity/mcp_config.json << 'EOF'
+## Option A — Gemini CLI (recommended)
+
+Use the built-in `mcp add` command to register the librarian. This automatically updates your `.gemini/settings.json` (project) or `~/.gemini/settings.json` (user).
+
+### Register the MCP
+
+```bash
+# In the librarian repo root:
+gemini mcp add librarian uv -e LIBRARIAN_CONFIG=$(pwd)/librarian.config.yaml -- run python -m src
+```
+
+*Note: Use `--scope user` if you want it to be available in all projects.*
+
+## Option B — Antigravity / Manual Registration
+
+Register the MCP in Antigravity or manually edit your `~/.gemini/settings.json` or `~/.gemini/antigravity/mcp_config.json`:
+
+```json
 {
   "mcpServers": {
     "librarian": {
       "command": "uv",
       "args": ["run", "python", "-m", "src"],
       "env": {
-        "LIBRARIAN_CONFIG": "/path/to/librarian/config/local-fs.yaml"
+        "LIBRARIAN_CONFIG": "/path/to/librarian/librarian.config.yaml"
       },
       "cwd": "/path/to/librarian"
     }
   }
 }
-EOF
 ```
 
 Replace `/path/to/librarian` with the actual repo path (e.g. `/home/elodin/github/librarian`).
 
-### Storage layout
+---
 
-```
-~/.librarian_mcp/
-├── tomes/          ← one JSON file per Tome (searchable by all agents)
-└── research_jobs/  ← async research job state
-```
-
-### Verify it works
-
-```bash
-cd /path/to/librarian
-LIBRARIAN_CONFIG=config/local-fs.yaml uv run python -c "
-import asyncio
-from src.config import LibrarianConfig
-from src.server import LibrarianServer
-from src.services.ingestor import IngestCallOptions
-
-config = LibrarianConfig.from_yaml('config/local-fs.yaml')
-
-async def smoke_test():
-    server = LibrarianServer(config)
-    async with server.lifespan(server.mcp):
-        result = await server.ingestor.ingest('Hello from Librarian!', IngestCallOptions(skip_verify=True))
-        print('status:', result.status, '| tomes:', len(result.tomes))
-        hits = await server.tome_repo.search('Hello', top_k=1, min_confidence=0.0)
-        print('search hit:', hits[0][0].summary if hits else 'none')
-
-asyncio.run(smoke_test())
-"
-```
-
-______________________________________________________________________
-
-## Option B — Docker + HTTP (SSE/streamable-http)
+## Option C — Docker + HTTP (SSE/streamable-http)
 
 > Use this if you want MongoDB vector search, a shared server, or remote access.
 
 The Docker Compose **`librarian`** service sets **`LIBRARIAN_SERVER_TRANSPORT=sse`** and listens on port **8000**.
 
-### First-time setup
+### Setup
 
 ```bash
 chmod +x scripts/*.sh scripts/lib/common.sh
@@ -96,69 +75,31 @@ chmod +x scripts/*.sh scripts/lib/common.sh
 ./scripts/mcp-config-http-clients.sh
 ```
 
-`mcp-config-http-clients.sh` writes:
-
-| File | Purpose |
-| --- | --- |
-| **`~/.librarian/mcp-http-librarian.json`** | SSE URL (`http://localhost:8000/sse`) |
-| **`~/.librarian/mcp-streamable-librarian.json`** | Alternate streamable-http URL |
-
-### Every time you work
-
-```bash
-cd /path/to/librarian
-./scripts/start-stack.sh   # start
-./scripts/stop-stack.sh    # stop
-```
+`mcp-config-http-clients.sh` writes connection snippets to `~/.librarian/`.
 
 ### Point Antigravity at the HTTP server
 
-Merge the `mcpServers` entry from `~/.librarian/mcp-http-librarian.json` into `~/.gemini/antigravity/mcp_config.json`, or use the URL directly: **`http://localhost:8000/sse`**.
+Merge the `mcpServers` entry from `~/.librarian/mcp-http-librarian.json` into your config, or use the URL directly: **`http://localhost:8000/sse`**.
 
-Override the SSE URL:
-
-```bash
-LIBRARIAN_SSE_URL=https://your-host:8000/sse ./scripts/mcp-config-http-clients.sh
-```
-
-______________________________________________________________________
+---
 
 ## Agent instructions (automatic library integration)
 
-Antigravity reads **`~/.gemini/GEMINI.md`** as persistent agent instructions.
+Antigravity and Gemini CLI read **`~/.gemini/GEMINI.md`** as persistent agent instructions.
 Run the installer after setting up the MCP:
 
 ```bash
 ./scripts/hooks-config-antigravity.sh
 ```
 
-This appends a **Librarian Knowledge Base** section to `~/.gemini/GEMINI.md`
-that instructs Antigravity to:
+This appends a **Librarian Knowledge Base** section to `~/.gemini/GEMINI.md` that instructs the agent to search, research, and ingest tomes automatically.
 
-| Behaviour | When |
-| --- | --- |
-| Search before every new task | Start of each task — before writing code or a plan |
-| Augment every user prompt | On each new message from the user |
-| Consult library when stuck | After multiple failed attempts at the same problem |
-| Ingest newly learned knowledge | Before finishing a response where something non-obvious was discovered |
-
-The script is idempotent — running it twice will not create a duplicate section.
-
-To install instructions for all tools at once:
-
-```bash
-./scripts/hooks-setup.sh
-```
-
-______________________________________________________________________
+---
 
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
-| `Missing required config: [database.uri]` | `LIBRARIAN_CONFIG` env var is not set or points to wrong file |
-| `ModuleNotFoundError: sentence_transformers` | Use `provider: ollama` in config (or `uv pip install sentence-transformers`) |
-| Ollama embedding error | Ensure Ollama is running (`ollama serve`) and model is pulled (`ollama pull nomic-embed-text`) |
-| All search scores `1.00` | Old tomes stored with dummy embeddings — delete `~/.librarian_mcp/tomes/*.json` and re-ingest |
-| HTTP 404 on `/sse` | Try `/mcp` endpoint (streamable-http); check FastMCP version |
-| Connection reset | Confirm `LIBRARIAN_SERVER_TRANSPORT=sse` (not `stdio`) for the HTTP process |
+| `Missing required config` | `LIBRARIAN_CONFIG` env var is not set or points to wrong file |
+| Ollama embedding error | Ensure Ollama is running (`ollama serve`) and model is pulled |
+| Connection reset | Confirm `LIBRARIAN_SERVER_TRANSPORT=sse` (not `stdio`) for HTTP processes |

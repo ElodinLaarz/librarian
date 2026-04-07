@@ -6,7 +6,7 @@ Scripts assume **bash**, **Docker**, **uv**, and **jq** (`brew install jq` / `ap
 | --- | --- |
 | [Cursor](cursor.md) | Stdio MCP from Cursor (project **`.cursor/mcp.json`** or global **`~/.cursor/mcp.json`** via `mcp-config-cursor.sh --global`) |
 | [Claude](claude.md) | Claude Desktop + Claude Code (stdio) |
-| [Gemini / Antigravity](gemini-antigravity.md) | HTTP MCP (SSE / streamable-http) |
+| [Gemini / Antigravity](gemini-antigravity.md) | Stdio (via `gemini mcp add`) or HTTP (SSE / streamable-http) |
 
 ## Quick commands (repo root)
 

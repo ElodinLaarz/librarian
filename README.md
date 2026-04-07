@@ -139,7 +139,17 @@ Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
 }
 ```
 
-### Gemini CLI / Antigravity (HTTP-based)
+### Gemini CLI / Antigravity
+
+Gemini CLI and Antigravity can connect via **`stdio`** (recommended) or **`sse`**.
+
+**Stdio setup (Gemini CLI):**
+
+```bash
+gemini mcp add librarian uv -e LIBRARIAN_CONFIG=$(pwd)/librarian.config.yaml -- run python -m src
+```
+
+**SSE setup (HTTP-based):**
 
 Start the server with SSE transport first:
 
