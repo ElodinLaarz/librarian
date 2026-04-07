@@ -59,7 +59,7 @@ Register the MCP in Antigravity or manually edit your `~/.gemini/settings.json` 
 
 Replace `/path/to/librarian` with the actual repo path (e.g. `/home/elodin/github/librarian`).
 
----
+______________________________________________________________________
 
 ## Option C — Docker + HTTP (SSE/streamable-http)
 
@@ -81,7 +81,7 @@ chmod +x scripts/*.sh scripts/lib/common.sh
 
 Merge the `mcpServers` entry from `~/.librarian/mcp-http-librarian.json` into your config, or use the URL directly: **`http://localhost:8000/sse`**.
 
----
+______________________________________________________________________
 
 ## Agent instructions (automatic library integration)
 
@@ -94,7 +94,7 @@ Run the installer after setting up the MCP:
 
 This appends a **Librarian Knowledge Base** section to `~/.gemini/GEMINI.md` that instructs the agent to search, research, and ingest tomes automatically.
 
----
+______________________________________________________________________
 
 ## Troubleshooting
 
