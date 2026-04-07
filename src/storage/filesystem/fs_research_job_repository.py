@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import contextlib
-import json
 from pathlib import Path
 from uuid import UUID
 
@@ -44,11 +42,17 @@ class FsResearchJobRepository(ResearchJobRepository):
         return ResearchJob.model_validate_json(path.read_text())
 
     def all_jobs(self) -> list[ResearchJob]:
-        """Load all jobs."""
+        """Load all jobs.
+
+        Skips a file on any per-file failure: I/O errors (e.g. permission, missing after
+        glob), JSON parse errors, or schema validation errors.
+        """
         jobs: list[ResearchJob] = []
         for path in self._jobs_dir.glob("*.json"):
-            with contextlib.suppress(json.JSONDecodeError):
+            try:
                 jobs.append(ResearchJob.model_validate_json(path.read_text()))
+            except Exception:
+                continue
         return jobs
 
     def close(self) -> None:
