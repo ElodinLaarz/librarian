@@ -27,20 +27,11 @@ def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
     if provider == "sentence-transformers":
         return SentenceTransformerEmbeddingService(settings)
     if provider == "auto":
-        # First try Sentence Transformers
-        try:
+        import importlib.util
+        if importlib.util.find_spec("sentence_transformers"):
             return SentenceTransformerEmbeddingService(settings)
-        except ImportError:
-            logging.info("sentence-transformers not available, falling back")
-
-        # Then try Ollama
-        try:
-            return OllamaEmbeddingService(settings)
-        except Exception as exc:
-            logging.warning(f"Ollama embeddings unavailable ({exc!s}), using dummy")
-
-        # Finally fallback to dummy
-        return DummyEmbeddingService(settings)
+        # Fallback to Ollama; connectivity will be checked during initialize()
+        return OllamaEmbeddingService(settings)
 
     raise ValueError(f"Unknown embedding provider: {provider}")
 
