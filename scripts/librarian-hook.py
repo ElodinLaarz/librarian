@@ -8,6 +8,7 @@ for injection into the conversation before Claude responds.
 
 Called automatically by Claude Code; never blocks the prompt on error.
 """
+
 from __future__ import annotations
 
 import asyncio

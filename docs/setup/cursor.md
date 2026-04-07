@@ -62,14 +62,14 @@ Run **`mcp-config-cursor.sh`** again (with the same **`--global`** or project mo
 ## Agent rules (automatic library integration)
 
 Cursor has no hook system, so integration is instruction-based via a global
-rules file.  Run the rules installer after setting up the MCP:
+rules file. Run the rules installer after setting up the MCP:
 
 ```bash
 ./scripts/hooks-config-cursor.sh
 ```
 
 This writes **`~/.cursor/rules/librarian.mdc`** with `alwaysApply: true`, which
-Cursor loads in every workspace.  The rule instructs the agent to:
+Cursor loads in every workspace. The rule instructs the agent to:
 
 | Behaviour | When |
 | --- | --- |

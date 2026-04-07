@@ -91,16 +91,16 @@ Each entry includes:
 ## Agent hooks (automatic library integration)
 
 Installing the MCP server makes the tools _available_; hooks make the agent
-_use_ them automatically.  Run the hooks installer after setting up the MCP:
+_use_ them automatically. Run the hooks installer after setting up the MCP:
 
 ```bash
 ./scripts/hooks-config-claude-code.sh
 ```
 
-This merges a `UserPromptSubmit` hook into **`~/.claude/settings.json`**.  On
+This merges a `UserPromptSubmit` hook into **`~/.claude/settings.json`**. On
 every prompt the hook runs `scripts/librarian-hook.py`, which searches the
 library and injects any relevant Tomes as `<librarian_context>` before Claude
-responds.  This covers:
+responds. This covers:
 
 | Behaviour | Mechanism |
 | --- | --- |
