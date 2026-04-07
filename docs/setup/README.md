@@ -4,7 +4,7 @@ Scripts assume **bash**, **Docker**, **uv**, and **jq** (`brew install jq` / `ap
 
 | Guide | Use case |
 | --- | --- |
-| [Cursor](cursor.md) | Stdio MCP from Cursor |
+| [Cursor](cursor.md) | Stdio MCP from Cursor (project **`.cursor/mcp.json`** or global **`~/.cursor/mcp.json`** via `mcp-config-cursor.sh --global`) |
 | [Claude](claude.md) | Claude Desktop + Claude Code (stdio) |
 | [Gemini / Antigravity](gemini-antigravity.md) | HTTP MCP (SSE / streamable-http) |
 
@@ -16,6 +16,7 @@ Scripts assume **bash**, **Docker**, **uv**, and **jq** (`brew install jq` / `ap
 | `./scripts/start-stack.sh [REPO]` | Start Mongo + Ollama + Librarian container (SSE on `:8000`) |
 | `./scripts/stop-stack.sh [REPO]` | `docker compose down` |
 | `./scripts/init-config.sh [REPO]` | Copy `config/librarian.local.template.yaml` → `librarian.config.yaml` if missing |
+| `uv run python scripts/demo_librarian.py` | Offline smoke test: search → ingest → search → research → search (no Docker/API keys) |
 
 Optional first argument **`[REPO]`** is the path to this repository (default: parent of `scripts/`).
 
