@@ -1,5 +1,5 @@
 database:
-  uri: file:///home/elodin/.librarian_mcp
+  uri: file:///~/.librarian_mcp
 
 embedding:
   provider: ollama
