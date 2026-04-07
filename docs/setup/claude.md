@@ -88,6 +88,48 @@ Each entry includes:
 - `cwd`: repository root
 - `env.LIBRARIAN_CONFIG`: path to **`librarian.config.yaml`**
 
+## Agent hooks (automatic library integration)
+
+Installing the MCP server makes the tools _available_; hooks make the agent
+_use_ them automatically.  Run the hooks installer after setting up the MCP:
+
+```bash
+./scripts/hooks-config-claude-code.sh
+```
+
+This merges a `UserPromptSubmit` hook into **`~/.claude/settings.json`**.  On
+every prompt the hook runs `scripts/librarian-hook.py`, which searches the
+library and injects any relevant Tomes as `<librarian_context>` before Claude
+responds.  This covers:
+
+| Behaviour | Mechanism |
+| --- | --- |
+| Search before every new task | `UserPromptSubmit` hook injects context automatically |
+| Augment every user prompt | Same hook — fires on every message |
+| Consult library when stuck | Global `~/.claude/CLAUDE.md` instructs the agent to call `library_search` when blocked |
+| Ingest newly learned knowledge | Same global `CLAUDE.md` — agent calls `library_ingest` before finishing when it discovers something non-obvious |
+
+The `~/.claude/CLAUDE.md` global instructions file is created by the same
+script and persists across all Claude Code sessions.
+
+Custom repo path:
+
+```bash
+./scripts/hooks-config-claude-code.sh /path/to/librarian
+```
+
+Override the settings file:
+
+```bash
+CLAUDE_SETTINGS_JSON=/path/to/settings.json ./scripts/hooks-config-claude-code.sh
+```
+
+To install hooks for all tools at once (Claude Code + Cursor + Antigravity):
+
+```bash
+./scripts/hooks-setup.sh
+```
+
 ## Every time you work (backing services)
 
 ```bash

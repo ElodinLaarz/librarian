@@ -59,6 +59,39 @@ Optional secrets/overrides can live in a repo-root **`.env`** (gitignored); see 
 
 Run **`mcp-config-cursor.sh`** again (with the same **`--global`** or project mode) — **`cwd`** and **`LIBRARIAN_CONFIG`** are absolute paths.
 
+## Agent rules (automatic library integration)
+
+Cursor has no hook system, so integration is instruction-based via a global
+rules file.  Run the rules installer after setting up the MCP:
+
+```bash
+./scripts/hooks-config-cursor.sh
+```
+
+This writes **`~/.cursor/rules/librarian.mdc`** with `alwaysApply: true`, which
+Cursor loads in every workspace.  The rule instructs the agent to:
+
+| Behaviour | When |
+| --- | --- |
+| Search before every new task | Start of each task — before writing code or a plan |
+| Augment every user prompt | On each new message from the user |
+| Consult library when stuck | After multiple failed attempts at the same problem |
+| Ingest newly learned knowledge | Before finishing a response where something non-obvious was discovered |
+
+Custom repo path:
+
+```bash
+./scripts/hooks-config-cursor.sh /path/to/librarian
+```
+
+Override rules directory:
+
+```bash
+CURSOR_RULES_DIR=/path/to/rules ./scripts/hooks-config-cursor.sh
+```
+
+Reload the Cursor window after installing (`Ctrl+Shift+P → Developer: Reload Window`).
+
 ## Every time you work (backing services)
 
 Cursor spawns the MCP process per session, but **MongoDB** (and **Ollama** for the default embedding settings) must be running for ingest/search to work.

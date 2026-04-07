@@ -123,6 +123,35 @@ LIBRARIAN_SSE_URL=https://your-host:8000/sse ./scripts/mcp-config-http-clients.s
 
 ______________________________________________________________________
 
+## Agent instructions (automatic library integration)
+
+Antigravity reads **`~/.gemini/GEMINI.md`** as persistent agent instructions.
+Run the installer after setting up the MCP:
+
+```bash
+./scripts/hooks-config-antigravity.sh
+```
+
+This appends a **Librarian Knowledge Base** section to `~/.gemini/GEMINI.md`
+that instructs Antigravity to:
+
+| Behaviour | When |
+| --- | --- |
+| Search before every new task | Start of each task — before writing code or a plan |
+| Augment every user prompt | On each new message from the user |
+| Consult library when stuck | After multiple failed attempts at the same problem |
+| Ingest newly learned knowledge | Before finishing a response where something non-obvious was discovered |
+
+The script is idempotent — running it twice will not create a duplicate section.
+
+To install instructions for all tools at once:
+
+```bash
+./scripts/hooks-setup.sh
+```
+
+______________________________________________________________________
+
 ## Troubleshooting
 
 | Symptom | Fix |
