@@ -26,11 +26,11 @@ def _load_dotenv() -> None:
             continue
         if "=" not in line:
             continue
-        key, _, value = line.partition("=")
+        key, _, value_raw = line.partition("=")
         key = key.strip()
         if not key:
             continue
-        value = value.strip().strip("'").strip('"')
+        value = value_raw.split("#")[0].strip().strip("'").strip('"')
         os.environ.setdefault(key, value)
 
 
