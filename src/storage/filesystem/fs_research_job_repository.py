@@ -39,7 +39,10 @@ class FsResearchJobRepository(ResearchJobRepository):
         path = self._get_path(job_id)
         if not path.exists():
             return None
-        return ResearchJob.model_validate_json(path.read_text())
+        try:
+            return ResearchJob.model_validate_json(path.read_text())
+        except Exception:
+            return None
 
     def all_jobs(self) -> list[ResearchJob]:
         """Load all jobs.

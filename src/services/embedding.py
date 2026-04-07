@@ -15,23 +15,51 @@ if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 
-def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
-    """Factory to instantiate the correct embedding service based on settings."""
+async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
+    """Factory to instantiate the correct embedding service based on settings.
+
+    In 'auto' mode, it attempts to load SentenceTransformers first, then Ollama,
+    and finally falls back to Dummy embeddings if neither is available or
+    fails to initialize.
+    """
     provider = settings.provider
 
     if provider == "dummy":
-        return DummyEmbeddingService(settings)
-    if provider == "ollama":
-        return OllamaEmbeddingService(settings)
-    if provider == "sentence-transformers":
-        return SentenceTransformerEmbeddingService(settings)
-    if provider == "auto":
-        import importlib.util
+        service = DummyEmbeddingService(settings)
+        await service.initialize()
+        return service
 
-        if importlib.util.find_spec("sentence_transformers"):
-            return SentenceTransformerEmbeddingService(settings)
-        # Fallback to Ollama; connectivity will be checked during initialize()
-        return OllamaEmbeddingService(settings)
+    if provider == "ollama":
+        service = OllamaEmbeddingService(settings)
+        await service.initialize()
+        return service
+
+    if provider == "sentence-transformers":
+        service = SentenceTransformerEmbeddingService(settings)
+        await service.initialize()
+        return service
+
+    if provider == "auto":
+        # 1. Try SentenceTransformers
+        try:
+            service = SentenceTransformerEmbeddingService(settings)
+            await service.initialize()
+            return service
+        except (ImportError, RuntimeError, ModuleNotFoundError):
+            pass
+
+        # 2. Try Ollama
+        try:
+            service = OllamaEmbeddingService(settings)
+            await service.initialize()
+            return service
+        except (httpx.HTTPError, RuntimeError):
+            pass
+
+        # 3. Fallback to Dummy
+        service = DummyEmbeddingService(settings)
+        await service.initialize()
+        return service
 
     raise ValueError(f"Unknown embedding provider: {provider}")
 

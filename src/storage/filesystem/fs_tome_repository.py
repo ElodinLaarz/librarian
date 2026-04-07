@@ -59,7 +59,10 @@ class FsTomeRepository(TomeRepository):
         path = self._get_path(tome_id)
         if not path.exists():
             return None
-        return Tome.model_validate_json(path.read_text())
+        try:
+            return Tome.model_validate_json(path.read_text())
+        except Exception:
+            return None
 
     async def search(
         self,

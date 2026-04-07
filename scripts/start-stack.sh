@@ -49,7 +49,7 @@ if ! docker compose exec -T ollama ollama list >/dev/null 2>&1; then
   exit 1
 fi
 
-if docker compose exec -T ollama ollama list | rg -q "^${MODEL}"; then
+if docker compose exec -T ollama ollama list | grep -q "^${MODEL}"; then
   echo "Ollama model already present: ${MODEL}"
 else
   echo "Pulling Ollama model '${MODEL}' (first run can take several minutes) ..."
@@ -61,7 +61,7 @@ else
   fi
 fi
 
-if ! docker compose exec -T ollama ollama list | rg -q "^${MODEL}"; then
+if ! docker compose exec -T ollama ollama list | grep -q "^${MODEL}"; then
   echo "error: model '${MODEL}' is still missing after pull." >&2
   echo "Inspect logs: docker compose logs --tail=100 ollama" >&2
   exit 1

@@ -60,8 +60,7 @@ async def run_demo() -> None:
             embedding=EmbeddingSettings(provider="dummy", dimensions=32),
         )
 
-        embedding = build_embedding_service(config.embedding)
-        await embedding.initialize()
+        embedding = await build_embedding_service(config.embedding)
 
         tome_repo = FsTomeRepository(config.database, embedding)
         job_repo = FsResearchJobRepository(config.database)

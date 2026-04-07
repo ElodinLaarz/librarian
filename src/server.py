@@ -77,8 +77,7 @@ class LibrarianServer:
     @asynccontextmanager
     async def lifespan(self, _server_mcp: FastMCP) -> AsyncIterator[None]:
         """Initialise and tear down services around the server lifetime."""
-        self._embedding_service = build_embedding_service(self.config.embedding)
-        await self._embedding_service.initialize()
+        self._embedding_service = await build_embedding_service(self.config.embedding)
 
         if self.config.database.uri.startswith("mongodb"):
             self.tome_repo = MongoTomeRepository(self.config.database, self._embedding_service)
