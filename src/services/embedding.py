@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -13,6 +14,9 @@ from src.config import EmbeddingSettings
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
+
+
+logger = logging.getLogger(__name__)
 
 
 async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
@@ -46,16 +50,22 @@ async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingServi
             service = SentenceTransformerEmbeddingService(settings)
             await service.initialize()
             return service
-        except (ImportError, RuntimeError, ModuleNotFoundError):
-            pass
+        except Exception as exc:
+            logger.warning(
+                "SentenceTransformers initialization failed, falling back to Ollama: %s",
+                exc,
+            )
 
         # 2. Try Ollama
         try:
             service = OllamaEmbeddingService(settings)
             await service.initialize()
             return service
-        except (httpx.HTTPError, RuntimeError):
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Ollama initialization failed, falling back to dummy: %s",
+                exc,
+            )
 
         # 3. Fallback to Dummy
         service = DummyEmbeddingService(settings)

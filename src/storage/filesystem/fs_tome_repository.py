@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -41,26 +42,41 @@ class FsTomeRepository(TomeRepository):
     def _get_path(self, tome_id: UUID) -> Path:
         return self._tomes_dir / f"{tome_id}.json"
 
+    def _read_all_tomes_sync(self) -> list[Tome]:
+        """Synchronous helper to scan and read all Tomes from disk."""
+        tomes: list[Tome] = []
+        for path in self._tomes_dir.glob("*.json"):
+            try:
+                tome = Tome.model_validate_json(path.read_text())
+                tomes.append(tome)
+            except Exception:
+                continue
+        return tomes
+
     async def insert(self, tome: Tome) -> UUID:
         """Save a Tome as a JSON file."""
-        self._get_path(tome.id).write_text(tome.model_dump_json(indent=2))
+        path = self._get_path(tome.id)
+        await asyncio.to_thread(path.write_text, tome.model_dump_json(indent=2))
         return tome.id
 
     async def delete(self, tome_id: UUID) -> bool:
         """Deletes a Tome by ID. Returns True if a file was removed."""
         path = self._get_path(tome_id)
-        if not path.exists():
+        exists = await asyncio.to_thread(path.exists)
+        if not exists:
             return False
-        path.unlink()
+        await asyncio.to_thread(path.unlink)
         return True
 
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Read a Tome from its JSON file."""
         path = self._get_path(tome_id)
-        if not path.exists():
+        exists = await asyncio.to_thread(path.exists)
+        if not exists:
             return None
         try:
-            return Tome.model_validate_json(path.read_text())
+            content = await asyncio.to_thread(path.read_text)
+            return Tome.model_validate_json(content)
         except Exception:
             return None
 
@@ -85,12 +101,9 @@ class FsTomeRepository(TomeRepository):
             pass
 
         results: list[tuple[Tome, float]] = []
-        for path in self._tomes_dir.glob("*.json"):
-            try:
-                tome = Tome.model_validate_json(path.read_text())
-            except Exception:
-                continue
+        all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
 
+        for tome in all_tomes:
             if tome.confidence < min_confidence:
                 continue
             if category is not None and tome.category != category:
@@ -111,11 +124,10 @@ class FsTomeRepository(TomeRepository):
             return []
         tome_vec = np.array(tome.embedding, dtype=np.float64)
         duplicates: list[Tome] = []
-        for path in self._tomes_dir.glob("*.json"):
-            try:
-                existing = Tome.model_validate_json(path.read_text())
-            except Exception:
-                continue
+
+        all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
+
+        for existing in all_tomes:
             if existing.id == tome.id or existing.embedding is None:
                 continue
             sim = _cosine_similarity(tome_vec, np.array(existing.embedding, dtype=np.float64))

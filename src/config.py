@@ -151,7 +151,13 @@ class LibrarianConfig(BaseSettings):
 
         # Load YAML if it exists
         if path.exists():
-            raw = yaml.safe_load(path.read_text()) or {}
+            raw = yaml.safe_load(path.read_text())
+            if raw is None:
+                raw = {}
+            if not isinstance(raw, dict):
+                raise ValueError(
+                    f"YAML root in {path} must be a mapping, got {type(raw).__name__}"
+                )
 
         validated_sections = {}
         errors = []

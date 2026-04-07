@@ -20,7 +20,7 @@ def repo(tmp_path: Path) -> FsResearchJobRepository:
 
 
 def test_all_jobs_skips_invalid_json(repo: FsResearchJobRepository, tmp_path: Path) -> None:
-    jobs_dir = tmp_path / "research_jobs"
+    jobs_dir = repo._jobs_dir
     (jobs_dir / "bad.json").write_text("not json {")
     good_id = uuid.uuid4()
     good = ResearchJob(id=good_id, topic="ok")
@@ -33,7 +33,7 @@ def test_all_jobs_skips_invalid_json(repo: FsResearchJobRepository, tmp_path: Pa
 def test_all_jobs_skips_valid_json_schema_mismatch(
     repo: FsResearchJobRepository, tmp_path: Path
 ) -> None:
-    jobs_dir = tmp_path / "research_jobs"
+    jobs_dir = repo._jobs_dir
     (jobs_dir / "wrong-shape.json").write_text('{"foo": true}')
     good_id = uuid.uuid4()
     good = ResearchJob(id=good_id, topic="ok")
@@ -47,7 +47,7 @@ def test_all_jobs_skips_when_read_raises_os_error(
     repo: FsResearchJobRepository, tmp_path: Path
 ) -> None:
     """Simulates unreadable file or delete-between-glob-and-read without crashing."""
-    jobs_dir = tmp_path / "research_jobs"
+    jobs_dir = repo._jobs_dir
     bad = jobs_dir / "unreadable.json"
     bad.write_text("{}")
     good_id = uuid.uuid4()

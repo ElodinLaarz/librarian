@@ -16,5 +16,8 @@ def resolve_base_path(uri: str) -> Path:
     if uri in ("localhost", ""):
         return Path.home() / ".librarian_mcp"
     if uri.startswith("file://"):
-        return Path(uri[7:]).expanduser()
+        path_str = uri[7:]
+        if path_str.startswith("/~"):
+            path_str = path_str[1:]
+        return Path(path_str).expanduser()
     return Path(uri).expanduser()

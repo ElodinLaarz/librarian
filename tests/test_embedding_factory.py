@@ -53,7 +53,44 @@ async def test_build_embedding_service_auto_fallback_to_dummy():
 
                 service = await build_embedding_service(settings)
 
-                assert service == mock_dummy_instance
-                mock_st_instance.initialize.assert_called_once()
-                mock_ollama_instance.initialize.assert_called_once()
-                mock_dummy_instance.initialize.assert_called_once()
+            assert service == mock_dummy_instance
+            mock_st_instance.initialize.assert_called_once()
+            mock_ollama_instance.initialize.assert_called_once()
+            mock_dummy_instance.initialize.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_build_embedding_service_auto_fallback_on_value_error_and_os_error():
+    settings = EmbeddingSettings(provider="auto", dimensions=384)
+
+    # 1. Test SentenceTransformers falling back on ValueError
+    with patch("src.services.embedding.SentenceTransformerEmbeddingService") as mock_st:
+        mock_st_instance = mock_st.return_value
+        mock_st_instance.initialize = AsyncMock(side_effect=ValueError("Bad model name"))
+
+        # Mock OllamaEmbeddingService to succeed
+        with patch("src.services.embedding.OllamaEmbeddingService") as mock_ollama:
+            mock_ollama_instance = mock_ollama.return_value
+            mock_ollama_instance.initialize = AsyncMock()
+
+            service = await build_embedding_service(settings)
+
+            assert service == mock_ollama_instance
+            mock_st_instance.initialize.assert_called_once()
+            mock_ollama_instance.initialize.assert_called_once()
+
+    # 2. Test SentenceTransformers falling back on OSError
+    with patch("src.services.embedding.SentenceTransformerEmbeddingService") as mock_st:
+        mock_st_instance = mock_st.return_value
+        mock_st_instance.initialize = AsyncMock(side_effect=OSError("Network issue"))
+
+        # Mock OllamaEmbeddingService to succeed
+        with patch("src.services.embedding.OllamaEmbeddingService") as mock_ollama:
+            mock_ollama_instance = mock_ollama.return_value
+            mock_ollama_instance.initialize = AsyncMock()
+
+            service = await build_embedding_service(settings)
+
+            assert service == mock_ollama_instance
+            mock_st_instance.initialize.assert_called_once()
+            mock_ollama_instance.initialize.assert_called_once()

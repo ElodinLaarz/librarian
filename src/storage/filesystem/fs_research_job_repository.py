@@ -16,7 +16,7 @@ class FsResearchJobRepository(ResearchJobRepository):
     """
 
     def __init__(self, settings: DatabaseSettings) -> None:
-        self._jobs_dir = resolve_base_path(settings.uri) / "research_jobs"
+        self._jobs_dir = resolve_base_path(settings.uri) / settings.jobs_collection
         self._jobs_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_path(self, job_id: UUID) -> Path:
