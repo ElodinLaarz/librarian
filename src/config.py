@@ -30,7 +30,13 @@ def _load_dotenv() -> None:
         key = key.strip()
         if not key:
             continue
-        value = value_raw.split("#")[0].strip().strip("'").strip('"')
+        v = value_raw.strip()
+        if v.startswith('"'):
+            value = v[1:].partition('"')[0]
+        elif v.startswith("'"):
+            value = v[1:].partition("'")[0]
+        else:
+            value = v.partition("#")[0].strip()
         os.environ.setdefault(key, value)
 
 
