@@ -21,7 +21,7 @@ REPO="$(librarian_repo_root "${REPO_ARG}")"
 STDIO_ENTRY="$(jq -n \
   --arg cwd "$REPO" \
   --arg cfg "$REPO/librarian.config.yaml" \
-  '{command: "uv", args: ["run", "python", "-m", "src"], cwd: $cwd, env: {LIBRARIAN_CONFIG: $cfg}}')"
+  '{command: "uv", args: ["--directory", $cwd, "--quiet", "run", "python", "-m", "src"], cwd: $cwd, env: {LIBRARIAN_CONFIG: $cfg, PYTHONUNBUFFERED: "1"}}')"
 
 if [[ "$GLOBAL" -eq 1 ]]; then
   OUT="${CURSOR_MCP_JSON:-$HOME/.cursor/mcp.json}"

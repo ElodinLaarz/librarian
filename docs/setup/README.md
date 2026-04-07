@@ -21,3 +21,19 @@ Scripts assume **bash**, **Docker**, **uv**, and **jq** (`brew install jq` / `ap
 Optional first argument **`[REPO]`** is the path to this repository (default: parent of `scripts/`).
 
 `librarian.config.yaml` is gitignored; the template lives at `config/librarian.local.template.yaml`.
+
+## Ollama model setup
+
+The first run may need to pull a large Ollama image/model. Manual commands:
+
+```bash
+docker compose up -d ollama
+docker compose exec -T ollama ollama pull nomic-embed-text
+docker compose exec -T ollama ollama list
+```
+
+If startup fails, check:
+
+```bash
+docker compose logs --tail=100 ollama
+```
