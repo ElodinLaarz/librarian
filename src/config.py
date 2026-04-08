@@ -11,13 +11,26 @@ from src.models.enums import LogLevel
 
 
 def _load_dotenv() -> None:
-    """Merge ``Path.cwd()/.env`` into the process env (does not override existing keys).
+    """Merge ``.env`` into the process env (does not override existing keys).
 
-    Pydantic's per-model ``env_file`` applies the whole file to every nested
-    ``BaseSettings`` section, which breaks prefix scoping; loading once here
-    matches normal dotenv behavior. See ``.env.example``.
+    Searches for ``.env`` in the current working directory, then upwards from
+    the location of this file. See ``.env.example``.
     """
+    # 1. Try CWD
     path = Path.cwd() / ".env"
+    
+    # 2. Try upwards from this file's directory
+    if not path.is_file():
+        current = Path(__file__).resolve().parent
+        for _ in range(5):  # Look up to 5 levels up
+            candidate = current / ".env"
+            if candidate.is_file():
+                path = candidate
+                break
+            if current.parent == current:  # Root reached
+                break
+            current = current.parent
+
     if not path.is_file():
         return
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -151,7 +164,18 @@ class LibrarianConfig(BaseSettings):
 
         # Load YAML if it exists
         if path.exists():
-            raw = yaml.safe_load(path.read_text())
+            content = path.read_text(encoding="utf-8")
+            # Basic env var interpolation: ${VAR} or ${VAR:-default}
+            import re
+
+            def _replace_env(match: re.Match[str]) -> str:
+                var = match.group(1)
+                default = match.group(2) if match.group(2) else ""
+                return os.environ.get(var, default)
+
+            # Match ${VAR} or ${VAR:-default}
+            content = re.sub(r"\${([^}:-]+)(?::-(.*?))?}", _replace_env, content)
+            raw = yaml.safe_load(content)
             if raw is None:
                 raw = {}
             if not isinstance(raw, dict):

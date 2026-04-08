@@ -31,7 +31,25 @@ class Tome(BaseModel):
 
     embedding: Annotated[NDArray[np.float32] | None, SkipJsonSchema()] = Field(default=None)
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(microsecond=0))
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def validate_created_at(cls, v: object) -> datetime:
+        if isinstance(v, str):
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        elif isinstance(v, datetime):
+            dt = v
+        else:
+            raise TypeError("created_at must be a datetime object or ISO string")
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.replace(microsecond=0)
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     @field_serializer("embedding")
     def serialize_embedding(self, v: NDArray[np.float32] | None) -> list[float] | None:

@@ -26,7 +26,12 @@ echo "==> Installing Librarian instructions for Antigravity…"
 "$ROOT/scripts/hooks-config-antigravity.sh"
 
 echo ""
+echo "==> Installing Librarian hooks for Gemini CLI…"
+"$ROOT/scripts/hooks-config-gemini.sh" "$REPO"
+
+echo ""
 echo "All hooks installed. Summary:"
 echo "  Claude Code  ~/.claude/settings.json  (UserPromptSubmit hook)"
 echo "  Cursor       ~/.cursor/rules/librarian.mdc"
 echo "  Antigravity  ~/.gemini/GEMINI.md"
+echo "  Gemini CLI   ~/.gemini/settings.json (AfterAgent/AfterTool hooks)"
