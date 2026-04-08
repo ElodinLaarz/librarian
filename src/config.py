@@ -16,13 +16,17 @@ def _load_dotenv() -> None:
     Searches for ``.env`` in the current working directory, then upwards from
     the location of this file. See ``.env.example``.
     """
+    if os.environ.get("LIBRARIAN_SKIP_DOTENV"):
+        return
+
     # 1. Try CWD
     path = Path.cwd() / ".env"
 
     # 2. Try upwards from this file's directory
     if not path.is_file():
+        max_depth = 5
         current = Path(__file__).resolve().parent
-        for _ in range(5):  # Look up to 5 levels up
+        for _ in range(max_depth):
             candidate = current / ".env"
             if candidate.is_file():
                 path = candidate

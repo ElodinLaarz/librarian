@@ -1,5 +1,6 @@
 import argparse
 
+from src.config import _load_dotenv
 from src.server import _server, mcp
 
 _TRANSPORTS = ("stdio", "sse", "streamable-http")
@@ -19,6 +20,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    _load_dotenv()
     transport = args.transport or _server.config.server.transport
     mcp.run(transport=transport)  # type: ignore[arg-type]
 

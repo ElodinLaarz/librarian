@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
 
 from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
+
+# Disable automatic .env loading during tests to prevent leakage from the repo root
+os.environ["LIBRARIAN_SKIP_DOTENV"] = "1"
 from src.services.embedding import OllamaEmbeddingService
 from tests.stubs import StubEmbeddingService, StubIngestor, StubTomeRepository, StubVerifier
 

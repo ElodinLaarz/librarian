@@ -64,6 +64,8 @@ def test_dotenv_supplies_database_when_yaml_section_empty(
     )
     (tmp_path / "cfg.yml").write_text("database: {}\n")
     monkeypatch.chdir(tmp_path)
+    # Re-enable for this specific test
+    monkeypatch.delenv("LIBRARIAN_SKIP_DOTENV", raising=False)
     cfg = LibrarianConfig.from_yaml(tmp_path / "cfg.yml")
     assert cfg.database.uri == "mongodb://envfile-test:27017"
     assert cfg.database.tls is False
