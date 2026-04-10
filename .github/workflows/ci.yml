@@ -48,4 +48,4 @@ jobs:
       - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
       - run: uv run pytest
         env:
-          MONGODB_URI: mongodb://localhost:27017
+          LIBRARIAN_DATABASE_URI: mongodb://localhost:27017

@@ -55,20 +55,22 @@ async def _get_repo_and_ingestor():
     try:
         from src.config import LibrarianConfig
         from src.services.embedding import build_embedding_service
-        from src.storage.tome_repository import TomeRepository
         from src.services.ingestor import Ingestor
         from src.services.verifier import Verifier
         from src.services.web_search import build_web_search_client
+        from src.storage.tome_repository import TomeRepository
 
         config = LibrarianConfig.from_yaml(config_path)
         embedding_service = await build_embedding_service(config.embedding)
 
         if config.database.uri.startswith("mongodb"):
             from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
+
             repo: TomeRepository = MongoTomeRepository(config.database, embedding_service)
             await repo.ensure_indexes()  # type: ignore[attr-defined]
         else:
             from src.storage.filesystem.fs_tome_repository import FsTomeRepository
+
             repo = FsTomeRepository(config.database, embedding_service)
 
         web_client = build_web_search_client(config)
@@ -102,14 +104,14 @@ async def _ingest(content: str, source_url: str | None = None) -> bool:
         return False
 
     try:
-        from src.services.ingestor import IngestCallOptions
         from src.models.enums import IngestStatus
+        from src.services.ingestor import IngestCallOptions
 
         # We skip verification for auto-ingest hooks to avoid side-effects/latency
         # unless the content is very long or specifically requested.
         opts = IngestCallOptions(skip_verify=True, source_url=source_url)
         result = await ingestor.ingest(content, opts)
-        
+
         if result.status in (IngestStatus.STORED, IngestStatus.PARTIAL):
             print(f"librarian-hook: Auto-ingested {len(result.tomes)} tomes.", file=sys.stderr)
             return True
@@ -120,6 +122,7 @@ async def _ingest(content: str, source_url: str | None = None) -> bool:
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
 
 def handle_claude_code(data: dict) -> None:
     prompt = (data.get("prompt") or "").strip()
@@ -148,19 +151,19 @@ def handle_claude_code(data: dict) -> None:
 def handle_gemini_cli(data: dict, event: str) -> None:
     # Always output JSON to stdout for Gemini CLI
     output = {}
-    
+
     try:
         if event == "AfterAgent":
             # Auto-ingest the agent's response if it seems informative
             response = (data.get("prompt_response") or "").strip()
             if len(response) > 100:
                 asyncio.run(_ingest(response))
-        
+
         elif event == "AfterTool":
             # Auto-ingest when memory-related tools are called
             tool_name = data.get("tool_name")
             tool_input = data.get("tool_input", {})
-            
+
             if tool_name == "save_memory":
                 fact = tool_input.get("fact")
                 if fact:
@@ -171,7 +174,7 @@ def handle_gemini_cli(data: dict, event: str) -> None:
 
     except Exception as exc:
         print(f"librarian-hook gemini: {exc}", file=sys.stderr)
-    
+
     print(json.dumps(output))
 
 

@@ -18,7 +18,7 @@ def _load_dotenv() -> None:
     """
     # 1. Try CWD
     path = Path.cwd() / ".env"
-    
+
     # 2. Try upwards from this file's directory
     if not path.is_file():
         current = Path(__file__).resolve().parent
