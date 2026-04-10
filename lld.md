@@ -4,9 +4,9 @@
 
 | | |
 | ----------- | ------------ |
-| **Version** | 0.3 (Draft) |
+| **Version** | 0.3 |
 | **Date** | March 2026 |
-| **Status** | Design Phase |
+| **Status** | Implemented |
 
 ______________________________________________________________________
 
@@ -18,7 +18,7 @@ ______________________________________________________________________
 1. [API 2 — Repository Layer](#4-api-2--repository-layer)
 1. [User Journeys](#5-user-journeys)
 1. [Error Taxonomy](#6-error-taxonomy)
-1. [Beyond v1 — Research Tool](#7-beyond-v1--research-tool)
+1. [Research Tool](#7-research-tool)
 
 ______________________________________________________________________
 
@@ -31,7 +31,7 @@ ______________________________________________________________________
 └──────────────┬───────────────────┘
                │
                │  ◄── API 1: MCP Protocol (stdio / SSE) ──►
-               │  library_search / library_ingest
+               │  library_search / library_ingest / library_research
                │
                ▼
 ┌──────────────────────────────────┐
@@ -42,22 +42,32 @@ ______________________________________________________________________
            │
            ├── library_search ──► TomeRepository.search(query)
            │
-           └── library_ingest ──► Ingestor
-                                    ├── EmbeddingService
-                                    ├── Verifier
-                                    └── TomeRepository
-                                          │
-                                          ▼
-                                  ┌───────────────────┐
-                                  │  FsTomeRepository  │
-                                  │  ~/.librarian_mcp/ │
-                                  │  tomes/<uuid>.json │
-                                  └───────────────────┘
+           ├── library_ingest ──► Ingestor
+           │                        ├── EmbeddingService
+           │                        ├── Verifier
+           │                        └── TomeRepository
+           │
+           └── library_research ──► Researcher
+                                      ├── WebSearchClient
+                                      ├── Ingestor
+                                      └── ResearchJobRepository
+                                            │
+                                            ▼
+                                    ┌──────────────────────────┐
+                                    │  MongoTomeRepository     │  ← production
+                                    │  Atlas vector + BM25     │
+                                    │  (RRF hybrid search)     │
+                                    ├──────────────────────────┤
+                                    │  FsTomeRepository        │  ← dev / tests
+                                    │  ~/.librarian_mcp/       │
+                                    │  tomes/<uuid>.json       │
+                                    └──────────────────────────┘
 ```
 
 Search is routed directly to `TomeRepository.search`; no separate search
-service. The concrete storage implementation is `FsTomeRepository` (filesystem
-JSON). A MongoDB implementation is planned for a later phase.
+service. The production storage implementation is `MongoTomeRepository` (Atlas
+vector search + lexical BM25 with Reciprocal Rank Fusion). `FsTomeRepository`
+(filesystem JSON) is used for local development and unit tests.
 
 ______________________________________________________________________
 
@@ -458,15 +468,14 @@ versions.
 
 ______________________________________________________________________
 
-## 7. Beyond v1 — Research Tool
+## 7. Research Tool
 
-`library_research` and its supporting infrastructure are deferred to v2. The
-contracts below are provisional; they will be fleshed out once the core search
-and ingest tools are complete and stable.
+`library_research` and its supporting infrastructure are fully implemented.
+The contracts below reflect the current production API.
 
 ______________________________________________________________________
 
-### 7.1 `library_research` (provisional)
+### 7.1 `library_research`
 
 Dispatches a Researcher to search the web, synthesise findings, and pipe
 results through the ingest pipeline as new Tomes.
@@ -498,9 +507,9 @@ status instead of starting a new job.
 
 ______________________________________________________________________
 
-### 7.2 `JobRepository` (provisional)
+### 7.2 `JobRepository`
 
-Source: `src/storage/job_repository.py`
+Source: `src/storage/research_job_repository.py` (abstract); `src/storage/mongo/mongo_research_job_repository.py` (production); `src/storage/filesystem/` (dev/test)
 
 | Method | Signature | Returns | Notes |
 | --------------- | ------------------------------------------------------------ | --------------------- | ------------------------------------------ |
@@ -513,7 +522,7 @@ Source: `src/storage/job_repository.py`
 
 ______________________________________________________________________
 
-### 7.3 Additional errors (v2)
+### 7.3 Additional errors
 
 | Code | Layer | Meaning |
 | ------------------------ | ------------ | ------------------------------------------ |

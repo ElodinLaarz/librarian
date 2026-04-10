@@ -73,11 +73,11 @@ server:
   port: 8000
 ```
 
-Environment variables override YAML using double-underscore nesting:
+Environment variables override YAML using each section's prefix:
 
 ```bash
-LIBRARIAN__DATABASE__URI=mongodb://localhost:27017
-LIBRARIAN__EMBEDDING__PROVIDER=sentence-transformers
+LIBRARIAN_DATABASE_URI=mongodb://localhost:27017
+LIBRARIAN_EMBEDDING_PROVIDER=sentence-transformers
 ```
 
 **4. Run:**

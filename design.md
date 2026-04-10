@@ -6,10 +6,10 @@
 
 | | |
 | ------------ | ---------------------------- |
-| **Version** | 1.0 (Draft) |
+| **Version** | 1.0 |
 | **Date** | March 2026 |
 | **Protocol** | Model Context Protocol (MCP) |
-| **Status** | Design Phase |
+| **Status** | Implemented |
 
 ______________________________________________________________________
 
@@ -279,7 +279,6 @@ ______________________________________________________________________
 | `nomic-embed-text` (Ollama) | 768 | Local (Ollama) | Balanced quality & speed; recommended default | ~30ms |
 | `all-MiniLM-L6-v2` (sentence-transformers) | 384 | Local (Python) | Pure Python; no Ollama required; lighter | ~15ms |
 | `all-mpnet-base-v2` (sentence-transformers) | 768 | Local (Python) | Higher quality; slower; better for dense knowledge | ~60ms |
-| `text-embedding-3-small` (OpenAI) | 1536 | Remote API | Highest quality; requires API key and internet | ~200ms |
 
 ### 6.1 Embedding Cache
 
@@ -318,15 +317,15 @@ The Librarian is configured via `librarian.config.yaml` or environment variables
 ```yaml
 # librarian.config.yaml
 
-mongodb:
+database:
   uri: mongodb://localhost:27017          # or Atlas connection string
   database: librarian
   tomes_collection: tomes
   jobs_collection: research_jobs
 
 embedding:
-  provider: ollama                        # ollama | sentence_transformers | openai
-  model: nomic-embed-text                 # model name per provider
+  provider: ollama                        # ollama | sentence-transformers | dummy
+  model_name: nomic-embed-text            # model name per provider
   dimensions: 768                         # must match vector index
   cache_size: 10000                       # LRU cache entries
 
@@ -338,16 +337,17 @@ search:
 
 verification:
   enabled: true
-  search_api: brave                       # brave | serper | tavily
-  search_api_key: ${SEARCH_API_KEY}
   reject_threshold: 0.3
   store_threshold: 0.7
 
+web_search:
+  provider: brave                         # brave | serper | tavily
+  api_key: ${LIBRARIAN_WEB_SEARCH_API_KEY}
+
 researcher:
-  default_depth: standard                 # shallow | standard | deep
-  max_tomes_per_run: 10
-  max_sources_per_query: 3
-  async_default: false
+  shallow_queries: 3
+  standard_queries: 5
+  deep_queries: 8
 
 server:
   host: 0.0.0.0
@@ -447,9 +447,9 @@ services:
     build: .
     ports: ['8000:8000']
     environment:
-      MONGODB_URI: mongodb://mongo:27017
-      OLLAMA_HOST: http://ollama:11434
-      SEARCH_API_KEY: ${SEARCH_API_KEY}
+      LIBRARIAN_DATABASE_URI: mongodb://mongo:27017
+      LIBRARIAN_EMBEDDING_OLLAMA_URL: http://ollama:11434
+      LIBRARIAN_WEB_SEARCH_API_KEY: ${LIBRARIAN_WEB_SEARCH_API_KEY}
     depends_on: [mongo, ollama]
 
 volumes:
