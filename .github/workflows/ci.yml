@@ -9,8 +9,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv python install 3.11
       - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
       - run: uv run ruff check .
@@ -19,8 +19,8 @@ jobs:
   markdown:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv python install 3.11
       - run: uv sync --extra dev
       - run: git ls-files -z '*.md' | xargs -0 -r uv run mdformat --check
@@ -28,8 +28,8 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv python install 3.11
       - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
       - run: uv run mypy src
@@ -42,8 +42,8 @@ jobs:
         ports:
           - 27017:27017
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv python install 3.11
       - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
       - run: uv run pytest
