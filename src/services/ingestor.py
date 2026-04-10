@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import httpx
+import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -218,13 +221,12 @@ class Ingestor:
         return replacements
 
     async def _reshard(self, blob: str) -> list[str]:
-        """Split blob into atomic, self-contained fact shards.
+        """Split blob into atomic, self-contained fact shards."""
+        if self._config.ingest.use_llm_chunking:
+            llm_shards = await self._reshard_llm(blob)
+            if llm_shards:
+                return llm_shards
 
-        For now, we just split into chunks of ingest.shard_size characters with
-        ingest.shard_overlap overlap, but this should be replaced with LLM-driven
-        decomposition that returns a list of atomic facts within the given
-        character limit.
-        """
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         splitter = RecursiveCharacterTextSplitter(
@@ -232,6 +234,55 @@ class Ingestor:
             chunk_overlap=self._config.ingest.shard_overlap,
         )
         return splitter.split_text(blob)
+
+    async def _reshard_llm(self, blob: str) -> list[str] | None:
+        """Use an LLM agent to decompose text into atomic facts."""
+        base = self._config.ingest.ollama_base_url.rstrip("/")
+        model = self._config.ingest.extraction_model
+        prompt = (
+            "Decompose the following text into a list of atomic, self-contained factual statements or concepts. "
+            "Each statement or concept must contain enough context to be fully understood on its own. "
+            f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
+            "Output JSON only with the shape `{\"facts\": [\"...\", \"...\"]}`.\\n\\nTEXT:\\n"
+            f"{blob[:8000]}"
+        )
+        url = f"{base}/v1/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
+            logging.debug("_reshard_llm HTTP/parse error: %s", exc)
+            return None
+
+        try:
+            message = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return None
+
+        message = message.strip()
+        if message.startswith("```"):
+            message = re.sub(r"^```(?:json)?\\s*", "", message)
+            message = re.sub(r"\\s*```$", "", message)
+
+        try:
+            parsed = json.loads(message)
+            facts = parsed.get("facts") if isinstance(parsed, dict) else None
+            if not isinstance(facts, list):
+                return None
+            out = [str(f).strip() for f in facts if str(f).strip()]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+        if not out:
+            return None
+        return out
 
     async def _classify_and_tag(
         self,

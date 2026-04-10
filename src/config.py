@@ -105,7 +105,7 @@ class VerificationSettings(BaseSettings):
     mock_confidence: float = constants.DEFAULT_MOCK_CONFIDENCE
     noop_confidence: float = constants.DEFAULT_NOOP_CONFIDENCE
     ollama_base_url: str = "http://localhost:11434"
-    claim_model: str = "llama3.2"
+    claim_model: str = "gemma4:e2b"
     use_llm_claims: bool = True
 
 
@@ -118,6 +118,9 @@ class IngestSettings(BaseSettings):
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
+    use_llm_chunking: bool = True
+    extraction_model: str = "gemma4:e2b"
+    ollama_base_url: str = "http://localhost:11434"
 
 
 class ResearcherSettings(BaseSettings):
