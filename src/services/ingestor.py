@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import httpx
 import json
 import logging
 import re
@@ -9,6 +8,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
+
+import httpx
 
 from src import constants
 from src.config import LibrarianConfig
@@ -240,10 +241,11 @@ class Ingestor:
         base = self._config.ingest.ollama_base_url.rstrip("/")
         model = self._config.ingest.extraction_model
         prompt = (
-            "Decompose the following text into a list of atomic, self-contained factual statements or concepts. "
-            "Each statement or concept must contain enough context to be fully understood on its own. "
+            "Decompose the following text into a list of atomic, self-contained factual "
+            "statements or concepts. Each statement or concept must contain enough context "
+            "to be fully understood on its own. "
             f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
-            "Output JSON only with the shape `{\"facts\": [\"...\", \"...\"]}`.\\n\\nTEXT:\\n"
+            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\\n\\nTEXT:\\n'
             f"{blob[:8000]}"
         )
         url = f"{base}/v1/chat/completions"
