@@ -145,3 +145,33 @@ async def test_ollama_embed_real_scores(
     assert sim_related > 0.0
     assert sim_unrelated > 0.0
     assert sim_related > sim_unrelated
+
+
+@pytest.mark.asyncio
+async def test_ollama_embed_raises_on_missing_embeddings_key() -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, object]:
+            return {}
+
+    settings = EmbeddingSettings(
+        provider="ollama",
+        model_name="nomic-embed-text",
+        dimensions=3,
+        cache_size=10,
+    )
+    service = OllamaEmbeddingService(settings)
+
+    async def fake_post(url: str, json: dict[str, object]) -> FakeResponse:
+        assert url == "/api/embed"
+        assert json["input"] == "hello"
+        return FakeResponse()
+
+    service._client.post = fake_post  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="did not include a non-empty 'embeddings' array"):
+        await service.embed("hello")
+
+    await service.aclose()

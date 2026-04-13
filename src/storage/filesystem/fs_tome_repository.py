@@ -2,20 +2,21 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import numpy as np
+from numpy.typing import NDArray
 
-from src.config import DatabaseSettings
+from src.config import DatabaseSettings, TidySettings
 from src.models.tome import Tome
+from src.services.duplicate_detection import build_duplicate_groups
 from src.services.embedding import EmbeddingService
 from src.storage.filesystem.utils import resolve_base_path
-from src.storage.tome_repository import TomeRepository
-
-_DEDUP_SIMILARITY_THRESHOLD = 0.85
+from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+def _cosine_similarity(a: NDArray[np.floating[Any]], b: NDArray[np.floating[Any]]) -> float:
     """Cosine similarity in [-1, 1]. Returns 0.0 if shapes differ or either vector is zero."""
     if a.shape != b.shape:
         return 0.0
@@ -34,8 +35,14 @@ class FsTomeRepository(TomeRepository):
     placeholder 1.0 values.
     """
 
-    def __init__(self, settings: DatabaseSettings, embedding_service: EmbeddingService) -> None:
+    def __init__(
+        self,
+        settings: DatabaseSettings,
+        embedding_service: EmbeddingService,
+        tidy_settings: TidySettings | None = None,
+    ) -> None:
         self._embedding_service = embedding_service
+        self._tidy_settings = tidy_settings or TidySettings()
         self._tomes_dir = resolve_base_path(settings.uri) / settings.tomes_collection
         self._tomes_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,6 +87,14 @@ class FsTomeRepository(TomeRepository):
         except Exception:
             return None
 
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
+        """Retrieve a page of Tomes from the library."""
+        all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
+        # Sort by ID or creation time for deterministic paging?
+        # FsTomeRepository doesn't store created_at in the filename, but Tome model has it.
+        all_tomes.sort(key=lambda x: x.id)
+        return all_tomes[offset : offset + limit]
+
     async def search(
         self,
         query: str,
@@ -93,7 +108,7 @@ class FsTomeRepository(TomeRepository):
         results by cosine similarity to each Tome's stored embedding.
         Tomes without an embedding are still included but scored 0.0.
         """
-        query_vec: np.ndarray | None = None
+        query_vec: NDArray[np.float64] | None = None
         try:
             raw = await self._embedding_service.embed(query)
             query_vec = np.array(raw, dtype=np.float64)
@@ -119,7 +134,7 @@ class FsTomeRepository(TomeRepository):
         return results[:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
-        """Find existing Tomes with cosine similarity above _DEDUP_SIMILARITY_THRESHOLD."""
+        """Find existing Tomes with cosine similarity above the configured tidy threshold."""
         if tome.embedding is None:
             return []
         tome_vec = np.array(tome.embedding, dtype=np.float64)
@@ -131,9 +146,17 @@ class FsTomeRepository(TomeRepository):
             if existing.id == tome.id or existing.embedding is None:
                 continue
             sim = _cosine_similarity(tome_vec, np.array(existing.embedding, dtype=np.float64))
-            if sim >= _DEDUP_SIMILARITY_THRESHOLD:
+            if sim >= self._tidy_settings.threshold:
                 duplicates.append(existing)
         return duplicates
+
+    async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:
+        """Find duplicate groups for tidy-time consolidation."""
+        all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
+        return build_duplicate_groups(
+            all_tomes,
+            self._tidy_settings.model_copy(update={"threshold": threshold}),
+        )
 
     def close(self) -> None:
         pass

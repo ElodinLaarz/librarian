@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import numpy as np
+from numpy.typing import NDArray
 
 from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
 from src.models.enums import VerificationVerdict
@@ -15,7 +16,7 @@ from src.services.ingestor import Ingestor
 from src.services.verifier import ClaimResult, VerificationResult, Verifier
 from src.services.web_search import WebSearchClient, WebSearchResult
 from src.storage.research_job_repository import ResearchJobRepository
-from src.storage.tome_repository import TomeRepository
+from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 
 class StubTomeRepository(TomeRepository):
@@ -30,6 +31,7 @@ class StubTomeRepository(TomeRepository):
     def __init__(self, *, fail_deletes: bool = False) -> None:
         self._tomes: dict[UUID, Tome] = {}
         self._near_duplicates: list[Tome] = []
+        self._duplicate_groups: list[list[Tome]] = []
         self._fail_deletes = fail_deletes
 
     def seed_near_duplicates(self, tomes: list[Tome]) -> None:
@@ -37,6 +39,16 @@ class StubTomeRepository(TomeRepository):
         for t in tomes:
             self._tomes[t.id] = t
         self._near_duplicates = list(tomes)
+        self._duplicate_groups = [list(tomes)]
+
+    def seed_duplicate_groups(self, groups: list[list[Tome]]) -> None:
+        self._duplicate_groups = []
+        for group in groups:
+            hydrated_group: list[Tome] = []
+            for tome in group:
+                self._tomes[tome.id] = tome
+                hydrated_group.append(tome)
+            self._duplicate_groups.append(hydrated_group)
 
     def all_tomes(self) -> list[Tome]:
         return list(self._tomes.values())
@@ -52,6 +64,12 @@ class StubTomeRepository(TomeRepository):
             return False
         del self._tomes[tome_id]
         self._near_duplicates = [t for t in self._near_duplicates if t.id != tome_id]
+        filtered_groups: list[list[Tome]] = []
+        for group in self._duplicate_groups:
+            kept = [tome for tome in group if tome.id != tome_id]
+            if len(kept) > 1:
+                filtered_groups.append(kept)
+        self._duplicate_groups = filtered_groups
         return True
 
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
@@ -74,9 +92,24 @@ class StubTomeRepository(TomeRepository):
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         return list(self._near_duplicates)
 
+    async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:
+        scanned = len(self._tomes)
+        if self._duplicate_groups:
+            return DuplicateScanResult(
+                groups=[list(group) for group in self._duplicate_groups],
+                scanned=scanned,
+            )
+        if self._near_duplicates:
+            return DuplicateScanResult(groups=[list(self._near_duplicates)], scanned=scanned)
+        return DuplicateScanResult(groups=[], scanned=scanned)
+
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
+        return list(self._tomes.values())[offset : offset + limit]
+
     def close(self) -> None:
         self._tomes.clear()
         self._near_duplicates.clear()
+        self._duplicate_groups.clear()
 
 
 class StubEmbeddingService(EmbeddingService):
@@ -88,7 +121,7 @@ class StubEmbeddingService(EmbeddingService):
     async def initialize(self) -> None:
         pass
 
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str) -> NDArray[np.float32]:
         return np.zeros(self._settings.dimensions, dtype=np.float32)
 
 

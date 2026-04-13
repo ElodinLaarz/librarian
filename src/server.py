@@ -17,6 +17,8 @@ from src.models.tool_schemas import (
     ResearchOutput,
     SearchInput,
     SearchOutput,
+    TidyInput,
+    TidyOutput,
 )
 from src.services.embedding import (
     EmbeddingService,
@@ -25,6 +27,7 @@ from src.services.embedding import (
 )
 from src.services.ingestor import IngestCallOptions, Ingestor
 from src.services.researcher import Researcher
+from src.services.tidier import Tidier
 from src.services.verifier import Verifier
 from src.services.web_search import build_web_search_client
 from src.storage.filesystem.fs_research_job_repository import FsResearchJobRepository
@@ -44,6 +47,7 @@ class LibrarianServer:
     def __init__(self, config: LibrarianConfig) -> None:
         self.config = config
         self.ingestor: Ingestor | None = None
+        self.tidier: Tidier | None = None
         self.tome_repo: TomeRepository | None = None
         self.job_repo: ResearchJobRepository | None = None
         self.researcher: Researcher | None = None
@@ -55,7 +59,7 @@ class LibrarianServer:
                 "An intelligent knowledge management server. Use library_search to "
                 "find information, library_ingest to store new knowledge, and "
                 "library_research to gather information from the web when the library "
-                "is thin on a topic."
+                "is thin on a topic. Use library_tidy to consolidate duplicates."
             ),
             lifespan=self.lifespan,
             host=config.server.host,
@@ -80,17 +84,30 @@ class LibrarianServer:
         self._embedding_service = await build_embedding_service(self.config.embedding)
 
         if self.config.database.uri.startswith("mongodb"):
-            self.tome_repo = MongoTomeRepository(self.config.database, self._embedding_service)
+            self.tome_repo = MongoTomeRepository(
+                self.config.database,
+                self._embedding_service,
+                self.config.tidy,
+            )
             self.job_repo = MongoResearchJobRepository(self.config.database)
             await self.tome_repo.ensure_indexes()
         else:
-            self.tome_repo = FsTomeRepository(self.config.database, self._embedding_service)
+            self.tome_repo = FsTomeRepository(
+                self.config.database,
+                self._embedding_service,
+                self.config.tidy,
+            )
             self.job_repo = FsResearchJobRepository(self.config.database)
 
         web_client = build_web_search_client(self.config)
         verifier = Verifier(self.config, web_client)
         self.ingestor = Ingestor(self.config, self._embedding_service, verifier, self.tome_repo)
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
+        self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
+
+        if self.config.tidy.enabled:
+            task = asyncio.create_task(self._tidy_loop())
+            self._track_background_task(task)
 
         yield
 
@@ -107,8 +124,28 @@ class LibrarianServer:
             await self._embedding_service.aclose()
         self._embedding_service = None
         self.ingestor = None
+        self.tidier = None
         self.tome_repo = None
         self.researcher = None
+
+    async def _tidy_loop(self) -> None:
+        """Background loop for library tidying."""
+        while True:
+            try:
+                await asyncio.sleep(self.config.tidy.interval_seconds)
+                if self.tidier:
+                    import logging
+
+                    logging.info("Starting background library tidy...")
+                    report = await self.tidier.run_cleanup()
+                    logging.info("Library tidy complete: %s", report)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                import logging
+
+                logging.error("Exception in background tidy loop", exc_info=True)
+                await asyncio.sleep(60)  # Wait a bit before retrying after error
 
     async def _research_poll(self, job_id: UUID) -> ResearchOutput:
         assert self.job_repo is not None
@@ -223,6 +260,17 @@ class LibrarianServer:
 
             await self.researcher.run_job(job.id)
             return await self._research_poll(job.id)
+
+        @self.mcp.tool()
+        async def library_tidy(params: TidyInput) -> TidyOutput:
+            """Review the library tomes and remove duplicates by combining similar topics."""
+            assert self.tidier is not None, "Server not initialised"
+            report = await self.tidier.run_cleanup(
+                limit=params.limit,
+                threshold=params.threshold,
+                skip_verify=params.skip_verify,
+            )
+            return TidyOutput(**report)
 
 
 _server = LibrarianServer(config)

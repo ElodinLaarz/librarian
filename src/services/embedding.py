@@ -143,11 +143,18 @@ class OllamaEmbeddingService(EmbeddingService):
                 return self._cache[key]
 
         response = await self._client.post(
-            "/api/embeddings",
-            json={"model": self._settings.model_name, "prompt": text},
+            "/api/embed",
+            json={"model": self._settings.model_name, "input": text},
         )
         response.raise_for_status()
-        vector = np.array(response.json()["embedding"], dtype=np.float32)
+        payload = response.json()
+        embeddings = payload.get("embeddings")
+        if not isinstance(embeddings, list) or not embeddings:
+            raise RuntimeError(
+                "Ollama /api/embed response did not include a non-empty 'embeddings' array"
+            )
+
+        vector = np.array(embeddings[0], dtype=np.float32)
 
         async with self._lock:
             if key in self._cache:

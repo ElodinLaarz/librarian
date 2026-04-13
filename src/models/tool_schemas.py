@@ -67,3 +67,30 @@ class ResearchOutput(BaseModel):
     sources: list[str] = Field(default_factory=list)
     query_count: int = 0
     error: str | None = None
+
+
+# ── library.tidy ──────────────────────────────────────────────────
+
+
+class TidyInput(BaseModel):
+    limit: int = Field(default=1000, ge=1, le=10000, description="Max groups to process.")
+    threshold: float = Field(
+        default=0.95,
+        ge=0.5,
+        le=1.0,
+        description="Cosine similarity threshold for semantic duplicate checks.",
+    )
+    skip_verify: bool = Field(
+        default=True,
+        description="Whether to skip verification when rebuilding consolidated tomes.",
+    )
+
+
+class TidyOutput(BaseModel):
+    scanned: int
+    groups_found: int
+    groups_consolidated: int
+    tomes_removed: int
+    failed_groups: int
+    skipped_groups: int
+    elapsed_ms: int

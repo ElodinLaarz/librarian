@@ -113,12 +113,14 @@ class IngestSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_INGEST_")
     shard_size: int = constants.DEFAULT_SHARD_SIZE
     shard_overlap: int = constants.DEFAULT_SHARD_OVERLAP
+    build_concurrency: int = 8
+    write_batch_size: int = 32
     summary_length: int = constants.DEFAULT_SUMMARY_LENGTH
     title_length: int = constants.TITLE_MAX_LENGTH
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
-    use_llm_chunking: bool = True
+    use_llm_chunking: bool = False
     extraction_model: str = "gemma4:e2b"
     ollama_base_url: str = "http://localhost:11434"
 
@@ -132,6 +134,23 @@ class ResearcherSettings(BaseSettings):
     shallow_urls_per_query: int = 2
     standard_urls_per_query: int = 3
     deep_urls_per_query: int = 4
+
+
+class TidySettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIBRARIAN_TIDY_")
+    enabled: bool = True
+    interval_seconds: int = 3600  # Default 1 hour
+    limit_per_run: int = 1000
+    threshold: float = 0.95
+    skip_verify: bool = True
+    group_concurrency: int = 4
+    scan_batch_size: int = 1000
+    max_fact_frequency: int = 32
+    min_shared_facts: int = 2
+    min_fact_overlap: float = 0.8
+    semantic_planes: int = 30
+    semantic_band_size: int = 6
+    semantic_max_bucket_size: int = 256
 
 
 class ServerSettings(BaseSettings):
@@ -153,6 +172,7 @@ class LibrarianConfig(BaseSettings):
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     researcher: ResearcherSettings = Field(default_factory=ResearcherSettings)
+    tidy: TidySettings = Field(default_factory=TidySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod
