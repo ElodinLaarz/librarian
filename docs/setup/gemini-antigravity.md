@@ -5,7 +5,7 @@ Gemini CLI and Antigravity connect to the Librarian via **`stdio`** transport â€
 ## Prerequisites
 
 | Requirement | Notes |
-| --- | --- |
+| -------------------------------- | ------------------------- |
 | [uv](https://docs.astral.sh/uv/) | Python package manager |
 | [Ollama](https://ollama.com) | Local embedding inference |
 | `nomic-embed-text` model | Pulled via `ollama pull` |
@@ -99,7 +99,7 @@ ______________________________________________________________________
 ## Troubleshooting
 
 | Symptom | Fix |
-| --- | --- |
+| ------------------------- | ------------------------------------------------------------------------- |
 | `Missing required config` | `LIBRARIAN_CONFIG` env var is not set or points to wrong file |
 | Ollama embedding error | Ensure Ollama is running (`ollama serve`) and model is pulled |
 | Connection reset | Confirm `LIBRARIAN_SERVER_TRANSPORT=sse` (not `stdio`) for HTTP processes |

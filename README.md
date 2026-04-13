@@ -5,7 +5,7 @@ An MCP server that gives AI agents a persistent, searchable knowledge base. The 
 ## Tools
 
 | Tool | Status | Description |
-| --- | --- | --- |
+| ------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `library.search` | Implemented | Hybrid vector + lexical search over stored tomes, with optional category and confidence filtering |
 | `library.ingest` | Implemented | Chunks content, generates embeddings, deduplicates, and stores tomes; optional `skip_verify`, `category`, `tags`, `source_url` |
 | `library.research` | Implemented | Plans queries (Ollama optional), searches the web, fetches pages, ingests findings; `async: true` returns a `job_id` for polling |
@@ -31,7 +31,7 @@ Set `skip_verify: true` on ingest to bypass (useful for notes or fictional conte
 ## Stack
 
 | Component | Technology |
-| --- | --- |
+| ------------------- | ----------------------------------------------------------------- |
 | MCP Framework | FastMCP (Python) |
 | Database | MongoDB 7.x via `motor` (async) |
 | Vector Search | Atlas Vector Search (cosine similarity) |
@@ -102,7 +102,7 @@ chmod +x scripts/*.sh
 The server supports three transports selectable via `--transport` flag or the `LIBRARIAN_SERVER_TRANSPORT` env var (or `server.transport` in `librarian.config.yaml`):
 
 | Transport | When to use |
-| --- | --- |
+| ----------------- | ----------------------------------------------------------------------------------- |
 | `stdio` (default) | Local clients that spawn the process directly (Claude Code, Claude Desktop, Cursor) |
 | `sse` | HTTP clients that connect to a running server (Gemini, Antigravity, remote setups) |
 | `streamable-http` | Newer HTTP clients that prefer the streamable-http MCP transport |

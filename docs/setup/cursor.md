@@ -72,7 +72,7 @@ This writes **`~/.cursor/rules/librarian.mdc`** with `alwaysApply: true`, which
 Cursor loads in every workspace. The rule instructs the agent to:
 
 | Behaviour | When |
-| --- | --- |
+| ------------------------------ | ---------------------------------------------------------------------- |
 | Search before every new task | Start of each task — before writing code or a plan |
 | Augment every user prompt | On each new message from the user |
 | Consult library when stuck | After multiple failed attempts at the same problem |

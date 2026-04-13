@@ -3,7 +3,7 @@
 ### API Contracts & User Journeys
 
 | | |
-| ----------- | ------------ |
+| ----------- | ----------- |
 | **Version** | 0.3 |
 | **Date** | March 2026 |
 | **Status** | Implemented |
@@ -95,7 +95,7 @@ Retrieves the most semantically relevant Tomes for a natural-language query.
 #### Output — `SearchOutput`
 
 | Field | Type | Description |
-| ------------ | --------- | ---------------------------------------------------------------- |
+| ------------ | --------- | ------------------------------------------------------------- |
 | `tomes` | `Tome[]` | Matching Tome documents, sorted by score descending |
 | `scores` | `float[]` | Similarity scores corresponding to each Tome (parallel array) |
 | `query_id` | `str` | Unique identifier for this search request |
@@ -104,7 +104,7 @@ Retrieves the most semantically relevant Tomes for a natural-language query.
 #### Errors
 
 | Code | When raised |
-| ------------------- | ---------------------------- |
+| ------------------- | --------------------------- |
 | `EMBED_UNAVAILABLE` | Embedding model unreachable |
 
 ______________________________________________________________________
@@ -116,13 +116,13 @@ Validates, embeds, deduplicates, and stores raw text as one or more Tomes.
 #### Input — `IngestInput`
 
 | Field | Type | Required | Notes |
-| --------- | ----- | -------- | ------ |
+| --------- | ----- | -------- | ------------------ |
 | `content` | `str` | Yes | Raw knowledge text |
 
 #### Output — `IngestOutput`
 
 | Field | Type | Description |
-| --------------- | -------------- | ------------------------------------------------------- |
+| --------------- | -------------- | ------------------------------------------------------ |
 | `tomes` | `Tome[]` | Full Tome objects as stored |
 | `status` | `IngestStatus` | One of: `stored`, `rejected`, `partial` |
 | `reject_reason` | `str\|null` | Rejection explanation; non-null when `status=rejected` |
@@ -130,7 +130,7 @@ Validates, embeds, deduplicates, and stores raw text as one or more Tomes.
 #### Errors
 
 | Code | When raised |
-| ------------------- | ------------------------------------------ |
+| ------------------- | ----------------------------------------- |
 | `VERIFY_FAILED` | Confidence below reject threshold (< 0.3) |
 | `EMBED_UNAVAILABLE` | Embedding model unreachable |
 
@@ -141,7 +141,7 @@ ______________________________________________________________________
 Source: `src/models/tome.py`
 
 | Field | Type | Description |
-| ------------- | -------------------- | ---------------------------------------- |
+| ------------- | --------------------- | ---------------------------------------- |
 | `id` | `UUID` | Auto-generated UUID |
 | `title` | `str` | Short descriptive title (max 120 chars) |
 | `content` | `str` | Full text body |
@@ -168,7 +168,7 @@ Abstract base; concrete implementations cover Ollama, sentence-transformers,
 OpenAI. Used by `Ingestor` to embed content before storage and dedup.
 
 | Method | Signature | Returns | Notes |
-| ------------ | ------------- | ----------- | ------------------------------------------ |
+| ------------ | ------------- | ------------ | ------------------------------------------ |
 | `initialize` | `()` | `None` | Load model; warm up provider connection |
 | `embed` | `(text: str)` | `np.ndarray` | Single text; returns from LRU cache if hit |
 
@@ -185,7 +185,7 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 `TomeRepository`
 
 | Method | Signature | Returns | Notes |
-| ----------------------------- | ----------------------------------------- | ------------ | --------------------------------------------------------------- |
+| ----------------------------- | ---------------------------------------- | ------------------ | -------------------------------------------------------------------------------------- |
 | `ingest` | `(blob: str)` | `list[Tome]` | Full pipeline: chunk → per-chunk (classify+summarize+embed) → validate → dedup → store |
 | `_chunk` | `(blob: str)` | `list[str]` | LLM-driven decomposition into atomic, self-contained facts |
 | `_validate` | `(tome: Tome)` | `None` | Post-construction checks; raises on failure |
@@ -247,7 +247,7 @@ class VerificationResult:
 **Confidence thresholds** (from `VerificationSettings`):
 
 | Range | Action |
-| ----------- | ------------------------------------- |
+| --------- | ------------------------------ |
 | ≥ 0.7 | Store with full confidence |
 | 0.3 – 0.7 | Store with low-confidence flag |
 | < 0.3 | Reject; raise `VERIFY_FAILED` |
@@ -269,7 +269,7 @@ ______________________________________________________________________
 Source: `src/storage/tome_repository.py`
 
 | Method | Signature | Returns | Notes |
-| --------------------- | ------------------------------------------------- | -------------------------- | --------------------------------------------------- |
+| ---------------------- | ------------------------------------------------- | -------------------------- | ------------------------------------------------- |
 | `insert` | `(tome: Tome)` | `UUID` | Inserts a new Tome; returns its ID |
 | `delete` | `(tome_id: UUID)` | `bool` | Removes a Tome; `True` if found and deleted |
 | `get_by_id` | `(tome_id: UUID)` | `Tome \| None` | |
@@ -287,7 +287,7 @@ Current concrete implementation. Stores each Tome as a JSON file under
 `DatabaseSettings.uri`).
 
 | Method | Behaviour |
-| --------------------- | ----------------------------------------------------------------- |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
 | `insert` | Writes `<uuid>.json` via `Tome.model_dump_json()` |
 | `delete` | Unlinks `<uuid>.json`; returns `False` if file not found |
 | `get_by_id` | Reads and deserialises `<uuid>.json` |
@@ -457,7 +457,7 @@ All errors use this envelope:
 ```
 
 | Code | Layer | Meaning |
-| ------------------- | --------------- | --------------------------------------------------------------- |
+| -------------------- | -------------- | --------------------------------------------------------- |
 | `EMBED_UNAVAILABLE` | Ingestor | Embedding model unreachable |
 | `VERIFY_FAILED` | Verifier | Confidence below `reject_threshold` (< 0.3) |
 | `DB_UNAVAILABLE` | TomeRepository | Storage backend unreachable or unreadable |
@@ -483,7 +483,7 @@ results through the ingest pipeline as new Tomes.
 #### Input — `ResearchInput`
 
 | Field | Type | Required | Default | Notes |
-| ----------- | --------------- | -------- | ---------- | -------------------------------- |
+| ----------- | --------------- | -------- | ---------- | ------------------------------- |
 | `topic` | `str` | Yes | — | |
 | `context` | `str\|null` | No | `null` | |
 | `depth` | `ResearchDepth` | No | `standard` | `shallow` / `standard` / `deep` |
@@ -497,7 +497,7 @@ status instead of starting a new job.
 #### Output — `ResearchOutput`
 
 | Field | Type | Description |
-| ------------- | ----------- | ------------------------------------------- |
+| ------------- | ----------- | ---------------------------------------------- |
 | `job_id` | `str` | ID of the ResearchJob record |
 | `tome_ids` | `UUID[]` | IDs of Tomes created; empty while in-flight |
 | `tomes` | `Tome[]` | Full Tome objects; empty while in-flight |
@@ -512,7 +512,7 @@ ______________________________________________________________________
 Source: `src/storage/research_job_repository.py` (abstract); `src/storage/mongo/mongo_research_job_repository.py` (production); `src/storage/filesystem/` (dev/test)
 
 | Method | Signature | Returns | Notes |
-| --------------- | ------------------------------------------------------------ | --------------------- | ------------------------------------------ |
+| --------------- | ----------------------------------------------------------- | --------------------- | -------------------------------------- |
 | `create` | `(job: ResearchJob)` | `str` | Returns job ID |
 | `get_by_id` | `(job_id: str)` | `ResearchJob \| None` | |
 | `set_running` | `(job_id: str)` | `None` | Sets `status=running`, `started_at` |
@@ -525,6 +525,6 @@ ______________________________________________________________________
 ### 7.3 Additional errors
 
 | Code | Layer | Meaning |
-| ------------------------ | ------------ | ------------------------------------------ |
+| ------------------------ | ---------- | ------------------------------------------ |
 | `SEARCH_API_UNAVAILABLE` | Researcher | Web search API key missing or rate-limited |
 | `JOB_NOT_FOUND` | MCP server | Polling an unknown `job_id` |

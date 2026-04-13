@@ -115,7 +115,7 @@ ______________________________________________________________________
 Every piece of knowledge stored in The Librarian is a **Tome** — a compact, single-topic document stored in the `tomes` collection. Tomes are intentionally small (100–400 words) to keep retrieval precise.
 
 | Field | Type | Required | Description |
-| --------------- | ---------- | -------- | ----------------------------------------------------- |
+| --------------- | -------- | -------- | ----------------------------------------------------- |
 | `_id` | ObjectId | Yes | MongoDB auto-generated unique identifier |
 | `title` | string | Yes | Short descriptive title (max 120 chars) |
 | `content` | string | Yes | Full text body (100–400 words recommended) |
@@ -144,7 +144,7 @@ Every piece of knowledge stored in The Librarian is a **Tome** — a compact, si
 Tracks the state and output of each Researcher dispatch, stored in the `research_jobs` collection.
 
 | Field | Type | Required | Description |
-| ------------- | ------------ | -------- | --------------------------------------------------- |
+| ------------- | ---------- | -------- | --------------------------------------------------- |
 | `_id` | ObjectId | Yes | Unique job identifier |
 | `topic` | string | Yes | The topic string passed to the Researcher |
 | `context` | string | No | Optional agent-supplied context |
@@ -178,7 +178,7 @@ Converts a natural-language query to a vector embedding and retrieves the most s
 **Output Schema**
 
 | Field | Type | Description |
-| ------------ | ---------- | -------------------------------------------------------------- |
+| ------------ | -------- | -------------------------------------------------------------- |
 | `tomes` | Tome[] | Matching Tome documents, sorted by similarity score descending |
 | `scores` | number[] | Cosine similarity scores corresponding to each Tome |
 | `query_id` | string | Unique identifier for this search request |
@@ -202,7 +202,7 @@ Accepts a raw knowledge payload, validates its truthfulness against web sources,
 **Input Parameters**
 
 | Parameter | Type | Description |
-| -------------- | ---------- | ------------------------------------------------------------------------------------ |
+| -------------- | -------- | ------------------------------------------------------------------------------------ |
 | `content` | string | The raw knowledge text to ingest (required). Chunked at ~400 words. |
 | `title` | string | Optional title (auto-generated if omitted). |
 | `category` | string | Domain category hint. Auto-classified if omitted. |
@@ -214,7 +214,7 @@ Accepts a raw knowledge payload, validates its truthfulness against web sources,
 **Output Schema**
 
 | Field | Type | Description |
-| --------------- | ---------- | ------------------------------------------ |
+| --------------- | -------- | ------------------------------------------ |
 | `tome_ids` | string[] | IDs of all Tomes created or updated |
 | `tomes` | Tome[] | Full Tome objects created during this call |
 | `confidence` | number | Overall verification confidence (0.0–1.0) |
@@ -253,7 +253,7 @@ Dispatches a Researcher sub-agent to independently search the web, synthesise fi
 **Output Schema**
 
 | Field | Type | Description |
-| ------------- | ---------- | --------------------------------------------------- |
+| ------------- | -------- | --------------------------------------------------- |
 | `job_id` | string | ID of the ResearchJob record created |
 | `tome_ids` | string[] | IDs of all Tomes created |
 | `tomes` | Tome[] | Full Tome objects produced, ready for immediate use |

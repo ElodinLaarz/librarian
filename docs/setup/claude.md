@@ -26,7 +26,7 @@ Then install the MCP entry for the product you use:
 This **merges** a `librarian` entry into:
 
 | OS | File |
-| --- | --- |
+| ----- | ----------------------------------------------------------------- |
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Linux | `~/.config/Claude/claude_desktop_config.json` |
 
@@ -103,7 +103,7 @@ library and injects any relevant Tomes as `<librarian_context>` before Claude
 responds. This covers:
 
 | Behaviour | Mechanism |
-| --- | --- |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | Search before every new task | `UserPromptSubmit` hook injects context automatically |
 | Augment every user prompt | Same hook — fires on every message |
 | Consult library when stuck | Global `~/.claude/CLAUDE.md` instructs the agent to call `library_search` when blocked |
