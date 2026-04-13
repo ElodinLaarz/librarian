@@ -89,17 +89,10 @@ def test_from_yaml_rejects_non_mapping_section(tmp_path: Path) -> None:
         LibrarianConfig.from_yaml(path)
 
 
-def test_from_yaml_reads_tidy_settings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_from_yaml_reads_tidy_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("LIBRARIAN_DATABASE_URI", "mongodb://localhost:27017")
     path = tmp_path / "tidy.yml"
-    path.write_text(
-        "tidy:\n"
-        "  threshold: 0.91\n"
-        "  group_concurrency: 2\n"
-        "  max_fact_frequency: 12\n"
-    )
+    path.write_text("tidy:\n  threshold: 0.91\n  group_concurrency: 2\n  max_fact_frequency: 12\n")
 
     cfg = LibrarianConfig.from_yaml(path)
 

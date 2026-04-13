@@ -28,11 +28,13 @@ def _make_tome(content: str) -> Tome:
         embedding=np.zeros(768, dtype=np.float32),
     )
 
+
 @pytest.mark.asyncio
 async def test_consolidate_empty() -> None:
     ingestor, _, _ = make_stub_ingestor()
     result = await ingestor.consolidate([])
     assert result == []
+
 
 @pytest.mark.asyncio
 async def test_consolidate_single_tome() -> None:
@@ -40,6 +42,7 @@ async def test_consolidate_single_tome() -> None:
     t = _make_tome("Only one")
     result = await ingestor.consolidate([t])
     assert result == [t]
+
 
 @pytest.mark.asyncio
 async def test_consolidate_multiple_tomes_happy_path() -> None:
@@ -62,6 +65,7 @@ async def test_consolidate_multiple_tomes_happy_path() -> None:
     # New ones should be in repo
     assert len(repo.all_tomes()) == 2
 
+
 @pytest.mark.asyncio
 async def test_consolidate_reshard_empty_returns_original(monkeypatch: pytest.MonkeyPatch) -> None:
     ingestor, repo, _ = make_stub_ingestor()
@@ -73,6 +77,7 @@ async def test_consolidate_reshard_empty_returns_original(monkeypatch: pytest.Mo
     # Mock _reshard to return empty list
     async def mock_reshard(blob: str) -> list[str]:
         return []
+
     monkeypatch.setattr(ingestor, "_reshard", mock_reshard)
 
     result = await ingestor.consolidate([t1, t2])
@@ -81,6 +86,7 @@ async def test_consolidate_reshard_empty_returns_original(monkeypatch: pytest.Mo
     # Originals should NOT be deleted
     assert await repo.get_by_id(t1.id) is not None
     assert await repo.get_by_id(t2.id) is not None
+
 
 @pytest.mark.asyncio
 async def test_consolidate_delete_failure() -> None:
