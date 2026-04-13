@@ -5,3 +5,13 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: mdformat
+        name: mdformat
+        entry: mdformat
+        language: python
+        additional_dependencies:
+          - mdformat
+        types_or:
+          - markdown
