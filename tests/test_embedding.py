@@ -1,4 +1,6 @@
 import asyncio
+import sys
+import types
 
 import numpy as np
 import pytest
@@ -7,10 +9,17 @@ from src.config import EmbeddingSettings
 from src.services.embedding import OllamaEmbeddingService, SentenceTransformerEmbeddingService
 
 
+def _install_fake_sentence_transformers(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_model: object,
+) -> None:
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = lambda _: fake_model
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+
+
 @pytest.mark.asyncio
 async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("sentence_transformers")
-
     class FakeSentenceTransformer:
         def __init__(self, model_name: str) -> None:
             self.model_name = model_name
@@ -25,9 +34,7 @@ async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -
             return values
 
     fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
-    import sentence_transformers
-
-    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+    _install_fake_sentence_transformers(monkeypatch, fake_model)
 
     settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2")
     service = SentenceTransformerEmbeddingService(settings)
@@ -56,8 +63,6 @@ async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -
 async def test_sentence_transformer_embedding_cache_eviction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pytest.importorskip("sentence_transformers")
-
     class FakeSentenceTransformer:
         def __init__(self, model_name: str) -> None:
             self.encode_calls = 0
@@ -67,9 +72,7 @@ async def test_sentence_transformer_embedding_cache_eviction(
             return np.zeros(384, dtype=np.float32)
 
     fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
-    import sentence_transformers
-
-    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+    _install_fake_sentence_transformers(monkeypatch, fake_model)
 
     settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2", cache_size=2)
     service = SentenceTransformerEmbeddingService(settings)
@@ -95,8 +98,6 @@ async def test_sentence_transformer_embedding_cache_eviction(
 
 @pytest.mark.asyncio
 async def test_sentence_transformer_embedding_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("sentence_transformers")
-
     class FakeSentenceTransformer:
         def __init__(self, model_name: str) -> None:
             self.encode_calls = 0
@@ -109,9 +110,7 @@ async def test_sentence_transformer_embedding_concurrency(monkeypatch: pytest.Mo
             return np.zeros(384, dtype=np.float32)
 
     fake_model = FakeSentenceTransformer("all-MiniLM-L6-v2")
-    import sentence_transformers
-
-    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+    _install_fake_sentence_transformers(monkeypatch, fake_model)
 
     settings = EmbeddingSettings(dimensions=384, model_name="all-MiniLM-L6-v2")
     service = SentenceTransformerEmbeddingService(settings)

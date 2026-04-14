@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Any
+from typing import NotRequired, TypedDict
 from uuid import UUID
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
@@ -13,20 +13,28 @@ from src.storage.mongo.mongo_research_job import MongoResearchJob
 from src.storage.research_job_repository import ResearchJobRepository
 
 
+class _MongoClientKwargs(TypedDict):
+    uuidRepresentation: str
+    tls: NotRequired[bool]
+    tlsCertificateKeyFile: NotRequired[str]
+
+
 class MongoResearchJobRepository(ResearchJobRepository):
     def __init__(self, settings: DatabaseSettings) -> None:
-        kwargs: dict[str, Any] = {"uuidRepresentation": "standard"}
+        kwargs: _MongoClientKwargs = {"uuidRepresentation": "standard"}
         if settings.tls:
             kwargs["tls"] = True
             kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
         else:
             kwargs["tls"] = False
 
-        self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
+        self._client: AsyncIOMotorClient[Mapping[str, object]] = AsyncIOMotorClient(
             settings.uri, **kwargs
         )
         db = self._client.get_database(settings.database)
-        self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.jobs_collection]
+        self._collection: AsyncIOMotorCollection[Mapping[str, object]] = db[
+            settings.jobs_collection
+        ]
 
     async def insert(self, job: ResearchJob) -> UUID:
         doc = MongoResearchJob.from_domain(job).model_dump(by_alias=True)

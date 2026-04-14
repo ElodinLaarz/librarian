@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import TypeAlias
 from uuid import UUID
 
 import numpy as np
@@ -15,8 +15,10 @@ from src.services.embedding import EmbeddingService
 from src.storage.filesystem.utils import resolve_base_path
 from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
+FloatVector: TypeAlias = NDArray[np.float32] | NDArray[np.float64]
 
-def _cosine_similarity(a: NDArray[np.floating[Any]], b: NDArray[np.floating[Any]]) -> float:
+
+def _cosine_similarity(a: FloatVector, b: FloatVector) -> float:
     """Cosine similarity in [-1, 1]. Returns 0.0 if shapes differ or either vector is zero."""
     if a.shape != b.shape:
         return 0.0
@@ -133,12 +135,17 @@ class FsTomeRepository(TomeRepository):
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(
+        self,
+        tome: Tome,
+        threshold: float | None = None,
+    ) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the configured tidy threshold."""
         if tome.embedding is None:
             return []
         tome_vec = np.array(tome.embedding, dtype=np.float64)
         duplicates: list[Tome] = []
+        similarity_threshold = self._tidy_settings.threshold if threshold is None else threshold
 
         all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
 
@@ -146,7 +153,7 @@ class FsTomeRepository(TomeRepository):
             if existing.id == tome.id or existing.embedding is None:
                 continue
             sim = _cosine_similarity(tome_vec, np.array(existing.embedding, dtype=np.float64))
-            if sim >= self._tidy_settings.threshold:
+            if sim >= similarity_threshold:
                 duplicates.append(existing)
         return duplicates
 

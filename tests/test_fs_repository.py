@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -26,7 +25,7 @@ def _make_tome(
     category: str = "general",
     title: str = "Test Tome",
     confidence: float = 0.8,
-    embedding: NDArray[np.floating[Any]] | None = None,
+    embedding: NDArray[np.float32] | None = None,
 ) -> Tome:
     if embedding is None:
         embedding = RNG.random(8).astype(np.float32)

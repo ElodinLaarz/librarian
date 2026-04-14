@@ -4,7 +4,6 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import Any
 
 import httpx
 import trafilatura
@@ -42,6 +41,16 @@ class WebSearchClient(ABC):
     def is_available(self) -> bool:
         """Return True if the search backend is configured and reachable."""
         ...
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _as_mapping_list(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 async def fetch_url_main_text(url: str, *, timeout: float = 25.0) -> str:
@@ -89,10 +98,10 @@ class BraveWebSearchClient(WebSearchClient):
                 self._settings.brave_api_base, params=params, headers=headers
             )
             response.raise_for_status()
-            data: dict[str, Any] = response.json()
+            data = _as_mapping(response.json())
 
-        web_block = data.get("web") or {}
-        raw_results = web_block.get("results") or []
+        web_block = _as_mapping(data.get("web"))
+        raw_results = _as_mapping_list(web_block.get("results"))
         out: list[WebSearchResult] = []
         for item in raw_results[:max_results]:
             out.append(
@@ -122,9 +131,9 @@ class SerperWebSearchClient(WebSearchClient):
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
-            data: dict[str, Any] = response.json()
+            data = _as_mapping(response.json())
 
-        organic = data.get("organic") or []
+        organic = _as_mapping_list(data.get("organic"))
         out: list[WebSearchResult] = []
         for item in organic[:max_results]:
             out.append(
@@ -158,9 +167,9 @@ class TavilyWebSearchClient(WebSearchClient):
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
-            data: dict[str, Any] = response.json()
+            data = _as_mapping(response.json())
 
-        raw_results = data.get("results") or []
+        raw_results = _as_mapping_list(data.get("results"))
         out: list[WebSearchResult] = []
         for item in raw_results[:max_results]:
             out.append(

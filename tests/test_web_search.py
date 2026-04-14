@@ -35,7 +35,7 @@ def test_build_returns_unavailable_when_no_key(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("SEARCH_API_KEY", raising=False)
-    config = make_test_config()
+    config = make_test_config(web_search=WebSearchSettings(provider="brave", api_key=None))
     client = build_web_search_client(config)
     assert isinstance(client, UnavailableWebSearchClient)
 

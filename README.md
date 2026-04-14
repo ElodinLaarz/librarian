@@ -183,8 +183,10 @@ ruff check . && ruff format .
 # Type check
 mypy src
 
-# Install commit hooks once to auto-run Ruff and Markdown fixes on git commit
+# Install commit hooks once to auto-run formatters plus mypy and unit tests on git commit
 pre-commit install
 ```
 
-Tests use in-memory stubs for all services — no MongoDB or embedding model needed for the unit test suite. Integration tests in `tests/test_mongo_repository.py` require a running MongoDB instance.
+The git commit hook runs Ruff auto-fixes, Markdown formatting, `mypy src`, and the
+unit test suite. Mongo integration tests in `tests/test_mongo_repository.py`
+still require a running MongoDB instance and are not part of the commit hook.

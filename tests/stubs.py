@@ -89,7 +89,13 @@ class StubTomeRepository(TomeRepository):
         ]
         return results[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(
+        self,
+        tome: Tome,
+        threshold: float | None = None,
+    ) -> list[Tome]:
+        del tome
+        del threshold
         return list(self._near_duplicates)
 
     async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:

@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Self
 
 import yaml
 from pydantic import Field, ValidationError, model_validator
@@ -183,7 +183,7 @@ class LibrarianConfig(BaseSettings):
 
         _load_dotenv()
         path = Path(path)
-        raw: dict[str, Any] = {}
+        raw: dict[str, object] = {}
 
         # Load YAML if it exists
         if path.exists():
@@ -198,14 +198,18 @@ class LibrarianConfig(BaseSettings):
 
             # Match ${VAR} or ${VAR:-default}
             content = re.sub(r"\${([^}:-]+)(?::-(.*?))?}", _replace_env, content)
-            raw = yaml.safe_load(content)
-            if raw is None:
+            loaded = yaml.safe_load(content)
+            if loaded is None:
                 raw = {}
-            if not isinstance(raw, dict):
-                raise ValueError(f"YAML root in {path} must be a mapping, got {type(raw).__name__}")
+            elif not isinstance(loaded, dict):
+                raise ValueError(
+                    f"YAML root in {path} must be a mapping, got {type(loaded).__name__}"
+                )
+            else:
+                raw = {str(key): value for key, value in loaded.items()}
 
-        validated_sections = {}
-        errors = []
+        validated_sections: dict[str, BaseSettings] = {}
+        errors: list[str] = []
 
         # Validate each nested section separately to preserve nested errors.
         # Use the BaseSettings constructor (not model_validate) so each section
@@ -213,14 +217,14 @@ class LibrarianConfig(BaseSettings):
         for field_name, field_info in cls.model_fields.items():
             section_raw = raw.get(field_name)
             if section_raw is None:
-                section_data: dict[str, Any] = {}
+                section_data: dict[str, object] = {}
             elif not isinstance(section_raw, dict):
                 errors.append(
                     f"{field_name}: expected a mapping in YAML, got {type(section_raw).__name__}"
                 )
                 continue
             else:
-                section_data = section_raw
+                section_data = {str(key): value for key, value in section_raw.items()}
 
             section_type: type[BaseSettings] = field_info.annotation
 

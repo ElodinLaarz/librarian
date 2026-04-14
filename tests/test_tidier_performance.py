@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from time import perf_counter
 
 import pytest
@@ -56,9 +55,6 @@ async def test_duplicate_scan_regression_budget_1000_vectors() -> None:
 
 @pytest.mark.asyncio
 async def test_duplicate_scan_budget_10000_vectors_under_60_seconds() -> None:
-    if os.getenv("LIBRARIAN_RUN_PERF_TESTS") != "1":
-        pytest.skip("Set LIBRARIAN_RUN_PERF_TESTS=1 to run the 10k tidy performance gate.")
-
     tidier = _make_tidier(total=10000, duplicate_pairs=100)
 
     started = perf_counter()

@@ -9,9 +9,22 @@ repos:
     hooks:
       - id: mdformat
         name: mdformat
-        entry: mdformat
-        language: python
-        additional_dependencies:
-          - mdformat
+        entry: uv run mdformat
+        language: system
         types_or:
           - markdown
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src
+        language: system
+        pass_filenames: false
+      - id: pytest-unit
+        name: pytest-unit
+        entry: >-
+          bash -lc 'env -u BRAVE_API_KEY -u SERPER_API_KEY -u TAVILY_API_KEY
+          -u SEARCH_API_KEY -u LIBRARIAN_WEB_SEARCH_PROVIDER
+          -u LIBRARIAN_WEB_SEARCH_API_KEY -u LIBRARIAN__WEB_SEARCH__PROVIDER
+          -u LIBRARIAN__WEB_SEARCH__API_KEY uv run python -m pytest tests
+          --ignore=tests/test_mongo_repository.py'
+        language: system
+        pass_filenames: false

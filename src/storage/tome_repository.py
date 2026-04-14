@@ -50,7 +50,11 @@ class TomeRepository(ABC):
         ...
 
     @abstractmethod
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(
+        self,
+        tome: Tome,
+        threshold: float | None = None,
+    ) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold."""
         ...
 

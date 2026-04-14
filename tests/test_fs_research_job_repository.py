@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 import pytest
@@ -57,7 +56,7 @@ def test_all_jobs_skips_when_read_raises_os_error(
 
     real_read_text = Path.read_text
 
-    def selective_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+    def selective_read_text(self: Path, *args: object, **kwargs: object) -> str:
         if self.resolve() == bad.resolve():
             raise PermissionError("mock unreadable")
         return real_read_text(self, *args, **kwargs)

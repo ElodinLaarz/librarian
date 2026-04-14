@@ -135,7 +135,8 @@ class Tidier:
         logger.info("Consolidating group of %d tomes.", len(group))
         try:
             replacements = await self._ingestor.consolidate(group, skip_verify=skip_verify)
-            return 1, len(group) - len(replacements)
+            removed_count = max(0, len(group) - len(replacements))
+            return 1, removed_count
         except Exception as exc:
             logger.error("Failed to consolidate group: %s", exc)
             raise

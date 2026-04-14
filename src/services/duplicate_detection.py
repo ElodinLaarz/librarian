@@ -4,7 +4,7 @@ import math
 import re
 from collections import defaultdict
 from itertools import combinations
-from typing import Any
+from typing import TypeAlias
 from uuid import UUID
 
 import numpy as np
@@ -14,6 +14,8 @@ from src import constants
 from src.config import TidySettings
 from src.models.tome import Tome
 from src.storage.tome_repository import DuplicateScanResult
+
+FloatVector: TypeAlias = NDArray[np.float32] | NDArray[np.float64]
 
 
 class _UnionFind:
@@ -52,7 +54,7 @@ def _extract_facts(content: str) -> set[str]:
     }
 
 
-def _cosine_similarity(left: NDArray[np.floating[Any]], right: NDArray[np.floating[Any]]) -> float:
+def _cosine_similarity(left: FloatVector, right: FloatVector) -> float:
     if left.shape != right.shape:
         return 0.0
     denom = float(np.linalg.norm(left) * np.linalg.norm(right))

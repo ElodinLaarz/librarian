@@ -5,10 +5,11 @@ import hashlib
 import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import httpx
 import numpy as np
+from numpy.typing import NDArray
 
 from src.config import EmbeddingSettings
 
@@ -97,7 +98,7 @@ class EmbeddingService(ABC):
         ...
 
     @abstractmethod
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str) -> NDArray[np.float32]:
         """Produce a dense vector embedding for a single text string.
 
         Returns from cache if the text has been embedded before.
@@ -111,7 +112,7 @@ class DummyEmbeddingService(EmbeddingService):
     async def initialize(self) -> None:
         pass
 
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str) -> NDArray[np.float32]:
         return np.zeros(self._settings.dimensions, dtype=np.float32)
 
 
@@ -121,7 +122,7 @@ class OllamaEmbeddingService(EmbeddingService):
     def __init__(self, settings: EmbeddingSettings) -> None:
         super().__init__(settings)
         self._client = httpx.AsyncClient(base_url=settings.ollama_url, timeout=30.0)
-        self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._cache: OrderedDict[str, NDArray[np.float32]] = OrderedDict()
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -134,7 +135,7 @@ class OllamaEmbeddingService(EmbeddingService):
                 f"Cannot connect to Ollama at {self._settings.ollama_url}: {exc}"
             ) from exc
 
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str) -> NDArray[np.float32]:
         key = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
         async with self._lock:
@@ -175,7 +176,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
     def __init__(self, settings: EmbeddingSettings) -> None:
         super().__init__(settings)
         self._model: SentenceTransformer | None = None
-        self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._cache: OrderedDict[str, NDArray[np.float32]] = OrderedDict()
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -186,7 +187,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
             # Loading model can be slow, run in thread
             self._model = await asyncio.to_thread(SentenceTransformer, self._settings.model_name)
 
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str) -> NDArray[np.float32]:
         """Produce embedding with LRU cache."""
         if self._model is None:
             raise RuntimeError("Model not initialized. Call initialize() before embed().")
@@ -201,10 +202,13 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
                 return self._cache[key]
 
         # Generate embedding in thread (outside lock to not block other lookups)
-        embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
+        embedding_raw = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
 
         # Ensure it's a 1-D numpy array of float32
-        embedding = np.atleast_1d(np.squeeze(np.asarray(embedding, dtype=np.float32)))
+        embedding = cast(
+            NDArray[np.float32],
+            np.atleast_1d(np.squeeze(np.asarray(embedding_raw, dtype=np.float32))),
+        )
 
         async with self._lock:
             # Another task might have computed and cached it while we were yielding

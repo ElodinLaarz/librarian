@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 import numpy as np
@@ -16,7 +15,7 @@ from src.services.duplicate_detection import build_duplicate_groups
 from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 
-def make_synthetic_tome(content: str, embedding: NDArray[np.floating[Any]]) -> Tome:
+def make_synthetic_tome(content: str, embedding: NDArray[np.float32]) -> Tome:
     return Tome(
         id=uuid.uuid4(),
         title=content[:40],
@@ -95,8 +94,13 @@ class PerfTomeRepository(TomeRepository):
             if tome.confidence >= min_confidence and (category is None or tome.category == category)
         ][:top_k]
 
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(
+        self,
+        tome: Tome,
+        threshold: float | None = None,
+    ) -> list[Tome]:
         del tome
+        del threshold
         return []
 
     async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:

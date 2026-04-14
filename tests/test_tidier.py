@@ -82,6 +82,38 @@ async def test_run_cleanup_consolidates_duplicates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_cleanup_does_not_report_negative_tomes_removed_when_group_expands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ingestor, repo, _ = make_stub_ingestor()
+    original_a = _make_tome("Fact A")
+    original_b = _make_tome("Fact A")
+    repo.seed_duplicate_groups([[original_a, original_b]])
+
+    tidier = Tidier(ingestor, repo, TidySettings())
+
+    async def expand_consolidate(
+        tomes: list[Tome],
+        skip_verify: bool = False,
+    ) -> list[Tome]:
+        del tomes
+        del skip_verify
+        return [
+            _make_tome("Reshard 1"),
+            _make_tome("Reshard 2"),
+            _make_tome("Reshard 3"),
+        ]
+
+    monkeypatch.setattr(ingestor, "consolidate", expand_consolidate)
+
+    report = await tidier.run_cleanup()
+
+    assert report["groups_found"] == 1
+    assert report["groups_consolidated"] == 1
+    assert report["tomes_removed"] == 0
+
+
+@pytest.mark.asyncio
 async def test_run_cleanup_respects_limit() -> None:
     ingestor, repo, _ = make_stub_ingestor()
     group_a = [_make_tome("Fact A"), _make_tome("Fact A")]

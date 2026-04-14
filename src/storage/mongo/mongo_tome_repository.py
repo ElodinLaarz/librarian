@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping
-from typing import Any
+from typing import NotRequired, TypedDict
 from uuid import UUID
 
 import numpy as np
@@ -20,6 +20,12 @@ from src.storage.mongo.mongo_tome import MongoTome
 from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 
+class _MongoClientKwargs(TypedDict):
+    uuidRepresentation: str
+    tls: NotRequired[bool]
+    tlsCertificateKeyFile: NotRequired[str]
+
+
 class MongoTomeRepository(TomeRepository):
     """MongoDB implementation of the TomeRepository using Atlas Search.
 
@@ -33,21 +39,23 @@ class MongoTomeRepository(TomeRepository):
         embedding_service: EmbeddingService,
         tidy_settings: TidySettings | None = None,
     ) -> None:
-        kwargs: dict[str, Any] = {"uuidRepresentation": "standard"}
+        kwargs: _MongoClientKwargs = {"uuidRepresentation": "standard"}
         if settings.tls:
             kwargs["tls"] = True
             kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
         else:
             kwargs["tls"] = False
 
-        self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
+        self._client: AsyncIOMotorClient[Mapping[str, object]] = AsyncIOMotorClient(
             settings.uri, **kwargs
         )
 
         self._embedding_service = embedding_service
         self._tidy_settings = tidy_settings or TidySettings()
         db = self._client.get_database(settings.database)
-        self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.tomes_collection]
+        self._collection: AsyncIOMotorCollection[Mapping[str, object]] = db[
+            settings.tomes_collection
+        ]
 
     async def insert(self, tome: Tome) -> UUID:
         """Insert a new Tome into MongoDB."""
@@ -101,13 +109,13 @@ class MongoTomeRepository(TomeRepository):
     async def _lexical_search(
         self, query: str, top_k: int, min_confidence: float, category: str | None
     ) -> list[Tome]:
-        filters: list[Mapping[str, Any]] = [
+        filters: list[Mapping[str, object]] = [
             {"range": {"path": "confidence", "gte": min_confidence}},
         ]
         if category is not None:
             filters.append({"equals": {"path": "category", "value": category}})
 
-        pipeline: list[Mapping[str, Any]] = [
+        pipeline: list[Mapping[str, object]] = [
             {
                 "$search": {
                     "compound": {
@@ -136,11 +144,11 @@ class MongoTomeRepository(TomeRepository):
     async def _vector_search(
         self, query_vector: Binary, top_k: int, min_confidence: float, category: str | None
     ) -> list[Tome]:
-        vector_filter: dict[str, Any] = {"confidence": {"$gte": min_confidence}}
+        vector_filter: dict[str, object] = {"confidence": {"$gte": min_confidence}}
         if category is not None:
             vector_filter["category"] = category
 
-        pipeline: list[Mapping[str, Any]] = [
+        pipeline: list[Mapping[str, object]] = [
             {
                 "$vectorSearch": {
                     "index": "vectors",
@@ -191,16 +199,21 @@ class MongoTomeRepository(TomeRepository):
         combined.sort(key=lambda x: x[1], reverse=True)
         return combined[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(
+        self,
+        tome: Tome,
+        threshold: float | None = None,
+    ) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
         if tome.embedding is None:
             return []
+        similarity_threshold = self._tidy_settings.threshold if threshold is None else threshold
 
         query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
 
-        pipeline: list[Mapping[str, Any]] = [
+        pipeline: list[Mapping[str, object]] = [
             {
                 "$vectorSearch": {
                     "index": "vectors",
@@ -213,7 +226,7 @@ class MongoTomeRepository(TomeRepository):
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
             {
                 "$match": {
-                    "score": {"$gte": self._tidy_settings.threshold},
+                    "score": {"$gte": similarity_threshold},
                     "document._id": {"$ne": tome.id},
                 }
             },
