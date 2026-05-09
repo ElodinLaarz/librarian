@@ -21,18 +21,48 @@ abandon the branch and exit rather than merging something half-done.
    `$base_branch`.
 1. Implement the change. Read the surrounding code first; match style.
    Write tests for new behavior. Do NOT add unrelated refactors.
-1. Run the full local verification suite (lint, type check, tests). Fix
-   anything you broke. Do not silence failing tests — fix them.
+1. **Mirror CI locally before every push.** Discover the full set of
+   checks the repo runs (read `.github/workflows/*.yml`, `pre-commit`
+   hooks, `Makefile`, `package.json` scripts, `pyproject.toml`,
+   `CONTRIBUTING.md`, etc.) and execute every one of them locally —
+   linters, formatters in `--check` mode, type checkers, unit tests,
+   integration tests, build, mdformat / prettier, security scanners,
+   and any custom job. Use the same commands CI uses, not approximations.
+   Fix anything that fails before you push. Do not silence or skip
+   failing tests — fix them. A push must never produce a CI failure
+   that you could have caught on your machine.
 1. Commit with a clear message that references the issue (e.g.
-   `fix: <summary> (#<n>)`). Push the branch.
+   `fix: <summary> (#<n>)`). **Re-run the full local CI suite from
+   step 5 one more time on the final tree, and only push the branch
+   once every check passes.** Never push to fix CI on the remote
+   when the same check could have run on your machine.
 1. Open a PR with `gh pr create` targeting `$base_branch`. Link the
    issue with `Closes #<n>` in the body. Use a tight summary, a test
    plan, and a "How I verified" section.
 1. Wait for CI and review bots ($reviewer_bots) to post. Poll with
    `gh pr checks <pr> --watch` and `gh pr view <pr> --comments`.
-1. For every actionable review comment from the bots, address it with a
-   real code change (not a hand-wave reply). Re-run local checks. Push
-   updates. Re-request review if the bot supports it.
+1. **Iterate with the review bots until they fall silent.** Loop:
+   1. Pull the latest review comments from every bot in `$reviewer_bots`
+      (e.g. `gh pr view <pr> --comments`,
+      `gh api repos/<owner>/<repo>/pulls/<pr>/comments`,
+      `gh api repos/<owner>/<repo>/pulls/<pr>/reviews`).
+   1. For every actionable comment, make a real code change (not a
+      hand-wave reply). Re-run the full local CI suite from step 5.
+      Commit and push.
+   1. Re-request review where the bot supports it
+      (`gh pr edit <pr> --add-reviewer <bot>` or the bot's slash command).
+      Wait for the bot to either post fresh comments or signal it has
+      nothing to add. A reasonable poll budget is ~10 minutes per round.
+   1. Repeat until a full round produces zero new actionable comments.
+      It is acceptable to exit the loop if a reviewer is clearly rate-
+      limited / quota-exhausted (e.g. the bot posts a "limit reached"
+      message, returns 429, or simply does not respond within the
+      poll budget after a push) — record that in the PR thread and
+      proceed.
+   1. Style-only nits and "consider" suggestions are not blocking; you
+      may resolve them with a brief reply explaining the decision.
+      Real bugs, security issues, and correctness findings always
+      require a code change.
 1. Once CI is green AND no unresolved actionable bot comments remain,
    merge with `gh pr merge --squash --delete-branch --auto` (or `--merge`
    if the repo blocks squash). Prefer `--auto` so it lands when checks
