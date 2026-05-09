@@ -243,9 +243,9 @@ class Ingestor:
         prompt = (
             "Decompose the following text into a list of atomic, self-contained factual "
             "statements or concepts. Each statement or concept must contain enough context "
-            "to be fully understood on its own. "
-            f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
-            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\\n\\nTEXT:\\n'
+            "to be fully understood on its own.\n"
+            f"Do not exceed {self._config.ingest.shard_size} characters per fact.\n"
+            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\n\nTEXT:\n'
             f"{blob[:8000]}"
         )
         url = f"{base}/v1/chat/completions"
@@ -270,8 +270,8 @@ class Ingestor:
 
         message = message.strip()
         if message.startswith("```"):
-            message = re.sub(r"^```(?:json)?\\s*", "", message)
-            message = re.sub(r"\\s*```$", "", message)
+            message = re.sub(r"^```(?:json)?\s*", "", message)
+            message = re.sub(r"\s*```$", "", message)
 
         try:
             parsed = json.loads(message)

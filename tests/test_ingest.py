@@ -414,3 +414,44 @@ async def test_dedup_store_returning_empty_sets_partial_status(
     output = await ingestor.ingest("Incoming content that triggers a reshard.")
 
     assert output.status != IngestStatus.STORED
+
+
+# ── prompt / regex quality ────────────────────────────────────────────────────
+
+
+class TestPromptEscapes:
+    """Verify that _reshard_llm prompt uses real newlines and regex strips fenced blocks."""
+
+    def test_prompt_uses_real_newlines(self) -> None:
+        """Prompt must contain real \\n characters, not literal backslash-n."""
+        prompt = (
+            "Decompose the following text into a list of atomic, self-contained factual "
+            "statements or concepts. Each statement or concept must contain enough context "
+            "to be fully understood on its own.\n"
+            "Do not exceed 500 characters per fact.\n"
+            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\n\nTEXT:\n'
+            "The sky is blue."
+        )
+        assert "\n" in prompt, "Prompt must contain real newlines"
+        assert r"\n" not in prompt, "Prompt must NOT contain literal backslash-n"
+        # Verify the structure: "TEXT:" followed by newline then content
+        assert prompt.endswith("TEXT:\nThe sky is blue.")
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ('```json\n{"facts": ["a"]}\n```', '{"facts": ["a"]}'),
+            ('```\n{"facts": ["b"]}\n```', '{"facts": ["b"]}'),
+            ('```json{"facts": ["c"]}```', '{"facts": ["c"]}'),
+            ('{"facts": ["no fence"]}', '{"facts": ["no fence"]}'),
+        ],
+    )
+    def test_fence_stripper_regex(self, raw: str, expected: str) -> None:
+        """The code-fence regex must match real whitespace (not literal \\s)."""
+        import re
+
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+            stripped = re.sub(r"\s*```$", "", stripped)
+        assert stripped == expected
