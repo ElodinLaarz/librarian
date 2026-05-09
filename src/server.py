@@ -79,6 +79,17 @@ class LibrarianServer:
         """Initialise and tear down services around the server lifetime."""
         self._embedding_service = await build_embedding_service(self.config.embedding)
 
+        import logging as _logging
+
+        _logging.getLogger(__name__).info(
+            "LLM claim extraction enabled, model=%s",
+            self.config.verification.claim_model,
+        )
+        _logging.getLogger(__name__).info(
+            "LLM ingestor chunking enabled, model=%s",
+            self.config.ingest.extraction_model,
+        )
+
         if self.config.database.uri.startswith("mongodb"):
             self.tome_repo = MongoTomeRepository(self.config.database, self._embedding_service)
             self.job_repo = MongoResearchJobRepository(self.config.database)

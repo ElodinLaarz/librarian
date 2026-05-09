@@ -38,7 +38,7 @@ Set `skip_verify: true` on ingest to bypass (useful for notes or fictional conte
 | Embedding (default) | `sentence-transformers/all-MiniLM-L6-v2` (384 dims) |
 | Embedding (alt) | Ollama `/api/embeddings` (`LIBRARIAN_EMBEDDING__PROVIDER=ollama`) |
 | Chunking | LangChain `RecursiveCharacterTextSplitter` |
-| Claim extraction | Ollama OpenAI-compatible JSON (optional) or heuristic sentences |
+| Claim extraction | Ollama OpenAI-compatible JSON (optional) or heuristic sentences — needs `gemma2:2b` or similar small model (`ollama pull gemma2:2b`) |
 | Web search | Brave / Serper / Tavily (`build_web_search_client`) |
 | HTML extraction | `trafilatura` |
 | Config | Pydantic Settings + `librarian.config.yaml` |
@@ -50,6 +50,7 @@ Set `skip_verify: true` on ingest to bypass (useful for notes or fictional conte
 ```bash
 docker compose up -d
 docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull gemma2:2b  # for claim extraction (optional)
 ```
 
 **2. Install Python deps:**
