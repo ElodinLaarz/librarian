@@ -33,8 +33,8 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 1
 fi
 
-run_cmd="$PYTHON $HERE/routined.py --config $CONFIG"
-watchdog="if ! pgrep -f 'routined.py --config $CONFIG' >/dev/null; then nohup $run_cmd >>$LOG 2>&1 & echo \$! > $PIDFILE; fi"
+run_cmd="\"$PYTHON\" \"$HERE/routined.py\" --config \"$CONFIG\""
+watchdog="if ! pgrep -f \"routined.py --config $CONFIG\" >/dev/null; then nohup $run_cmd >>\"$LOG\" 2>&1 & echo \$! > \"$PIDFILE\"; fi"
 
 case "$mode" in
   cron)

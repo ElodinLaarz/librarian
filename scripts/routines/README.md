@@ -45,16 +45,16 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## How a routine fires
 
 1. Daemon ticks every `--tick` seconds (default 60).
-2. For each enabled routine, if `now - last_started_at >= interval`, it
+1. For each enabled routine, if `now - last_started_at >= interval`, it
    forks a worker (Linux/macOS) or spawns a detached Python process
    (Windows) so a slow routine cannot block its siblings.
-3. Worker `git clone`s the repo into `worktree_root/<routine>/<run-id>/`.
-4. Renders `prompt_template` with `${repo}`, `${run_id}`, `${worktree}`,
+1. Worker `git clone`s the repo into `worktree_root/<routine>/<run-id>/`.
+1. Renders `prompt_template` with `${repo}`, `${run_id}`, `${worktree}`,
    `${routine_name}`, plus everything under `prompt_vars`.
-5. Invokes the configured harness with the prompt (stdin / arg / file)
+1. Invokes the configured harness with the prompt (stdin / arg / file)
    inside the worktree. stdout+stderr stream to
    `log_dir/<routine>/<run-id>.log`.
-6. On exit (or timeout), removes the worktree and updates state at
+1. On exit (or timeout), removes the worktree and updates state at
    `state_dir/<routine>.json` (`last_started_at`, `last_finished_at`,
    `last_exit_code`, `in_flight`).
 

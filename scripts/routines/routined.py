@@ -28,12 +28,12 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-
 from harness import Harness
 
 log = logging.getLogger("routined")
@@ -104,9 +104,7 @@ def load_config(path: Path) -> Config:
     routines: list[Routine] = []
     for r in raw.get("routines") or []:
         if r["harness"] not in harnesses:
-            raise ValueError(
-                f"routine {r['name']!r} references unknown harness {r['harness']!r}"
-            )
+            raise ValueError(f"routine {r['name']!r} references unknown harness {r['harness']!r}")
         tmpl = Path(r["prompt_template"])
         if not tmpl.is_absolute():
             tmpl = (base / tmpl).resolve()
@@ -141,19 +139,83 @@ def state_path(state_dir: Path, name: str) -> Path:
     return state_dir / f"{safe}.json"
 
 
-def read_state(state_dir: Path, name: str) -> dict:
+def _lock_path(state_dir: Path, name: str) -> Path:
+    return state_path(state_dir, name).with_suffix(".lock")
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """Process-safe exclusive lock on a sentinel file. POSIX uses fcntl,
+    Windows uses msvcrt. Held only across a state read/modify/write cycle."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                with suppress(OSError):
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                with suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _read_state_unlocked(state_dir: Path, name: str) -> dict:
     p = state_path(state_dir, name)
     if not p.exists():
         return {}
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError):
         return {}
 
 
-def write_state(state_dir: Path, name: str, data: dict) -> None:
+def _write_state_atomic(state_dir: Path, name: str, data: dict) -> None:
     p = state_path(state_dir, name)
-    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def read_state(state_dir: Path, name: str) -> dict:
+    with _file_lock(_lock_path(state_dir, name)):
+        return _read_state_unlocked(state_dir, name)
+
+
+def write_state(state_dir: Path, name: str, data: dict) -> None:
+    with _file_lock(_lock_path(state_dir, name)):
+        _write_state_atomic(state_dir, name, data)
+
+
+@contextmanager
+def update_state(state_dir: Path, name: str):
+    """Read-modify-write the state file under an exclusive lock.
+
+    Use this whenever you need both the current state and to persist a
+    change based on it (e.g. appending or removing from `in_flight`).
+    """
+    with _file_lock(_lock_path(state_dir, name)):
+        data = _read_state_unlocked(state_dir, name)
+        yield data
+        _write_state_atomic(state_dir, name, data)
 
 
 # --------------------------------------------------------------------------- #
@@ -206,13 +268,21 @@ def render_prompt(routine: Routine, run_id: str, worktree: Path) -> str:
 
 
 def fire_routine(cfg: Config, routine: Routine) -> None:
-    state = read_state(cfg.state_dir, routine.name)
-    in_flight = state.get("in_flight", [])
-    if len(in_flight) >= routine.max_concurrent:
-        log.info("[%s] at max_concurrent=%d — skipping", routine.name, routine.max_concurrent)
-        return
-
     run_id = f"{int(now_ts())}-{uuid.uuid4().hex[:6]}"
+
+    # Atomically claim a slot under max_concurrent and stamp last_started_at.
+    with update_state(cfg.state_dir, routine.name) as state:
+        in_flight = state.setdefault("in_flight", [])
+        if len(in_flight) >= routine.max_concurrent:
+            log.info(
+                "[%s] at max_concurrent=%d - skipping",
+                routine.name,
+                routine.max_concurrent,
+            )
+            return
+        state["last_started_at"] = now_ts()
+        in_flight.append(run_id)
+
     worktree = cfg.worktree_root / routine.name / run_id
     log_file = cfg.log_dir / routine.name / f"{run_id}.log"
     prompt_file = cfg.log_dir / routine.name / f"{run_id}.prompt.txt"
@@ -223,17 +293,16 @@ def fire_routine(cfg: Config, routine: Routine) -> None:
         clone_worktree(routine.repo, routine.base_branch, worktree)
     except subprocess.CalledProcessError as e:
         log.error("[%s] clone failed: %s", routine.name, e)
-        state["last_error"] = f"clone failed: {e}"
-        state["last_started_at"] = now_ts()
-        write_state(cfg.state_dir, routine.name, state)
+        with update_state(cfg.state_dir, routine.name) as state:
+            state["last_error"] = f"clone failed: {e}"
+            state["in_flight"] = [r for r in state.get("in_flight", []) if r != run_id]
+            state["last_finished_at"] = now_ts()
+            state["last_exit_code"] = -1
+            state["last_run_id"] = run_id
         return
 
     prompt = render_prompt(routine, run_id, worktree)
     harness = cfg.harnesses[routine.harness]
-
-    state["last_started_at"] = now_ts()
-    state.setdefault("in_flight", []).append(run_id)
-    write_state(cfg.state_dir, routine.name, state)
 
     rc = -1
     try:
@@ -249,12 +318,11 @@ def fire_routine(cfg: Config, routine: Routine) -> None:
         log.exception("[%s] run=%s crashed: %s", routine.name, run_id, e)
     finally:
         cleanup_worktree(worktree)
-        state = read_state(cfg.state_dir, routine.name)
-        state["in_flight"] = [r for r in state.get("in_flight", []) if r != run_id]
-        state["last_finished_at"] = now_ts()
-        state["last_exit_code"] = rc
-        state["last_run_id"] = run_id
-        write_state(cfg.state_dir, routine.name, state)
+        with update_state(cfg.state_dir, routine.name) as state:
+            state["in_flight"] = [r for r in state.get("in_flight", []) if r != run_id]
+            state["last_finished_at"] = now_ts()
+            state["last_exit_code"] = rc
+            state["last_run_id"] = run_id
 
 
 def tick(cfg: Config) -> None:
@@ -293,9 +361,8 @@ def spawn_self_for(cfg: Config, routine: Routine) -> None:
     ]
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = (
-            subprocess.CREATE_NEW_PROCESS_GROUP
-            | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(
+            subprocess, "DETACHED_PROCESS", 0x00000008
         )
     subprocess.Popen(argv, creationflags=creationflags, close_fds=True)
 
@@ -312,10 +379,13 @@ def daemon_loop(cfg: Config, tick_seconds: int) -> None:
         stop["flag"] = True
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        with suppress(ValueError, AttributeError):
             signal.signal(sig, handle)
-        except (ValueError, AttributeError):
-            pass
+
+    # Auto-reap forked workers on POSIX so they don't pile up as zombies.
+    if hasattr(signal, "SIGCHLD"):
+        with suppress(ValueError, OSError):
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
     log.info("daemon started: %d routines, tick=%ds", len(cfg.routines), tick_seconds)
     while not stop["flag"]:
@@ -359,11 +429,7 @@ def main() -> int:
         for r in cfg.routines:
             state = read_state(cfg.state_dir, r.name)
             last = state.get("last_started_at", 0)
-            last_str = (
-                datetime.fromtimestamp(last, tz=timezone.utc).isoformat()
-                if last
-                else "never"
-            )
+            last_str = datetime.fromtimestamp(last, tz=UTC).isoformat() if last else "never"
             print(
                 f"{r.name:30s} every={r.interval_seconds}s "
                 f"harness={r.harness:8s} enabled={r.enabled} last={last_str}"

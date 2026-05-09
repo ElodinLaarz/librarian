@@ -14,34 +14,34 @@ abandon the branch and exit rather than merging something half-done.
    to find candidate issues. Pick exactly one issue you can finish within
    the time budget. Prefer issues with clear acceptance criteria, no open
    PR already linked, and minimal cross-cutting risk.
-2. `gh issue comment <n> --body "Picking this up via routine $routine_name (run $run_id)."`
+1. `gh issue comment <n> --body "Picking this up via routine $routine_name (run $run_id)."`
    so humans can see we are on it. If the issue already has an active
    assignee or an open PR, pick a different one.
-3. Create a working branch `$branch_prefix/<issue-number>-<slug>` off
+1. Create a working branch `$branch_prefix/<issue-number>-<slug>` off
    `$base_branch`.
-4. Implement the change. Read the surrounding code first; match style.
+1. Implement the change. Read the surrounding code first; match style.
    Write tests for new behavior. Do NOT add unrelated refactors.
-5. Run the full local verification suite (lint, type check, tests). Fix
+1. Run the full local verification suite (lint, type check, tests). Fix
    anything you broke. Do not silence failing tests — fix them.
-6. Commit with a clear message that references the issue (e.g.
+1. Commit with a clear message that references the issue (e.g.
    `fix: <summary> (#<n>)`). Push the branch.
-7. Open a PR with `gh pr create` targeting `$base_branch`. Link the
+1. Open a PR with `gh pr create` targeting `$base_branch`. Link the
    issue with `Closes #<n>` in the body. Use a tight summary, a test
    plan, and a "How I verified" section.
-8. Wait for CI and review bots ($reviewer_bots) to post. Poll with
+1. Wait for CI and review bots ($reviewer_bots) to post. Poll with
    `gh pr checks <pr> --watch` and `gh pr view <pr> --comments`.
-9. For every actionable review comment from the bots, address it with a
+1. For every actionable review comment from the bots, address it with a
    real code change (not a hand-wave reply). Re-run local checks. Push
    updates. Re-request review if the bot supports it.
-10. Once CI is green AND no unresolved actionable bot comments remain,
-    merge with `gh pr merge --squash --delete-branch --auto` (or `--merge`
-    if the repo blocks squash). Prefer `--auto` so it lands when checks
-    pass.
-11. Verify the merge succeeded. If `--auto` is queued, poll until merged
-    or until the time budget expires.
-12. Clean up: ensure no leftover local branches, confirm the issue auto-
-    closed via the `Closes` link, leave a final comment on the PR
-    summarizing what changed if the description drifted.
+1. Once CI is green AND no unresolved actionable bot comments remain,
+   merge with `gh pr merge --squash --delete-branch --auto` (or `--merge`
+   if the repo blocks squash). Prefer `--auto` so it lands when checks
+   pass.
+1. Verify the merge succeeded. If `--auto` is queued, poll until merged
+   or until the time budget expires.
+1. Clean up: ensure no leftover local branches, confirm the issue auto-
+   closed via the `Closes` link, leave a final comment on the PR
+   summarizing what changed if the description drifted.
 
 # Rules
 
