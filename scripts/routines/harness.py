@@ -1,0 +1,92 @@
+"""Harness adapters: launch an agentic CLI in YOLO mode with a prompt."""
+
+from __future__ import annotations
+
+import os
+import shlex
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+@dataclass
+class Harness:
+    name: str
+    cmd: list[str]
+    prompt_via: str = "stdin"  # "stdin" | "arg" | "file"
+    prompt_arg: str | None = None  # used when prompt_via == "arg" or "file"
+    env: dict[str, str] = field(default_factory=dict)
+    timeout_seconds: int | None = None
+
+    @classmethod
+    def from_config(cls, name: str, raw: dict) -> "Harness":
+        cmd = raw.get("cmd")
+        if not cmd or not isinstance(cmd, list):
+            raise ValueError(f"harness {name!r}: 'cmd' must be a non-empty list")
+        return cls(
+            name=name,
+            cmd=list(cmd),
+            prompt_via=raw.get("prompt_via", "stdin"),
+            prompt_arg=raw.get("prompt_arg"),
+            env=dict(raw.get("env", {})),
+            timeout_seconds=raw.get("timeout_seconds"),
+        )
+
+    def resolve_binary(self) -> str:
+        binary = self.cmd[0]
+        resolved = shutil.which(binary)
+        if not resolved:
+            raise FileNotFoundError(
+                f"harness {self.name!r}: binary {binary!r} not on PATH"
+            )
+        return resolved
+
+    def build_invocation(self, prompt: str, prompt_file: Path) -> list[str]:
+        argv = [self.resolve_binary(), *self.cmd[1:]]
+        if self.prompt_via == "arg":
+            argv.append(prompt)
+        elif self.prompt_via == "file":
+            if not self.prompt_arg:
+                raise ValueError(
+                    f"harness {self.name!r}: prompt_via='file' requires 'prompt_arg'"
+                )
+            argv.extend([self.prompt_arg, str(prompt_file)])
+        return argv
+
+    def run(
+        self,
+        prompt: str,
+        cwd: Path,
+        log_path: Path,
+        prompt_file: Path,
+        extra_env: dict[str, str] | None = None,
+    ) -> int:
+        prompt_file.write_text(prompt, encoding="utf-8")
+        argv = self.build_invocation(prompt, prompt_file)
+        env = {**os.environ, **self.env, **(extra_env or {})}
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("ab", buffering=0) as log:
+            log.write(f"$ cd {cwd}\n".encode())
+            log.write(f"$ {shlex.join(argv)}\n".encode())
+            log.flush()
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(cwd),
+                env=env,
+                stdin=subprocess.PIPE if self.prompt_via == "stdin" else subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+            if self.prompt_via == "stdin":
+                assert proc.stdin is not None
+                proc.stdin.write(prompt.encode("utf-8"))
+                proc.stdin.close()
+            try:
+                return proc.wait(timeout=self.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                log.write(b"\n[routined] TIMEOUT - killed\n")
+                return 124

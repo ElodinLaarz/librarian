@@ -1,0 +1,66 @@
+# routined config — defines harnesses and the routines that run on intervals.
+# All paths support ~ and $ENV expansion.
+
+state_dir: ~/.routined/state
+log_dir: ~/.routined/logs
+worktree_root: ~/.routined/worktrees
+
+# ---------------------------------------------------------------------------
+# Harnesses: agentic CLIs invoked in YOLO / auto-permission mode.
+# Pick whichever you have installed; remove the rest.
+# ---------------------------------------------------------------------------
+harnesses:
+  claude:
+    cmd: ["claude", "--dangerously-skip-permissions", "--print"]
+    prompt_via: stdin
+    timeout_seconds: 5400  # 90 min hard ceiling per run
+
+  gemini:
+    cmd: ["gemini", "--yolo"]
+    prompt_via: stdin
+    timeout_seconds: 5400
+
+  codex:
+    cmd: ["codex", "exec", "--full-auto"]
+    prompt_via: arg
+    timeout_seconds: 5400
+
+  # "pi" / aider / opencode / etc. — drop any binary that takes a prompt.
+  aider:
+    cmd: ["aider", "--yes-always", "--auto-commits", "--no-stream"]
+    prompt_via: arg
+    timeout_seconds: 5400
+
+# ---------------------------------------------------------------------------
+# Routines: each fires every <interval> and runs the prompt template under
+# the chosen harness inside a fresh clone of <repo>.
+# ---------------------------------------------------------------------------
+routines:
+  - name: librarian-good-first-issues
+    enabled: true
+    interval: 6h
+    harness: claude
+    repo: git@github.com:calebgeiger/librarian.git
+    base_branch: main
+    prompt_template: prompts/issue_to_pr.md
+    max_concurrent: 1
+    prompt_vars:
+      issue_filter: 'is:open is:issue label:"good first issue" no:assignee'
+      branch_prefix: routine/auto
+      max_minutes: 60
+      reviewer_bots: "coderabbitai, github-actions"
+    env:
+      GH_TOKEN: ${GH_TOKEN}
+
+  - name: librarian-bug-triage
+    enabled: false
+    interval: 12h
+    harness: gemini
+    repo: git@github.com:calebgeiger/librarian.git
+    base_branch: main
+    prompt_template: prompts/issue_to_pr.md
+    prompt_vars:
+      issue_filter: 'is:open is:issue label:bug no:assignee sort:created-asc'
+      branch_prefix: routine/triage
+      max_minutes: 90
+      reviewer_bots: "coderabbitai"
