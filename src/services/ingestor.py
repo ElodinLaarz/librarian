@@ -245,7 +245,7 @@ class Ingestor:
             "statements or concepts. Each statement or concept must contain enough context "
             "to be fully understood on its own. "
             f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
-            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\\n\\nTEXT:\\n'
+            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\n\nTEXT:\n'
             f"{blob[:8000]}"
         )
         url = f"{base}/v1/chat/completions"
@@ -270,8 +270,8 @@ class Ingestor:
 
         message = message.strip()
         if message.startswith("```"):
-            message = re.sub(r"^```(?:json)?\\s*", "", message)
-            message = re.sub(r"\\s*```$", "", message)
+            message = re.sub(r"(?i)^```\s*(?:json)?\s*", "", message)
+            message = re.sub(r"\s*```$", "", message)
 
         try:
             parsed = json.loads(message)

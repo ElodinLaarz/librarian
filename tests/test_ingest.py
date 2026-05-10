@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
+import httpx
 import numpy as np
 import pytest
 
@@ -414,3 +416,94 @@ async def test_dedup_store_returning_empty_sets_partial_status(
     output = await ingestor.ingest("Incoming content that triggers a reshard.")
 
     assert output.status != IngestStatus.STORED
+
+
+# ── prompt / fence-stripper escape regression (issue #20) ────────────────────
+
+
+class TestPromptEscapes:
+    """Regression tests for issue #20: literal ``\\n``/``\\s`` escapes in ingestor."""
+
+    async def test_prompt_uses_real_newlines(
+        self,
+        config: LibrarianConfig,
+        repo: StubTomeRepository,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The LLM prompt must contain real newlines, not literal ``\\n`` escapes."""
+        sample = "Photosynthesis converts sunlight into glucose. " * 4
+        captured: dict[str, Any] = {}
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {"choices": [{"message": {"content": '{"facts": ["a fact"]}'}}]}
+
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
+            captured["url"] = url
+            captured["payload"] = kwargs.get("json")
+            return _FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+        ingestor = Ingestor(
+            config,
+            StubEmbeddingService(dimensions=config.embedding.dimensions),
+            StubVerifier(confidence=0.9),
+            repo,
+        )
+
+        result = await ingestor._reshard_llm(sample)
+
+        assert result == ["a fact"]
+        content = captured["payload"]["messages"][0]["content"]
+        # No literal backslash-n sequences in the prompt the LLM sees.
+        assert "\\n" not in content
+        # Real newlines are present (header + blank line + TEXT: + body).
+        assert content.count("\n") >= 3
+        assert content.endswith("TEXT:\n" + sample[:8000])
+
+    @pytest.mark.parametrize(
+        "fenced",
+        [
+            '```json\n{"facts": ["one", "two"]}\n```',
+            '```\n{"facts": ["one", "two"]}\n```',
+            '```json {"facts": ["one", "two"]} ```',
+        ],
+    )
+    async def test_fence_stripper_strips_whitespace(
+        self,
+        config: LibrarianConfig,
+        repo: StubTomeRepository,
+        monkeypatch: pytest.MonkeyPatch,
+        fenced: str,
+    ) -> None:
+        """``_reshard_llm`` must strip ``\\n``/space whitespace inside JSON code fences."""
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {"choices": [{"message": {"content": fenced}}]}
+
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+        ingestor = Ingestor(
+            config,
+            StubEmbeddingService(dimensions=config.embedding.dimensions),
+            StubVerifier(confidence=0.9),
+            repo,
+        )
+
+        # With the correct ``\s`` regex, the fence is stripped cleanly and the
+        # JSON parses to ["one", "two"]. With the buggy ``\\s`` literal-backslash
+        # regex, the fence is left in place, ``json.loads`` raises, and
+        # ``_reshard_llm`` silently returns None.
+        result = await ingestor._reshard_llm("any text")
+        assert result == ["one", "two"]
