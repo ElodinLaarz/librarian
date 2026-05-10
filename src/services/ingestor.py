@@ -324,6 +324,5 @@ class Ingestor:
         expected_dim = self._embedding_service.dimensions
         if tome.embedding is not None and tome.embedding.shape[0] != expected_dim:
             raise ValueError(
-                f"Tome embedding has dimension {tome.embedding.shape[0]}, "
-                f"expected {expected_dim}"
+                f"Tome embedding has dimension {tome.embedding.shape[0]}, expected {expected_dim}"
             )
