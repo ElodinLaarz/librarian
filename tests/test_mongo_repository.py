@@ -1,10 +1,12 @@
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
+from pymongo.errors import OperationFailure
 
 from src.config import DatabaseSettings
 from src.models.enums import SourceType
@@ -135,3 +137,129 @@ async def test_search(mongo_repo: MongoTomeRepository) -> None:
         results = await mongo_repo.search("quantum ducks", top_k=5)
         assert len(results) > 0
         assert results[0][0].id == tome.id
+
+
+# ---------------------------------------------------------------------------
+# ensure_indexes failure surfacing
+# ---------------------------------------------------------------------------
+
+
+def _build_repo_with_mocked_collection(
+    aggregate_side_effect: object | None = None,
+    aggregate_documents: list[dict] | None = None,
+    create_search_index_side_effect: object | None = None,
+) -> MongoTomeRepository:
+    """Construct a MongoTomeRepository whose collection is fully mocked.
+
+    Avoids any network round trip so the test can run without a live mongod.
+    """
+    settings = DatabaseSettings(
+        uri="mongodb://localhost:27017/?directConnection=true",
+        tls=False,
+        tls_cert_path="/dev/null",
+        database="test_library",
+    )
+    embedding_service = StubEmbeddingService()
+    repo = MongoTomeRepository(settings, embedding_service)
+
+    collection = MagicMock()
+    collection.name = "tomes"
+    collection.database = MagicMock()
+    collection.database.create_collection = AsyncMock(return_value=None)
+    collection.create_search_index = AsyncMock(return_value=None)
+    if create_search_index_side_effect is not None:
+        collection.create_search_index.side_effect = create_search_index_side_effect
+
+    if aggregate_side_effect is not None:
+
+        def _aggregate(_pipeline: object) -> AsyncIterator[dict]:
+            raise aggregate_side_effect
+
+        collection.aggregate = _aggregate
+    else:
+        docs = list(aggregate_documents or [])
+
+        class _AsyncIter:
+            def __init__(self, items: list[dict]) -> None:
+                self._items = list(items)
+
+            def __aiter__(self) -> "_AsyncIter":
+                return self
+
+            async def __anext__(self) -> dict:
+                if not self._items:
+                    raise StopAsyncIteration
+                return self._items.pop(0)
+
+        def _aggregate(_pipeline: object) -> "_AsyncIter":
+            return _AsyncIter(docs)
+
+        collection.aggregate = _aggregate
+
+    repo._collection = collection
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_ensure_indexes_propagates_operation_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A transient Atlas failure on $listSearchIndexes must surface, not be swallowed."""
+    repo = _build_repo_with_mocked_collection(
+        aggregate_side_effect=OperationFailure(
+            "transient atlas error",
+            code=111,
+            details={"codeName": "InternalError"},
+        ),
+    )
+
+    with (
+        caplog.at_level(logging.ERROR, logger="src.storage.mongo.mongo_tome_repository"),
+        pytest.raises(OperationFailure),
+    ):
+        await repo.ensure_indexes()
+
+    assert any(
+        record.levelno >= logging.ERROR and "search index" in record.getMessage().lower()
+        for record in caplog.records
+    ), f"expected ERROR log about search indexes, got: {[r.getMessage() for r in caplog.records]}"
+
+
+@pytest.mark.asyncio
+async def test_ensure_indexes_skips_when_atlas_search_unsupported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """CommandNotFound on $listSearchIndexes must skip silently (local-mongod path)."""
+    repo = _build_repo_with_mocked_collection(
+        aggregate_side_effect=OperationFailure(
+            "Unrecognized pipeline stage name: '$listSearchIndexes'",
+            code=40324,
+            details={"codeName": "CommandNotFound"},
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="src.storage.mongo.mongo_tome_repository"):
+        # Must NOT raise — preserves local-mongod CI fixture path.
+        await repo.ensure_indexes()
+
+    assert any(record.levelno == logging.WARNING for record in caplog.records), (
+        f"expected WARNING log, got: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
+    # And create_search_index must not have been invoked.
+    assert repo._collection.create_search_index.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_ensure_indexes_propagates_create_search_index_failure() -> None:
+    """A failure inside create_search_index must surface up to the lifespan."""
+    repo = _build_repo_with_mocked_collection(
+        aggregate_documents=[],  # listSearchIndexes returns empty -> both indexes get created
+        create_search_index_side_effect=OperationFailure(
+            "permission denied",
+            code=13,
+            details={"codeName": "Unauthorized"},
+        ),
+    )
+
+    with pytest.raises(OperationFailure):
+        await repo.ensure_indexes()

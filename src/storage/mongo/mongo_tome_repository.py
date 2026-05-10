@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -9,7 +10,7 @@ from uuid import UUID
 import numpy as np
 from bson.binary import Binary, BinaryVectorDtype
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
-from pymongo.errors import CollectionInvalid
+from pymongo.errors import CollectionInvalid, OperationFailure
 from pymongo.operations import SearchIndexModel
 
 from src.config import DatabaseSettings
@@ -17,6 +18,37 @@ from src.models.tome import Tome
 from src.services.embedding import EmbeddingService
 from src.storage.mongo.mongo_tome import MongoTome
 from src.storage.tome_repository import TomeRepository
+
+logger = logging.getLogger(__name__)
+
+# Atlas Search pipeline stages ($listSearchIndexes, $search, $vectorSearch) are
+# unsupported on stock community mongod. The server reports this as one of the
+# codeNames below — treat them as "skip search-index setup" rather than as a
+# fatal startup error so local CI fixtures keep working.
+_ATLAS_SEARCH_UNSUPPORTED_CODE_NAMES = frozenset(
+    {
+        "CommandNotFound",
+        "SearchNotEnabled",
+        "InvalidPipelineOperator",
+    }
+)
+
+
+def _is_atlas_search_unsupported(exc: OperationFailure) -> bool:
+    """Return True if the failure means the backend lacks Atlas Search at all.
+
+    Distinguishes a legitimate "this is plain mongod, skip search indexes"
+    case from a transient Atlas outage that must surface loudly.
+    """
+    details = exc.details or {}
+    code_name = details.get("codeName")
+    if code_name in _ATLAS_SEARCH_UNSUPPORTED_CODE_NAMES:
+        return True
+    # Older server builds don't populate codeName; fall back to the message.
+    message = str(exc)
+    return "$listSearchIndexes" in message and (
+        "Unrecognized pipeline stage" in message or "unknown" in message.lower()
+    )
 
 
 class MongoTomeRepository(TomeRepository):
@@ -206,24 +238,42 @@ class MongoTomeRepository(TomeRepository):
         return duplicates
 
     async def ensure_indexes(self) -> None:
-        """Create search and vector indexes programmatically."""
-        # Ensure collection exists
+        """Create search and vector indexes programmatically.
+
+        Failures during Atlas search-index setup are surfaced rather than
+        silently swallowed (issue #27). The only legitimate skip is when the
+        backend is plain mongod that lacks Atlas Search entirely; that case
+        is detected via the server's codeName and logged as a warning.
+        """
+        # Ensure collection exists.
         try:
             await self._collection.database.create_collection(self._collection.name)
         except CollectionInvalid:
+            # Collection already exists — the documented "already exists" path.
             pass
-        except Exception:
-            # Ignore other errors (e.g. if collection already exists but throws different error)
-            pass
+        except OperationFailure as exc:
+            # Some server versions surface "already exists" as an OperationFailure
+            # rather than CollectionInvalid; log at debug since it's expected on
+            # subsequent startups.
+            logger.debug("create_collection skipped: %s", exc)
 
-        existing_search_indexes = []
+        existing_search_indexes: list[str] = []
 
         try:
             async for index in self._collection.aggregate([{"$listSearchIndexes": {}}]):
                 existing_search_indexes.append(index["name"])
-        except Exception:
-            # If $listSearchIndexes is not supported (e.g. non-Atlas/non-local-mock), skip
-            return
+        except OperationFailure as exc:
+            if _is_atlas_search_unsupported(exc):
+                logger.warning(
+                    "Atlas search indexes unsupported on this backend; skipping search index setup",
+                    exc_info=True,
+                )
+                return
+            logger.error(
+                "Failed to enumerate Atlas search indexes; aborting startup",
+                exc_info=True,
+            )
+            raise
 
         # 2. Define Vector Search Index
         if "vectors" not in existing_search_indexes:
@@ -243,14 +293,28 @@ class MongoTomeRepository(TomeRepository):
                 name="vectors",
                 type="vectorSearch",
             )
-            await self._collection.create_search_index(model=vector_model)
+            try:
+                await self._collection.create_search_index(model=vector_model)
+            except OperationFailure:
+                logger.error(
+                    "Failed to create Atlas vector search index 'vectors'",
+                    exc_info=True,
+                )
+                raise
 
         # 3. Define Lexical Search Index
         if "default" not in existing_search_indexes:
             lexical_model = SearchIndexModel(
                 definition={"mappings": {"dynamic": True}}, name="default"
             )
-            await self._collection.create_search_index(model=lexical_model)
+            try:
+                await self._collection.create_search_index(model=lexical_model)
+            except OperationFailure:
+                logger.error(
+                    "Failed to create Atlas lexical search index 'default'",
+                    exc_info=True,
+                )
+                raise
 
     def close(self) -> None:
         """Close the MongoDB client connection."""
