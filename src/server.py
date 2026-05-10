@@ -34,7 +34,7 @@ from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
 
-config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
+config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "librarian.config.yaml"))
 config = LibrarianConfig.from_yaml(config_path)
 
 
