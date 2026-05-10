@@ -103,9 +103,7 @@ class Verifier:
         verification = self._config.verification
         verdict: VerificationVerdict | None = None
         if verification.use_llm_verdict:
-            model = verification.verdict_model or verification.claim_model
-            if model:
-                verdict = await _llm_verdict(claim, hits, self._config, self._get_http_client())
+            verdict = await _llm_verdict(claim, hits, self._config, self._get_http_client())
 
         if verdict is None:
             blob = " ".join(f"{h.title} {h.snippet}" for h in hits)
@@ -202,6 +200,7 @@ async def _llm_verdict(
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
+        "response_format": {"type": "json_object"},
     }
     try:
         response = await client.post(url, json=payload)
@@ -217,9 +216,11 @@ async def _llm_verdict(
         return None
 
     message = message.strip()
-    if message.startswith("```"):
-        message = re.sub(r"^```(?:json)?\s*", "", message)
-        message = re.sub(r"\s*```$", "", message)
+    # Extract the JSON object even if the model wraps it in markdown fences
+    # or surrounds it with conversational filler.
+    match = re.search(r"\{.*\}", message, re.DOTALL)
+    if match:
+        message = match.group(0)
 
     try:
         parsed = json.loads(message)
