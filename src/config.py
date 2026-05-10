@@ -76,8 +76,8 @@ class DatabaseSettings(BaseSettings):
 
 class EmbeddingSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_EMBEDDING_")
-    model_name: str = "all-MiniLM-L6-v2"
-    dimensions: int = 384
+    model_name: str = "nomic-embed-text"
+    dimensions: int = 768
     cache_size: int = 10_000
     provider: str = "auto"  # "auto", "sentence-transformers", "ollama", or "dummy"
     ollama_url: str = "http://localhost:11434"

@@ -26,7 +26,7 @@ AFTER_AGENT_HOOK="$(jq -n --arg cmd "$HOOK_CMD" --arg name "librarian-after-agen
   '{matcher: "*", hooks: [{name: $name, type: "command", command: $cmd}]}')"
 
 AFTER_TOOL_HOOK="$(jq -n --arg cmd "$HOOK_CMD" --arg name "librarian-after-tool" \
-  '{matcher: "save_memory|mcp_librarian_library_ingest", hooks: [{name: $name, type: "command", command: $cmd}]}')"
+  '{matcher: "save_memory|library_ingest|mcp_librarian_library_ingest", hooks: [{name: $name, type: "command", command: $cmd}]}')"
 
 tmp="$(mktemp)"
 

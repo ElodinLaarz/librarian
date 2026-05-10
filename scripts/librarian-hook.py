@@ -168,7 +168,7 @@ def handle_gemini_cli(data: dict, event: str) -> None:
                 fact = tool_input.get("fact")
                 if fact:
                     asyncio.run(_ingest(fact))
-            elif tool_name == "mcp_librarian_library_ingest":
+            elif tool_name in ("library_ingest", "mcp_librarian_library_ingest"):
                 # Already handled by the tool itself, but could log or post-process here.
                 pass
 
