@@ -212,9 +212,7 @@ async def test_fetch_url_returns_empty_on_http_error(monkeypatch: pytest.MonkeyP
 # ── SSRF guard ───────────────────────────────────────────────────────────────
 
 
-def _stub_resolver(
-    monkeypatch: pytest.MonkeyPatch, mapping: dict[str, list[str]]
-) -> None:
+def _stub_resolver(monkeypatch: pytest.MonkeyPatch, mapping: dict[str, list[str]]) -> None:
     """Replace `_resolve_host_ips` so we can control DNS in tests."""
 
     async def fake_resolve(host: str) -> list[str]:
@@ -303,9 +301,7 @@ async def test_fetch_url_rejects_aws_metadata(monkeypatch: pytest.MonkeyPatch) -
         "[fe80::1]",
     ],
 )
-async def test_fetch_url_rejects_rfc1918(
-    monkeypatch: pytest.MonkeyPatch, host: str
-) -> None:
+async def test_fetch_url_rejects_rfc1918(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
     bare = host.strip("[]")
     _stub_resolver(monkeypatch, {bare: [bare]})
     counter = _stub_httpx_get(monkeypatch)
