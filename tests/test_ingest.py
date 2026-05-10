@@ -369,6 +369,48 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
     assert await repo.get_by_id(existing.id) is not None
 
 
+async def test_reshard_rolls_back_partial_inserts_on_failure() -> None:
+    """If a replacement insert fails mid-reshard, previously-inserted replacements
+    must be compensating-deleted, originals must remain, and ingest must report
+    REJECTED with a reason mentioning the insert abort."""
+    test_config = make_test_config()
+
+    # Pre-existing duplicates that the new content will collide with.
+    original_a = _make_tome("Original fact A.")
+    original_b = _make_tome("Original fact B.")
+
+    # Stub repo: second insert call raises, simulating a mid-flight failure.
+    repo = StubTomeRepository(fail_inserts_after=1)
+    repo.seed_near_duplicates([original_a, original_b])
+
+    ingestor = StubIngestor(
+        test_config,
+        StubEmbeddingService(dimensions=test_config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    # Two new shards (split on \n\n by StubIngestor._reshard) → combined content
+    # produces multiple replacement tomes, so >1 inserts will be attempted.
+    output = await ingestor.ingest("New shard one.\n\nNew shard two.")
+
+    # (a) No replacement tome should remain — compensating delete must have run.
+    original_ids = {original_a.id, original_b.id}
+    leftover_replacements = [t for t in repo.all_tomes() if t.id not in original_ids]
+    assert leftover_replacements == [], (
+        f"Expected zero replacement tomes after rollback, found: {leftover_replacements}"
+    )
+
+    # (b) Both original duplicates must still be present (delete step never ran).
+    assert await repo.get_by_id(original_a.id) is not None
+    assert await repo.get_by_id(original_b.id) is not None
+
+    # (c) Output reflects rejection with a reason mentioning the insert abort.
+    assert output.status in (IngestStatus.REJECTED, IngestStatus.PARTIAL)
+    assert output.reject_reason is not None
+    assert "insert" in output.reject_reason.lower()
+
+
 async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     """A failed tome deletion during reshard returns IngestOutput with error rather than raising."""
     repo = StubTomeRepository(fail_deletes=True)

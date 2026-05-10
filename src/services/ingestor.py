@@ -193,8 +193,47 @@ class Ingestor:
         if not replacements:
             return []
 
-        # Step 3 - Insert replacements.
-        await asyncio.gather(*[self._tome_repo.insert(r) for r in replacements])
+        # Step 3 - Insert replacements. If any insert fails, compensating-delete
+        # the ones that succeeded so we leave neither orphans (no replacement
+        # without delete) nor partial duplication. Originals stay untouched.
+        insert_results = await asyncio.gather(
+            *[self._tome_repo.insert(r) for r in replacements],
+            return_exceptions=True,
+        )
+        inserted_ok: list[Tome] = []
+        insert_errors: list[str] = []
+        for replacement, result in zip(replacements, insert_results, strict=True):
+            if isinstance(result, BaseException):
+                logging.warning(
+                    "Exception inserting replacement %s during reshard: %s",
+                    replacement.id,
+                    result,
+                )
+                insert_errors.append(str(replacement.id))
+            else:
+                inserted_ok.append(replacement)
+
+        if insert_errors:
+            # Best-effort rollback of the partial inserts.
+            rollback_results = await asyncio.gather(
+                *[self._tome_repo.delete(r.id) for r in inserted_ok],
+                return_exceptions=True,
+            )
+            residual_ids = [
+                str(r.id)
+                for r, res in zip(inserted_ok, rollback_results, strict=True)
+                if isinstance(res, BaseException) or not res
+            ]
+            if residual_ids:
+                logging.error(
+                    "Reshard rollback left residual replacements in store: %s",
+                    constants.ID_SEPARATOR.join(residual_ids),
+                )
+            failed_ids = constants.ID_SEPARATOR.join(insert_errors)
+            raise ReshardError(
+                f"Reshard aborted: insert failure for replacement(s) {failed_ids}",
+                tomes=[],
+            )
 
         # Step 4 - Delete old tomes.
         # Technically if we fail here, we may end up with duplicate data in the
