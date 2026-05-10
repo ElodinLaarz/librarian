@@ -174,6 +174,7 @@ class LibrarianServer:
                 category_hint=params.category,
                 tags_hint=params.tags,
                 source_url=params.source_url,
+                force_format=params.force_format,
             )
             return await self.ingestor.ingest(params.content, opts)
 

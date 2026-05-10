@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import ast
+import json
 import uuid
+from unittest.mock import patch
 
 import numpy as np
 import pytest
+import yaml
 
 from src import constants
 from src.config import (
     EmbeddingSettings,
+    IngestSettings,
     LibrarianConfig,
     VerificationSettings,
 )
@@ -351,7 +356,9 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
     class EmptyChunkIngestor(StubIngestor):
         _chunked_once = False
 
-        async def _reshard(self, blob: str) -> list[str]:
+        async def _reshard(
+            self, blob: str, opts: IngestCallOptions | None = None
+        ) -> list[str]:
             # First call (the original blob) returns one chunk so ingest proceeds.
             # Subsequent calls (reshard) return nothing.
             if not self._chunked_once:
@@ -414,3 +421,196 @@ async def test_dedup_store_returning_empty_sets_partial_status(
     output = await ingestor.ingest("Incoming content that triggers a reshard.")
 
     assert output.status != IngestStatus.STORED
+
+
+# ── syntax-aware chunking (issue #47) ────────────────────────────────────────
+
+
+def _make_real_ingestor(
+    *,
+    shard_size: int = 400,
+    shard_overlap: int = 0,
+    use_llm_chunking: bool = False,
+) -> Ingestor:
+    """Build a real Ingestor (not StubIngestor) to exercise _reshard logic."""
+    config = make_test_config(
+        ingest=IngestSettings(
+            shard_size=shard_size,
+            shard_overlap=shard_overlap,
+            use_llm_chunking=use_llm_chunking,
+        )
+    )
+    return Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        StubTomeRepository(),
+    )
+
+
+async def test_python_module_chunks_are_ast_parseable() -> None:
+    """Each chunk of a multi-function Python module must be ast.parse-able.
+
+    Generic character splitting truncates `def`/`class` mid-body. A
+    language-aware splitter splits at structural boundaries.
+    """
+    blob = (
+        "def alpha(x):\n"
+        "    \"\"\"First function.\"\"\"\n"
+        "    y = x + 1\n"
+        "    z = y * 2\n"
+        "    return z\n"
+        "\n\n"
+        "def beta(a, b):\n"
+        "    \"\"\"Second function.\"\"\"\n"
+        "    result = a * b\n"
+        "    for i in range(10):\n"
+        "        result += i\n"
+        "    return result\n"
+        "\n\n"
+        "def gamma():\n"
+        "    \"\"\"Third function.\"\"\"\n"
+        "    data = [1, 2, 3, 4, 5]\n"
+        "    return sum(data)\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=120, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    for s in shards:
+        # Must parse as Python; raises SyntaxError if a def line was truncated.
+        ast.parse(s)
+
+
+async def test_markdown_preserves_fenced_code_blocks() -> None:
+    """Each markdown chunk must have a balanced count of triple-backticks."""
+    blob = (
+        "# Heading\n\n"
+        "Intro paragraph with explanation.\n\n"
+        "```python\n"
+        "def hello():\n"
+        "    print('hello world')\n"
+        "    return 42\n"
+        "```\n\n"
+        "Middle paragraph between code blocks for context.\n\n"
+        "```python\n"
+        "class Greeter:\n"
+        "    def greet(self):\n"
+        "        return 'hi'\n"
+        "```\n\n"
+        "Closing remarks.\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=120, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    for s in shards:
+        assert s.count("```") % 2 == 0, f"Unbalanced fences in shard: {s!r}"
+
+
+async def test_yaml_chunks_split_on_top_level_keys() -> None:
+    """YAML with multiple top-level keys must split into yaml.safe_load-able chunks."""
+    blob = (
+        "alpha:\n"
+        "  description: first key\n"
+        "  value: 1\n"
+        "\n"
+        "beta:\n"
+        "  description: second key\n"
+        "  value: 2\n"
+        "\n"
+        "gamma:\n"
+        "  description: third key\n"
+        "  value: 3\n"
+        "\n"
+        "delta:\n"
+        "  description: fourth key\n"
+        "  value: 4\n"
+        "\n"
+        "epsilon:\n"
+        "  description: fifth key\n"
+        "  value: 5\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=80, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    for s in shards:
+        loaded = yaml.safe_load(s)
+        # Each shard must be parseable YAML (mapping or None/scalar).
+        assert loaded is None or isinstance(loaded, dict | list | str | int | float | bool)
+
+
+async def test_json_chunks_split_on_top_level_elements() -> None:
+    """JSON array of N objects must split into chunks that each parse (when wrapped)."""
+    objects = [{"id": i, "name": f"item-{i}", "value": i * 10} for i in range(10)]
+    blob = json.dumps(objects, indent=2)
+    ingestor = _make_real_ingestor(shard_size=200, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    # Each shard must contain valid JSON object(s). Wrap in [] if needed for parsing.
+    for s in shards:
+        s_clean = s.strip().rstrip(",")
+        # Try direct parse; otherwise wrap as array element(s).
+        try:
+            json.loads(s_clean)
+        except json.JSONDecodeError:
+            wrapped = f"[{s_clean.rstrip(',')}]"
+            json.loads(wrapped)
+
+
+async def test_force_format_override_routes_to_correct_splitter() -> None:
+    """force_format='python' on a prose blob must invoke the PYTHON language splitter."""
+    from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+
+    prose = (
+        "This is a long prose paragraph about gardening. "
+        "It contains no code at all and would normally be treated as text. "
+        "However the caller has overridden the format detection."
+    )
+    ingestor = _make_real_ingestor(shard_size=80, shard_overlap=0)
+
+    real_from_language = RecursiveCharacterTextSplitter.from_language
+    seen_languages: list[Language] = []
+
+    def spy(language: Language, **kwargs: object) -> RecursiveCharacterTextSplitter:
+        seen_languages.append(language)
+        return real_from_language(language, **kwargs)
+
+    with patch.object(RecursiveCharacterTextSplitter, "from_language", side_effect=spy):
+        shards = await ingestor._reshard(prose, IngestCallOptions(force_format="python"))
+
+    assert shards
+    assert Language.PYTHON in seen_languages, (
+        f"Expected PYTHON splitter to be invoked; saw {seen_languages!r}"
+    )
+
+
+async def test_use_llm_chunking_skipped_for_detected_code() -> None:
+    """When detected format is code, _reshard_llm must NOT be awaited."""
+    blob = (
+        "import os\n"
+        "import sys\n"
+        "\n"
+        "def main():\n"
+        "    print('hello')\n"
+        "    return 0\n"
+        "\n"
+        "class Foo:\n"
+        "    def bar(self):\n"
+        "        return 42\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=200, shard_overlap=0, use_llm_chunking=True)
+
+    with patch.object(
+        Ingestor, "_reshard_llm", autospec=True, return_value=None
+    ) as llm_spy:
+        shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    assert not llm_spy.called, "_reshard_llm must NOT be invoked for detected code"

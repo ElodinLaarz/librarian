@@ -11,7 +11,7 @@ from src.models.enums import VerificationVerdict
 from src.models.research_job import ResearchJob
 from src.models.tome import Tome
 from src.services.embedding import EmbeddingService
-from src.services.ingestor import Ingestor
+from src.services.ingestor import IngestCallOptions, Ingestor
 from src.services.verifier import ClaimResult, VerificationResult, Verifier
 from src.services.web_search import WebSearchClient, WebSearchResult
 from src.storage.research_job_repository import ResearchJobRepository
@@ -116,7 +116,9 @@ class StubVerifier(Verifier):
 class StubIngestor(Ingestor):
     """Ingestor with deterministic, LLM-free overrides for all abstract methods."""
 
-    async def _reshard(self, blob: str) -> list[str]:
+    async def _reshard(
+        self, blob: str, opts: IngestCallOptions | None = None
+    ) -> list[str]:
         """Split on double newlines; discard blank segments."""
         return [seg.strip() for seg in blob.split("\n\n") if seg.strip()]
 

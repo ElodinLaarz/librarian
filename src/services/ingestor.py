@@ -7,6 +7,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID
 
 import httpx
@@ -20,6 +21,53 @@ from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
 from src.storage.tome_repository import TomeRepository
 
+# Format identifiers used by the syntax-aware chunker. "text" = generic prose
+# (default LLM/recursive path); the rest skip the LLM "atomic facts" rewrite.
+DetectedFormat = Literal["text", "code", "python", "yaml", "json", "markdown"]
+
+
+def _detect_format(blob: str) -> DetectedFormat:
+    """Heuristically classify a blob's format.
+
+    Order matters — markdown fences are checked before Python keywords so that
+    a markdown document containing fenced Python is not mis-routed.
+    """
+    if not blob.strip():
+        return "text"
+
+    # Triple-backtick fences strongly suggest Markdown.
+    if "```" in blob:
+        return "markdown"
+
+    stripped = blob.lstrip()
+    first_char = stripped[0]
+    if first_char in "{[":
+        return "json"
+
+    # Top-level Python signals: def / class / import / from at column 0.
+    if re.search(r"(?m)^(def |class |import |from \S+ import )", blob):
+        return "python"
+
+    # YAML: mapping keys at column 0 (`^[\w-]+:` followed by space/eol).
+    yaml_key_lines = re.findall(r"(?m)^[A-Za-z_][\w-]*:(?:\s|$)", blob)
+    if len(yaml_key_lines) >= 2:
+        return "yaml"
+
+    return "text"
+
+
+def _balance_markdown_fences(chunk: str) -> str:
+    """Ensure a markdown chunk has an even count of ``` triple-backticks.
+
+    A language-aware split can leave a chunk that opens a fenced code block
+    without closing it (or vice-versa). To keep each shard renderable on its
+    own, append a closing fence when the count is odd.
+    """
+    if chunk.count("```") % 2 == 0:
+        return chunk
+    suffix = "" if chunk.endswith("\n") else "\n"
+    return f"{chunk}{suffix}```"
+
 
 @dataclass
 class IngestCallOptions:
@@ -29,6 +77,7 @@ class IngestCallOptions:
     research_job_id: UUID | None = None
     category_hint: str | None = None
     tags_hint: list[str] | None = None
+    force_format: DetectedFormat | None = None
 
 
 class ReshardError(Exception):
@@ -64,7 +113,7 @@ class Ingestor:
                 reject_reason="Content is empty",
             )
 
-        shards = await self._reshard(blob)
+        shards = await self._reshard(blob, opts)
         if not shards:
             return IngestOutput(
                 tomes=[],
@@ -185,7 +234,7 @@ class Ingestor:
         combined = constants.CONTENT_SEPARATOR.join(
             [d.content for d in duplicates] + [tome.content]
         )
-        shards = await self._reshard(combined)
+        shards = await self._reshard(combined, opts)
         replacement_results = await asyncio.gather(*[self._build_tome(c, opts) for c in shards])
         replacements = [t for t in replacement_results if t is not None]
 
@@ -221,13 +270,29 @@ class Ingestor:
 
         return replacements
 
-    async def _reshard(self, blob: str) -> list[str]:
-        """Split blob into atomic, self-contained fact shards."""
-        if self._config.ingest.use_llm_chunking:
-            llm_shards = await self._reshard_llm(blob)
-            if llm_shards:
-                return llm_shards
+    async def _reshard(
+        self, blob: str, opts: IngestCallOptions | None = None
+    ) -> list[str]:
+        """Split blob into syntax-aware shards.
 
+        Detects the input format (or honours ``opts.force_format``) and routes
+        to a language-aware splitter. Code, config, and markdown skip the LLM
+        "atomic facts" rewrite, which would destroy their syntax.
+        """
+        opts = opts or IngestCallOptions()
+        fmt: DetectedFormat = opts.force_format or _detect_format(blob)
+
+        if fmt == "text":
+            if self._config.ingest.use_llm_chunking:
+                llm_shards = await self._reshard_llm(blob)
+                if llm_shards:
+                    return llm_shards
+            return self._split_text_recursive(blob)
+
+        return self._split_structured(blob, fmt)
+
+    def _split_text_recursive(self, blob: str) -> list[str]:
+        """Generic recursive character split — used as fallback for prose."""
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         splitter = RecursiveCharacterTextSplitter(
@@ -235,6 +300,111 @@ class Ingestor:
             chunk_overlap=self._config.ingest.shard_overlap,
         )
         return splitter.split_text(blob)
+
+    def _split_structured(self, blob: str, fmt: DetectedFormat) -> list[str]:
+        """Format-aware splitting for code / markdown / yaml / json."""
+        from langchain_text_splitters import (
+            Language,
+            RecursiveCharacterTextSplitter,
+        )
+
+        chunk_size = self._config.ingest.shard_size
+        chunk_overlap = self._config.ingest.shard_overlap
+
+        if fmt in ("python", "code"):
+            splitter = RecursiveCharacterTextSplitter.from_language(
+                Language.PYTHON,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            return splitter.split_text(blob)
+
+        if fmt == "markdown":
+            splitter = RecursiveCharacterTextSplitter.from_language(
+                Language.MARKDOWN,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            shards = splitter.split_text(blob)
+            return [_balance_markdown_fences(s) for s in shards]
+
+        if fmt == "yaml":
+            return self._split_yaml(blob)
+
+        if fmt == "json":
+            return self._split_json(blob)
+
+        # Unreachable given DetectedFormat literal — defensive fallback.
+        return self._split_text_recursive(blob)
+
+    def _split_yaml(self, blob: str) -> list[str]:
+        """Split YAML at top-level keys; falls back to a structural separator list."""
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        # Group top-level keys (lines starting at column 0 with `key:`).
+        lines = blob.splitlines(keepends=True)
+        groups: list[list[str]] = []
+        current: list[str] = []
+        top_key = re.compile(r"^[A-Za-z_][\w-]*:(?:\s|$)")
+        for line in lines:
+            if top_key.match(line) and current:
+                groups.append(current)
+                current = [line]
+            else:
+                current.append(line)
+        if current:
+            groups.append(current)
+
+        chunks = ["".join(g).strip("\n") for g in groups if "".join(g).strip()]
+        if not chunks:
+            return []
+
+        # Fall back to recursive splitter to enforce shard_size on oversized groups.
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self._config.ingest.shard_size,
+            chunk_overlap=self._config.ingest.shard_overlap,
+            separators=["\n\n", "\n- ", "\n", " "],
+        )
+        out: list[str] = []
+        for chunk in chunks:
+            if len(chunk) <= self._config.ingest.shard_size:
+                out.append(chunk)
+            else:
+                out.extend(splitter.split_text(chunk))
+        return out
+
+    def _split_json(self, blob: str) -> list[str]:
+        """Split a JSON document at its top-level structural elements."""
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        try:
+            parsed = json.loads(blob)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+        chunks: list[str]
+        if isinstance(parsed, list):
+            chunks = [json.dumps(elem, indent=2) for elem in parsed]
+        elif isinstance(parsed, dict):
+            chunks = [
+                json.dumps({k: v}, indent=2) for k, v in parsed.items()
+            ]
+        else:
+            chunks = [blob]
+
+        # Enforce shard_size: oversized chunks fall back to recursive splitting.
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self._config.ingest.shard_size,
+            chunk_overlap=self._config.ingest.shard_overlap,
+            separators=["\n  },\n  {", "\n,\n", "\n", " "],
+        )
+        out: list[str] = []
+        for chunk in chunks:
+            if len(chunk) <= self._config.ingest.shard_size:
+                out.append(chunk)
+            else:
+                out.extend(splitter.split_text(chunk))
+        return [c for c in out if c.strip()]
 
     async def _reshard_llm(self, blob: str) -> list[str] | None:
         """Use an LLM agent to decompose text into atomic facts."""
