@@ -243,17 +243,13 @@ def _verdict_from_snippets(claim: str, combined_snippets: str) -> VerificationVe
     """
     claim_words = {w for w in re.findall(r"[a-zA-Z]{4,}", claim.lower())}
     text_lower = combined_snippets.lower()
-
-    if _NEGATION_PATTERN.search(combined_snippets) and claim_words:
-        overlap = sum(1 for w in claim_words if w in text_lower)
-        if overlap >= 1:
-            return VerificationVerdict.CONTRADICTED
-
+    has_negation = _NEGATION_PATTERN.search(combined_snippets) is not None
     overlap = sum(1 for w in claim_words if w in text_lower)
-    if (
-        overlap >= 2
-        and not _NEGATION_PATTERN.search(combined_snippets)
-        and len(combined_snippets) > 2 * len(claim)
-    ):
+
+    if has_negation and claim_words and overlap >= 1:
+        return VerificationVerdict.CONTRADICTED
+
+    if overlap >= 2 and not has_negation and len(combined_snippets) > 2 * len(claim):
         return VerificationVerdict.SUPPORTED
+
     return VerificationVerdict.UNVERIFIABLE
