@@ -187,11 +187,21 @@ class OllamaEmbeddingService(EmbeddingService):
                 return self._cache[key]
 
         response = await self._client.post(
-            "/api/embeddings",
-            json={"model": self._settings.model_name, "prompt": text},
+            "/api/embed",
+            json={"model": self._settings.model_name, "input": text},
         )
         response.raise_for_status()
-        vector = np.array(response.json()["embedding"], dtype=np.float32)
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Ollama /api/embed response was not a JSON object")
+
+        embeddings = payload.get("embeddings")
+        if not isinstance(embeddings, list) or not embeddings:
+            raise RuntimeError(
+                "Ollama /api/embed response did not include a non-empty 'embeddings' array"
+            )
+
+        vector = np.array(embeddings[0], dtype=np.float32)
 
         async with self._lock:
             if key in self._cache:
@@ -239,6 +249,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
                 dim = value
 
         if dim is None:
+            assert self._model is not None
             probe = await asyncio.to_thread(self._model.encode, "x", convert_to_numpy=True)
             probe_arr = np.atleast_1d(np.squeeze(np.asarray(probe, dtype=np.float32)))
             dim = int(probe_arr.shape[0])

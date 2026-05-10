@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from uuid import UUID
 
 from src.models.tome import Tome
+
+
+@dataclass(slots=True)
+class DuplicateScanResult:
+    groups: list[list[Tome]]
+    scanned: int
+    exact_content_groups: int = 0
+    fact_overlap_groups: int = 0
+    semantic_groups: int = 0
+    ignored_high_frequency_facts: int = 0
 
 
 class TomeRepository(ABC):
@@ -39,8 +50,22 @@ class TomeRepository(ABC):
         ...
 
     @abstractmethod
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome, threshold: float | None = None) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold."""
+        ...
+
+    @abstractmethod
+    async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:
+        """Find all duplicate groups in the library for tidy-time consolidation.
+
+        Implementations should return groups with consistent semantics across
+        exact content, fact overlap, and semantic similarity detection.
+        """
+        ...
+
+    @abstractmethod
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
+        """Retrieve a page of Tomes from the library."""
         ...
 
     @abstractmethod

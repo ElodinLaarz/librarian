@@ -9,7 +9,7 @@ os.environ.setdefault("LIBRARIAN_DATABASE_URI", "mongodb://localhost:27017")
 
 
 def test_expected_tools_are_registered() -> None:
-    """All three MCP tools must be registered on the server at import time."""
+    """All MCP tools must be registered on the server at import time."""
     from src.server import mcp
 
     tool_names = {t.name for t in mcp._tool_manager.list_tools()}
@@ -23,4 +23,9 @@ def test_no_unexpected_tools_registered() -> None:
     from src.server import mcp
 
     tool_names = {t.name for t in mcp._tool_manager.list_tools()}
-    assert tool_names == {"library_search", "library_ingest", "library_research"}
+    assert tool_names == {
+        "library_search",
+        "library_ingest",
+        "library_research",
+        "library_tidy",
+    }

@@ -115,12 +115,14 @@ class IngestSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_INGEST_")
     shard_size: int = constants.DEFAULT_SHARD_SIZE
     shard_overlap: int = constants.DEFAULT_SHARD_OVERLAP
+    build_concurrency: int = Field(default=8, ge=1)
+    write_batch_size: int = Field(default=32, ge=1)
     summary_length: int = constants.DEFAULT_SUMMARY_LENGTH
     title_length: int = constants.TITLE_MAX_LENGTH
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
-    use_llm_chunking: bool = True
+    use_llm_chunking: bool = False
     use_llm_summary: bool = True
     use_llm_classification: bool = True
     taxonomy: list[str] = Field(
@@ -147,6 +149,23 @@ class ResearcherSettings(BaseSettings):
     deep_urls_per_query: int = 4
 
 
+class TidySettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIBRARIAN_TIDY_")
+    enabled: bool = True
+    interval_seconds: int = Field(default=3600, ge=1)  # Default 1 hour
+    limit_per_run: int = Field(default=1000, ge=1)
+    threshold: float = Field(default=0.95, ge=0.0, le=1.0)
+    skip_verify: bool = True
+    group_concurrency: int = Field(default=4, ge=1)
+    scan_batch_size: int = Field(default=1000, ge=1)
+    max_fact_frequency: int = Field(default=32, ge=2)
+    min_shared_facts: int = Field(default=2, ge=1)
+    min_fact_overlap: float = Field(default=0.8, ge=0.0, le=1.0)
+    semantic_planes: int = Field(default=30, ge=1)
+    semantic_band_size: int = Field(default=6, ge=1)
+    semantic_max_bucket_size: int = Field(default=256, ge=2)
+
+
 class ServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_SERVER_")
     host: str = "0.0.0.0"
@@ -166,6 +185,7 @@ class LibrarianConfig(BaseSettings):
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     researcher: ResearcherSettings = Field(default_factory=ResearcherSettings)
+    tidy: TidySettings = Field(default_factory=TidySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod
