@@ -3,29 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 
-import numpy as np
 import pytest
 
-from src.models.enums import IngestStatus, SourceType
-from src.models.tome import Tome
+from src.models.enums import IngestStatus
 from tests.stubs import make_stub_ingestor
-
-
-def _make_tome(content: str) -> Tome:
-    return Tome(
-        id=uuid.uuid4(),
-        title="Tome",
-        content=content,
-        summary="Summary",
-        category="general",
-        tags=["stub"],
-        source_url=None,
-        source_type=SourceType.AGENT_INPUT,
-        confidence=0.8,
-        embedding=np.zeros(768, dtype=np.float32),
-    )
+from tests.test_utils import make_tome as _make_tome
 
 
 @pytest.mark.asyncio

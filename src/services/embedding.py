@@ -192,6 +192,9 @@ class OllamaEmbeddingService(EmbeddingService):
         )
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Ollama /api/embed response was not a JSON object")
+
         embeddings = payload.get("embeddings")
         if not isinstance(embeddings, list) or not embeddings:
             raise RuntimeError(
@@ -246,6 +249,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
                 dim = value
 
         if dim is None:
+            assert self._model is not None
             probe = await asyncio.to_thread(self._model.encode, "x", convert_to_numpy=True)
             probe_arr = np.atleast_1d(np.squeeze(np.asarray(probe, dtype=np.float32)))
             dim = int(probe_arr.shape[0])

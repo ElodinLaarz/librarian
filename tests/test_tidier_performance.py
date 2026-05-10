@@ -43,6 +43,7 @@ def _make_tidier(total: int, duplicate_pairs: int) -> Tidier:
 
 
 @pytest.mark.asyncio
+@pytest.mark.performance
 async def test_duplicate_scan_regression_budget_1000_vectors() -> None:
     tidier = _make_tidier(total=1000, duplicate_pairs=50)
 
@@ -55,6 +56,7 @@ async def test_duplicate_scan_regression_budget_1000_vectors() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.performance
 async def test_duplicate_scan_budget_10000_vectors_under_60_seconds() -> None:
     if os.getenv("LIBRARIAN_RUN_PERF_TESTS") != "1":
         pytest.skip("Set LIBRARIAN_RUN_PERF_TESTS=1 to run the 10k tidy performance gate.")

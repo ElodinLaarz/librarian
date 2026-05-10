@@ -2,31 +2,13 @@
 
 from __future__ import annotations
 
-import uuid
-
-import numpy as np
 import pytest
 
 from src.config import TidySettings
-from src.models.enums import SourceType
 from src.models.tome import Tome
 from src.services.tidier import Tidier
 from tests.stubs import make_stub_ingestor
-
-
-def _make_tome(content: str) -> Tome:
-    return Tome(
-        id=uuid.uuid4(),
-        title="Tome",
-        content=content,
-        summary="Summary",
-        category="general",
-        tags=["stub"],
-        source_url=None,
-        source_type=SourceType.AGENT_INPUT,
-        confidence=0.8,
-        embedding=np.zeros(768, dtype=np.float32),
-    )
+from tests.test_utils import make_tome as _make_tome
 
 
 @pytest.mark.asyncio
@@ -41,6 +23,7 @@ async def test_run_cleanup_no_tomes() -> None:
     assert report["groups_consolidated"] == 0
     assert report["tomes_removed"] == 0
     assert report["failed_groups"] == 0
+    assert report["skipped_groups"] == 0
 
 
 @pytest.mark.asyncio
@@ -106,7 +89,7 @@ async def test_run_cleanup_handles_ingestor_error(monkeypatch: pytest.MonkeyPatc
 
     tidier = Tidier(ingestor, repo, TidySettings())
 
-    async def fail_consolidate(tomes, skip_verify=False):  # type: ignore[no-untyped-def]
+    async def fail_consolidate(tomes: list[Tome], skip_verify: bool = False) -> list[Tome]:
         raise Exception("Consolidation failed")
 
     monkeypatch.setattr(ingestor, "consolidate", fail_consolidate)

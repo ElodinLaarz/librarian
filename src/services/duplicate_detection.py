@@ -131,8 +131,9 @@ def build_duplicate_groups(tomes: list[Tome], settings: TidySettings) -> Duplica
     for group_ids in normalized_content_to_ids.values():
         if len(group_ids) < 2:
             continue
-        for left_id, right_id in combinations(group_ids, 2):
-            union_find.union(left_id, right_id)
+        anchor = group_ids[0]
+        for other_id in group_ids[1:]:
+            union_find.union(anchor, other_id)
     exact_content_groups = _count_duplicate_groups(union_find, list(by_id))
 
     shared_fact_counts: dict[tuple[UUID, UUID], int] = defaultdict(int)

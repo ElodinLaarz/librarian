@@ -282,11 +282,51 @@ class Ingestor:
         if not replacements:
             return tomes  # Fallback to original if resharding failed/empty
 
-        # Insert replacements.
-        await self._run_in_batches(
-            [self._tome_repo.insert(replacement) for replacement in replacements],
+        # Insert replacements. If any insert fails, compensating-delete
+        # the ones that succeeded so we leave neither orphans (no replacement
+        # without delete) nor partial duplication. Originals stay untouched.
+        insert_results = await self._run_in_batches(
+            [self._tome_repo.insert(r) for r in replacements],
             self._config.ingest.write_batch_size,
+            return_exceptions=True,
         )
+        inserted_ok: list[Tome] = []
+        insert_errors: list[str] = []
+        first_error: BaseException | None = None
+        for replacement, insert_result in zip(replacements, insert_results, strict=True):
+            if isinstance(insert_result, BaseException):
+                logging.warning(
+                    "Exception inserting replacement %s during consolidate: %s",
+                    replacement.id,
+                    insert_result,
+                )
+                insert_errors.append(str(replacement.id))
+                if not first_error:
+                    first_error = insert_result
+            else:
+                inserted_ok.append(replacement)
+
+        if insert_errors:
+            # Best-effort rollback of the partial inserts.
+            rollback_results = await asyncio.gather(
+                *[self._tome_repo.delete(r.id) for r in inserted_ok],
+                return_exceptions=True,
+            )
+            residual_ids = [
+                str(r.id)
+                for r, res in zip(inserted_ok, rollback_results, strict=True)
+                if isinstance(res, BaseException) or not res
+            ]
+            if residual_ids:
+                logging.error(
+                    "Consolidate rollback left residual replacements in store: %s",
+                    constants.ID_SEPARATOR.join(residual_ids),
+                )
+            failed_ids = constants.ID_SEPARATOR.join(insert_errors)
+            msg = f"Consolidate aborted: insert failure for replacement(s) {failed_ids}"
+            if first_error:
+                msg += f" (first error: {first_error})"
+            raise ReshardError(msg, tomes=[])
 
         # Delete old tomes.
         delete_results = await self._run_in_batches(
@@ -295,11 +335,13 @@ class Ingestor:
             return_exceptions=True,
         )
         delete_errors = []
-        for tome, result in zip(tomes, delete_results, strict=True):
-            if isinstance(result, Exception):
-                logging.warning("Exception deleting %s during consolidate: %s", tome.id, result)
+        for tome, delete_result in zip(tomes, delete_results, strict=True):
+            if isinstance(delete_result, Exception):
+                logging.warning(
+                    "Exception deleting %s during consolidate: %s", tome.id, delete_result
+                )
                 delete_errors.append(str(tome.id))
-            elif not result:
+            elif not delete_result:
                 delete_errors.append(str(tome.id))
 
         if delete_errors:
@@ -351,16 +393,16 @@ class Ingestor:
         inserted_ok: list[Tome] = []
         insert_errors: list[str] = []
         first_error: BaseException | None = None
-        for replacement, result in zip(replacements, insert_results, strict=True):
-            if isinstance(result, BaseException):
+        for replacement, insert_result in zip(replacements, insert_results, strict=True):
+            if isinstance(insert_result, BaseException):
                 logging.warning(
                     "Exception inserting replacement %s during reshard: %s",
                     replacement.id,
-                    result,
+                    insert_result,
                 )
                 insert_errors.append(str(replacement.id))
                 if not first_error:
-                    first_error = result
+                    first_error = insert_result
             else:
                 inserted_ok.append(replacement)
 

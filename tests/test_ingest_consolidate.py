@@ -3,30 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 
-import numpy as np
 import pytest
 
-from src.models.enums import SourceType
 from src.models.tome import Tome
 from src.services.ingestor import ReshardError
 from tests.stubs import make_stub_ingestor
-
-
-def _make_tome(content: str) -> Tome:
-    return Tome(
-        id=uuid.uuid4(),
-        title="Tome",
-        content=content,
-        summary="Summary",
-        category="general",
-        tags=["stub"],
-        source_url=None,
-        source_type=SourceType.AGENT_INPUT,
-        confidence=0.8,
-        embedding=np.zeros(768, dtype=np.float32),
-    )
+from tests.test_utils import make_tome as _make_tome
 
 
 @pytest.mark.asyncio
@@ -98,13 +81,6 @@ async def test_consolidate_delete_failure() -> None:
 
     # Mock delete to fail
     repo._fail_deletes = True
-
-    # In StubTomeRepository, delete returns False if _fail_deletes is True.
-    # But Ingestor.consolidate just awaits repo.delete, which doesn't check the return value.
-    # Wait, it SHOULD check the return value or raise an exception.
-
-    # Let's check src/storage/tome_repository.py to see what delete returns.
-    # If it's a Repo, it might return bool.
 
     with pytest.raises(ReshardError, match="Failed to delete tomes"):
         await ingestor.consolidate([t1, t2])

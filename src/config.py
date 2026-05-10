@@ -115,8 +115,8 @@ class IngestSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_INGEST_")
     shard_size: int = constants.DEFAULT_SHARD_SIZE
     shard_overlap: int = constants.DEFAULT_SHARD_OVERLAP
-    build_concurrency: int = 8
-    write_batch_size: int = 32
+    build_concurrency: int = Field(default=8, ge=1)
+    write_batch_size: int = Field(default=32, ge=1)
     summary_length: int = constants.DEFAULT_SUMMARY_LENGTH
     title_length: int = constants.TITLE_MAX_LENGTH
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
@@ -152,18 +152,18 @@ class ResearcherSettings(BaseSettings):
 class TidySettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_TIDY_")
     enabled: bool = True
-    interval_seconds: int = 3600  # Default 1 hour
-    limit_per_run: int = 1000
-    threshold: float = 0.95
+    interval_seconds: int = Field(default=3600, ge=1)  # Default 1 hour
+    limit_per_run: int = Field(default=1000, ge=1)
+    threshold: float = Field(default=0.95, ge=0.0, le=1.0)
     skip_verify: bool = True
-    group_concurrency: int = 4
-    scan_batch_size: int = 1000
-    max_fact_frequency: int = 32
-    min_shared_facts: int = 2
-    min_fact_overlap: float = 0.8
-    semantic_planes: int = 30
-    semantic_band_size: int = 6
-    semantic_max_bucket_size: int = 256
+    group_concurrency: int = Field(default=4, ge=1)
+    scan_batch_size: int = Field(default=1000, ge=1)
+    max_fact_frequency: int = Field(default=32, ge=2)
+    min_shared_facts: int = Field(default=2, ge=1)
+    min_fact_overlap: float = Field(default=0.8, ge=0.0, le=1.0)
+    semantic_planes: int = Field(default=30, ge=1)
+    semantic_band_size: int = Field(default=6, ge=1)
+    semantic_max_bucket_size: int = Field(default=256, ge=2)
 
 
 class ServerSettings(BaseSettings):

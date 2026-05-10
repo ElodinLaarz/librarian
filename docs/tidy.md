@@ -16,7 +16,7 @@ Exact content groups are built from normalized tome content. If two tomes have
 the same content after whitespace normalization, they are always treated as
 duplicates.
 
-Fact-overlap groups are built from normalized facts split on `"\n\n"`. This
+Fact-overlap groups are built from normalized facts split on `constants.CONTENT_SEPARATOR` (the content separator). This
 stage is intended to catch multi-fact duplicates without over-merging on shared
 boilerplate. To avoid accidental transitive merges, a pair must:
 
