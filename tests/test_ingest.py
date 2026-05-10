@@ -568,8 +568,14 @@ async def test_summary_falls_back_on_bad_json(monkeypatch: pytest.MonkeyPatch) -
 
 
 async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When use_llm_summary=False, the LLM endpoint must not be called."""
-    ingest_settings = IngestSettings(use_llm_chunking=False, use_llm_summary=False)
+    """When use_llm_summary=False, the summary LLM endpoint must not be called."""
+    # Disable classification too — it's an unrelated LLM path that would also
+    # post to the same endpoint and false-positive this assertion.
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=False,
+        use_llm_classification=False,
+    )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
         ingest=ingest_settings,
