@@ -350,6 +350,7 @@ class Ingestor:
         )
         inserted_ok: list[Tome] = []
         insert_errors: list[str] = []
+        first_error: BaseException | None = None
         for replacement, result in zip(replacements, insert_results, strict=True):
             if isinstance(result, BaseException):
                 logging.warning(
@@ -358,6 +359,8 @@ class Ingestor:
                     result,
                 )
                 insert_errors.append(str(replacement.id))
+                if not first_error:
+                    first_error = result
             else:
                 inserted_ok.append(replacement)
 
@@ -378,10 +381,10 @@ class Ingestor:
                     constants.ID_SEPARATOR.join(residual_ids),
                 )
             failed_ids = constants.ID_SEPARATOR.join(insert_errors)
-            raise ReshardError(
-                f"Reshard aborted: insert failure for replacement(s) {failed_ids}",
-                tomes=[],
-            )
+            msg = f"Reshard aborted: insert failure for replacement(s) {failed_ids}"
+            if first_error:
+                msg += f" (first error: {first_error})"
+            raise ReshardError(msg, tomes=[])
 
         # Step 4 - Delete old tomes.
         # Technically if we fail here, we may end up with duplicate data in the

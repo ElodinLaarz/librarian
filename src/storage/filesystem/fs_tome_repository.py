@@ -133,20 +133,21 @@ class FsTomeRepository(TomeRepository):
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome, threshold: float | None = None) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the configured tidy threshold."""
         if tome.embedding is None:
             return []
         tome_vec = np.array(tome.embedding, dtype=np.float64)
         duplicates: list[Tome] = []
 
+        effective_threshold = threshold if threshold is not None else self._tidy_settings.threshold
         all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
 
         for existing in all_tomes:
             if existing.id == tome.id or existing.embedding is None:
                 continue
             sim = _cosine_similarity(tome_vec, np.array(existing.embedding, dtype=np.float64))
-            if sim >= self._tidy_settings.threshold:
+            if sim >= effective_threshold:
                 duplicates.append(existing)
         return duplicates
 

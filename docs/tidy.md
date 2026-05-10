@@ -9,8 +9,8 @@ knowledge, and consolidate each group through `Ingestor.consolidate()`.
 Tidy uses three stages, in order:
 
 1. Exact content groups.
-2. Fact-overlap groups.
-3. Semantic embedding groups.
+1. Fact-overlap groups.
+1. Semantic embedding groups.
 
 Exact content groups are built from normalized tome content. If two tomes have
 the same content after whitespace normalization, they are always treated as

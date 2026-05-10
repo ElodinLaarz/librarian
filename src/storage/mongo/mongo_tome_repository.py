@@ -226,11 +226,12 @@ class MongoTomeRepository(TomeRepository):
         combined.sort(key=lambda x: x[1], reverse=True)
         return combined[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome, threshold: float | None = None) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
         if tome.embedding is None:
             return []
 
+        effective_threshold = threshold if threshold is not None else self._tidy_settings.threshold
         query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
@@ -248,7 +249,7 @@ class MongoTomeRepository(TomeRepository):
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
             {
                 "$match": {
-                    "score": {"$gte": self._tidy_settings.threshold},
+                    "score": {"$gte": effective_threshold},
                     "document._id": {"$ne": tome.id},
                 }
             },
