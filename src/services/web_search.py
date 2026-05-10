@@ -155,7 +155,10 @@ async def _fetch_url_main_text_inner(url: str, *, timeout: float) -> str:
         return ""
     if html is None:
         return ""
-    extracted = trafilatura.extract(html)
+    # ``trafilatura.extract`` is CPU-bound and can be slow on large HTML;
+    # offload it to the default executor so we don't block the event loop.
+    loop = asyncio.get_running_loop()
+    extracted = await loop.run_in_executor(None, trafilatura.extract, html)
     return extracted or ""
 
 
@@ -177,6 +180,9 @@ async def fetch_url_main_text(url: str, *, timeout: float = 25.0) -> str:
             timeout=timeout,
         )
     except TimeoutError:
+        # ``asyncio.TimeoutError`` is an alias of the builtin ``TimeoutError``
+        # on Python 3.11+, which is the project's minimum (see pyproject.toml
+        # ``requires-python = ">=3.11"``). Ruff's UP041 enforces the builtin.
         logging.debug("fetch_url_main_text timed out for %s", url)
         return ""
 
