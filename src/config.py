@@ -107,6 +107,8 @@ class VerificationSettings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     claim_model: str = "gemma4:e2b"
     use_llm_claims: bool = True
+    use_llm_verdict: bool = True
+    verdict_model: str = ""
 
 
 class IngestSettings(BaseSettings):
