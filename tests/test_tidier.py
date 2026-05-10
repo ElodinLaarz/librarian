@@ -28,6 +28,7 @@ def _make_tome(content: str) -> Tome:
         embedding=np.zeros(768, dtype=np.float32),
     )
 
+
 @pytest.mark.asyncio
 async def test_run_cleanup_no_tomes() -> None:
     ingestor, repo, _ = make_stub_ingestor()
@@ -40,6 +41,7 @@ async def test_run_cleanup_no_tomes() -> None:
     assert report["groups_consolidated"] == 0
     assert report["tomes_removed"] == 0
     assert report["failed_groups"] == 0
+
 
 @pytest.mark.asyncio
 async def test_run_cleanup_no_duplicates() -> None:
@@ -78,6 +80,7 @@ async def test_run_cleanup_consolidates_duplicates() -> None:
     assert len(repo.all_tomes()) == 1
     assert repo.all_tomes()[0].content == "Identical fact"
 
+
 @pytest.mark.asyncio
 async def test_run_cleanup_respects_limit() -> None:
     ingestor, repo, _ = make_stub_ingestor()
@@ -92,6 +95,7 @@ async def test_run_cleanup_respects_limit() -> None:
     assert report["groups_found"] == 2
     assert report["groups_consolidated"] == 1
     assert report["skipped_groups"] == 1
+
 
 @pytest.mark.asyncio
 async def test_run_cleanup_handles_ingestor_error(monkeypatch: pytest.MonkeyPatch) -> None:
