@@ -1,0 +1,19 @@
+# Copy to librarian.config.yaml in the repo root and edit for your environment.
+# The server loads this path by default when LIBRARIAN_CONFIG is not set.
+# See docs/setup/ and config/librarian.local.template.yaml for more options.
+
+database:
+  uri: mongodb://localhost:27017
+  tls: false
+  tls_cert_path: /dev/null
+
+embedding:
+  provider: ollama
+  ollama_url: http://localhost:11434
+  model_name: nomic-embed-text
+  dimensions: 768
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  transport: stdio
