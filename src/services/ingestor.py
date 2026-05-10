@@ -11,6 +11,7 @@ from typing import Literal
 from uuid import UUID
 
 import httpx
+from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from src import constants
 from src.config import LibrarianConfig
@@ -301,8 +302,6 @@ class Ingestor:
 
     def _split_text_recursive(self, blob: str) -> list[str]:
         """Generic recursive character split — used as fallback for prose."""
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self._config.ingest.shard_size,
             chunk_overlap=self._config.ingest.shard_overlap,
@@ -311,11 +310,6 @@ class Ingestor:
 
     def _split_structured(self, blob: str, fmt: DetectedFormat) -> list[str]:
         """Format-aware splitting for code / markdown / yaml / json."""
-        from langchain_text_splitters import (
-            Language,
-            RecursiveCharacterTextSplitter,
-        )
-
         chunk_size = self._config.ingest.shard_size
         chunk_overlap = self._config.ingest.shard_overlap
 
@@ -354,8 +348,6 @@ class Ingestor:
         splitter. This avoids excessive fragmentation on configs with many
         small keys (per Gemini code-review feedback on PR #62).
         """
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-
         # Group top-level keys (lines starting at column 0 with `key:`).
         lines = blob.splitlines(keepends=True)
         sections: list[str] = []
@@ -412,22 +404,24 @@ class Ingestor:
     def _split_json(self, blob: str) -> list[str]:
         """Split a JSON document at its top-level structural elements.
 
-        For arrays we emit one chunk per element. For objects we keep the
-        dictionary intact (so each shard retains its surrounding-key context)
-        and only fall through to the recursive splitter if the serialized
-        form exceeds ``shard_size`` (per Gemini code-review feedback on
-        PR #62).
+        For arrays we *greedily pack* multiple elements into a single JSON-array
+        chunk, keeping each chunk under ``shard_size``. This avoids the extreme
+        fragmentation that one-element-per-chunk would cause for arrays of many
+        small objects (per Gemini code-review feedback on PR #62, comment 1).
+        For objects we keep the dictionary intact (so each shard retains its
+        surrounding-key context) and only fall through to the recursive
+        splitter if the serialized form exceeds ``shard_size``.
         """
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-
         try:
             parsed = json.loads(blob)
         except (json.JSONDecodeError, ValueError):
             parsed = None
 
+        shard_size = self._config.ingest.shard_size
+
         chunks: list[str]
         if isinstance(parsed, list):
-            chunks = [json.dumps(elem, indent=2) for elem in parsed]
+            chunks = self._pack_json_array(parsed, shard_size)
         elif isinstance(parsed, dict):
             # Preserve the whole object as one chunk; the size guard below
             # will only fragment it when it actually exceeds shard_size.
@@ -436,18 +430,56 @@ class Ingestor:
             chunks = [blob]
 
         # Enforce shard_size: oversized chunks fall back to recursive splitting.
+        # Separators target property boundaries inside large indent=2 objects
+        # (per Gemini code-review feedback on PR #62, comment 3).
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self._config.ingest.shard_size,
+            chunk_size=shard_size,
             chunk_overlap=self._config.ingest.shard_overlap,
-            separators=["\n  },\n  {", "\n,\n", "\n", " "],
+            separators=[',\n  "', ',\n    "', ',\n      "', "\n", " ", ""],
         )
         out: list[str] = []
         for chunk in chunks:
-            if len(chunk) <= self._config.ingest.shard_size:
+            if len(chunk) <= shard_size:
                 out.append(chunk)
             else:
                 out.extend(splitter.split_text(chunk))
         return [c for c in out if c.strip()]
+
+    @staticmethod
+    def _pack_json_array(elements: list[object], shard_size: int) -> list[str]:
+        """Greedily pack array elements into JSON-array chunks under ``shard_size``.
+
+        Each chunk is a valid JSON array (``[ ... ]``). Single elements that
+        already exceed ``shard_size`` are emitted as their own chunk and let
+        the size-guard / recursive splitter handle them downstream.
+        """
+        if not elements:
+            return []
+
+        out: list[str] = []
+        buf: list[object] = []
+
+        def flush() -> None:
+            if buf:
+                out.append(json.dumps(buf, indent=2))
+                buf.clear()
+
+        for elem in elements:
+            serialized = json.dumps(elem, indent=2)
+            # Oversized single element — flush current batch, emit on its own.
+            if len(serialized) > shard_size:
+                flush()
+                out.append(serialized)
+                continue
+            # Project the size of buf + this element wrapped as a JSON array.
+            trial = [*buf, elem]
+            if len(json.dumps(trial, indent=2)) > shard_size and buf:
+                flush()
+                buf.append(elem)
+            else:
+                buf.append(elem)
+        flush()
+        return out
 
     async def _reshard_llm(self, blob: str) -> list[str] | None:
         """Use an LLM agent to decompose text into atomic facts."""

@@ -562,6 +562,35 @@ async def test_json_chunks_split_on_top_level_elements() -> None:
             json.loads(wrapped)
 
 
+async def test_json_array_greedy_packing_avoids_fragmentation() -> None:
+    """Many small JSON array elements must be coalesced rather than emitted one-per-chunk.
+
+    Per Gemini code-review feedback on PR #62: previously each array element
+    became its own Tome, producing extreme fragmentation. The packer should
+    yield far fewer shards than the element count for a generously-sized
+    shard_size, while still respecting the size cap.
+    """
+    objects = [{"id": i, "n": i} for i in range(50)]
+    blob = json.dumps(objects, indent=2)
+    shard_size = 400
+    ingestor = _make_real_ingestor(shard_size=shard_size, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    # Should be far fewer than one-per-element (50). Be generous: at most ~half.
+    assert len(shards) < len(objects) // 2, (
+        f"Expected greedy packing; got {len(shards)} shards for {len(objects)} elements"
+    )
+    # Every shard must be a valid JSON array (or the size-guard fallback) and
+    # within the size cap (allow small overshoot from the recursive splitter
+    # boundary — but the packed-array path must respect the cap exactly).
+    for s in shards:
+        parsed = json.loads(s)
+        assert isinstance(parsed, list)
+        assert len(s) <= shard_size, f"Shard exceeds shard_size={shard_size}: {len(s)}"
+
+
 async def test_force_format_override_routes_to_correct_splitter() -> None:
     """force_format='python' on a prose blob must invoke the PYTHON language splitter."""
     from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
