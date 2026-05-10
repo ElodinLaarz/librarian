@@ -103,6 +103,8 @@ class LibrarianServer:
             self.job_repo = None
         if self.tome_repo:
             self.tome_repo.close()
+        if self.ingestor is not None:
+            await self.ingestor.aclose()
         if isinstance(self._embedding_service, OllamaEmbeddingService):
             await self._embedding_service.aclose()
         self._embedding_service = None

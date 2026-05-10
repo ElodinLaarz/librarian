@@ -442,6 +442,105 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     assert len(output.tomes) >= 1
 
 
+# ── persistent http client ────────────────────────────────────────────────────
+
+
+async def test_http_client_lazy_until_first_use(config: LibrarianConfig) -> None:
+    """The persistent httpx client is not constructed at __init__ time."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    assert ingestor._http_client is None
+    await ingestor.aclose()  # safe no-op when never created
+
+
+async def test_reshard_llm_reuses_single_http_client(
+    monkeypatch: pytest.MonkeyPatch, config: LibrarianConfig
+) -> None:
+    """Multiple `_reshard_llm` calls share one `httpx.AsyncClient` instance."""
+    from unittest.mock import MagicMock
+
+    import httpx as _httpx
+
+    posted_clients: list[object] = []
+
+    async def _fake_post(self: _httpx.AsyncClient, url: str, **kwargs: object) -> MagicMock:
+        posted_clients.append(self)
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json = MagicMock(
+            return_value={
+                "choices": [{"message": {"content": '{"facts": ["fact one.", "fact two."]}'}}]
+            }
+        )
+        return response
+
+    monkeypatch.setattr("httpx.AsyncClient.post", _fake_post)
+
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    try:
+        first = await ingestor._reshard_llm("Some text to shard.")
+        client_after_first = ingestor._http_client
+        second = await ingestor._reshard_llm("More text to shard.")
+        client_after_second = ingestor._http_client
+
+        assert first == ["fact one.", "fact two."]
+        assert second == ["fact one.", "fact two."]
+        assert client_after_first is not None
+        assert client_after_first is client_after_second
+        assert len(posted_clients) == 2
+        assert posted_clients[0] is posted_clients[1]
+        assert posted_clients[0] is client_after_first
+    finally:
+        await ingestor.aclose()
+
+
+async def test_aclose_closes_and_resets_http_client(
+    monkeypatch: pytest.MonkeyPatch, config: LibrarianConfig
+) -> None:
+    """`aclose` closes the persistent client and resets the slot to None."""
+    from unittest.mock import MagicMock
+
+    import httpx as _httpx
+
+    async def _fake_post(self: _httpx.AsyncClient, url: str, **kwargs: object) -> MagicMock:
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json = MagicMock(
+            return_value={"choices": [{"message": {"content": '{"facts": ["a."]}'}}]}
+        )
+        return response
+
+    monkeypatch.setattr("httpx.AsyncClient.post", _fake_post)
+
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    await ingestor._reshard_llm("Text.")
+    client = ingestor._http_client
+    assert client is not None
+    assert not client.is_closed
+
+    await ingestor.aclose()
+
+    assert ingestor._http_client is None
+    assert client.is_closed
+
+
 async def test_dedup_store_returning_empty_sets_partial_status(
     config: LibrarianConfig,
 ) -> None:
