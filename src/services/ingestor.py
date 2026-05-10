@@ -61,10 +61,20 @@ def _balance_markdown_fences(chunk: str) -> str:
 
     A language-aware split can leave a chunk that opens a fenced code block
     without closing it (or vice-versa). To keep each shard renderable on its
-    own, append a closing fence when the count is odd.
+    own, append a closing fence when the count is odd. If the chunk already
+    *ends* with a fence (i.e. the lone fence is a closing one and the body is
+    mid-block), prepend an opening fence instead so we don't append a third
+    backtick run that yields broken markdown.
     """
     if chunk.count("```") % 2 == 0:
         return chunk
+
+    # Chunk ends with a fence -> the lone fence is a closing one; the body is
+    # mid-block. Prepend an opening fence to make it self-contained.
+    if chunk.rstrip().endswith("```"):
+        prefix = "" if chunk.startswith("\n") else "\n"
+        return f"```{prefix}{chunk}"
+
     suffix = "" if chunk.endswith("\n") else "\n"
     return f"{chunk}{suffix}```"
 
@@ -270,9 +280,7 @@ class Ingestor:
 
         return replacements
 
-    async def _reshard(
-        self, blob: str, opts: IngestCallOptions | None = None
-    ) -> list[str]:
+    async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
         """Split blob into syntax-aware shards.
 
         Detects the input format (or honours ``opts.force_format``) and routes
@@ -338,43 +346,78 @@ class Ingestor:
         return self._split_text_recursive(blob)
 
     def _split_yaml(self, blob: str) -> list[str]:
-        """Split YAML at top-level keys; falls back to a structural separator list."""
+        """Split YAML at top-level keys; coalesce small keys to fill ``shard_size``.
+
+        We collect each top-level key (and its indented body) as a "section",
+        then *pack* sections greedily into chunks while staying under
+        ``shard_size``. Oversized single sections are handed to the recursive
+        splitter. This avoids excessive fragmentation on configs with many
+        small keys (per Gemini code-review feedback on PR #62).
+        """
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         # Group top-level keys (lines starting at column 0 with `key:`).
         lines = blob.splitlines(keepends=True)
-        groups: list[list[str]] = []
+        sections: list[str] = []
         current: list[str] = []
         top_key = re.compile(r"^[A-Za-z_][\w-]*:(?:\s|$)")
         for line in lines:
             if top_key.match(line) and current:
-                groups.append(current)
+                section = "".join(current).strip("\n")
+                if section.strip():
+                    sections.append(section)
                 current = [line]
             else:
                 current.append(line)
         if current:
-            groups.append(current)
+            section = "".join(current).strip("\n")
+            if section.strip():
+                sections.append(section)
 
-        chunks = ["".join(g).strip("\n") for g in groups if "".join(g).strip()]
-        if not chunks:
+        if not sections:
             return []
 
-        # Fall back to recursive splitter to enforce shard_size on oversized groups.
+        shard_size = self._config.ingest.shard_size
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self._config.ingest.shard_size,
+            chunk_size=shard_size,
             chunk_overlap=self._config.ingest.shard_overlap,
             separators=["\n\n", "\n- ", "\n", " "],
         )
+
+        # Greedily pack sections into chunks under shard_size; split oversized
+        # sections recursively.
         out: list[str] = []
-        for chunk in chunks:
-            if len(chunk) <= self._config.ingest.shard_size:
-                out.append(chunk)
+        buf: list[str] = []
+        buf_len = 0
+        for section in sections:
+            if len(section) > shard_size:
+                # Flush current buffer first to preserve order.
+                if buf:
+                    out.append("\n".join(buf))
+                    buf, buf_len = [], 0
+                out.extend(splitter.split_text(section))
+                continue
+            # +1 accounts for the joining newline once a section is appended.
+            projected = buf_len + len(section) + (1 if buf else 0)
+            if buf and projected > shard_size:
+                out.append("\n".join(buf))
+                buf, buf_len = [section], len(section)
             else:
-                out.extend(splitter.split_text(chunk))
+                buf.append(section)
+                buf_len = projected
+        if buf:
+            out.append("\n".join(buf))
         return out
 
     def _split_json(self, blob: str) -> list[str]:
-        """Split a JSON document at its top-level structural elements."""
+        """Split a JSON document at its top-level structural elements.
+
+        For arrays we emit one chunk per element. For objects we keep the
+        dictionary intact (so each shard retains its surrounding-key context)
+        and only fall through to the recursive splitter if the serialized
+        form exceeds ``shard_size`` (per Gemini code-review feedback on
+        PR #62).
+        """
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         try:
@@ -386,9 +429,9 @@ class Ingestor:
         if isinstance(parsed, list):
             chunks = [json.dumps(elem, indent=2) for elem in parsed]
         elif isinstance(parsed, dict):
-            chunks = [
-                json.dumps({k: v}, indent=2) for k, v in parsed.items()
-            ]
+            # Preserve the whole object as one chunk; the size guard below
+            # will only fragment it when it actually exceeds shard_size.
+            chunks = [json.dumps(parsed, indent=2)]
         else:
             chunks = [blob]
 

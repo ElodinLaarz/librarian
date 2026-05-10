@@ -356,9 +356,7 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
     class EmptyChunkIngestor(StubIngestor):
         _chunked_once = False
 
-        async def _reshard(
-            self, blob: str, opts: IngestCallOptions | None = None
-        ) -> list[str]:
+        async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
             # First call (the original blob) returns one chunk so ingest proceeds.
             # Subsequent calls (reshard) return nothing.
             if not self._chunked_once:
@@ -456,20 +454,20 @@ async def test_python_module_chunks_are_ast_parseable() -> None:
     """
     blob = (
         "def alpha(x):\n"
-        "    \"\"\"First function.\"\"\"\n"
+        '    """First function."""\n'
         "    y = x + 1\n"
         "    z = y * 2\n"
         "    return z\n"
         "\n\n"
         "def beta(a, b):\n"
-        "    \"\"\"Second function.\"\"\"\n"
+        '    """Second function."""\n'
         "    result = a * b\n"
         "    for i in range(10):\n"
         "        result += i\n"
         "    return result\n"
         "\n\n"
         "def gamma():\n"
-        "    \"\"\"Third function.\"\"\"\n"
+        '    """Third function."""\n'
         "    data = [1, 2, 3, 4, 5]\n"
         "    return sum(data)\n"
     )
@@ -607,9 +605,7 @@ async def test_use_llm_chunking_skipped_for_detected_code() -> None:
     )
     ingestor = _make_real_ingestor(shard_size=200, shard_overlap=0, use_llm_chunking=True)
 
-    with patch.object(
-        Ingestor, "_reshard_llm", autospec=True, return_value=None
-    ) as llm_spy:
+    with patch.object(Ingestor, "_reshard_llm", autospec=True, return_value=None) as llm_spy:
         shards = await ingestor._reshard(blob, IngestCallOptions())
 
     assert shards, "Expected at least one shard"

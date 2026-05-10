@@ -116,9 +116,7 @@ class StubVerifier(Verifier):
 class StubIngestor(Ingestor):
     """Ingestor with deterministic, LLM-free overrides for all abstract methods."""
 
-    async def _reshard(
-        self, blob: str, opts: IngestCallOptions | None = None
-    ) -> list[str]:
+    async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
         """Split on double newlines; discard blank segments."""
         return [seg.strip() for seg in blob.split("\n\n") if seg.strip()]
 

@@ -32,9 +32,7 @@ class IngestInput(BaseModel):
     category: str | None = None
     tags: list[str] | None = None
     source_url: str | None = None
-    force_format: (
-        Literal["text", "code", "python", "yaml", "json", "markdown"] | None
-    ) = Field(
+    force_format: Literal["text", "code", "python", "yaml", "json", "markdown"] | None = Field(
         default=None,
         description=(
             "Override automatic format detection. When set, the chunker uses a "
