@@ -5,9 +5,10 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, TypeVar
 from uuid import UUID
 
 import httpx
@@ -78,6 +79,9 @@ def _balance_markdown_fences(chunk: str) -> str:
 
     suffix = "" if chunk.endswith("\n") else "\n"
     return f"{chunk}{suffix}```"
+
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -245,6 +249,69 @@ class Ingestor:
             return None
         return tome
 
+    async def consolidate(self, tomes: list[Tome], skip_verify: bool = False) -> list[Tome]:
+        """Merge a list of existing tomes into a new set of resharded tomes.
+
+        Useful for background 'garbage collection' or manual library tidying.
+        """
+        if not tomes:
+            return []
+        if len(tomes) == 1:
+            return tomes
+
+        # Build replacements from combined content.
+        combined = constants.CONTENT_SEPARATOR.join([t.content for t in tomes])
+        shards = await self._reshard(combined)
+
+        # Deduplicate shards to avoid redundant tomes.
+        unique_shards = list(dict.fromkeys([s.strip() for s in shards if s.strip()]))
+
+        # Use the first tome's metadata as a hint for replacements.
+        first = tomes[0]
+        opts = IngestCallOptions(
+            skip_verify=skip_verify,
+            category_hint=first.category,
+            tags_hint=first.tags,
+            source_url=first.source_url,
+            source_type=first.source_type,
+            research_job_id=first.research_job_id,
+        )
+
+        replacements = await self._build_replacements(unique_shards, opts)
+
+        if not replacements:
+            return tomes  # Fallback to original if resharding failed/empty
+
+        # Insert replacements.
+        await self._run_in_batches(
+            [self._tome_repo.insert(replacement) for replacement in replacements],
+            self._config.ingest.write_batch_size,
+        )
+
+        # Delete old tomes.
+        delete_results = await self._run_in_batches(
+            [self._tome_repo.delete(tome.id) for tome in tomes],
+            self._config.ingest.write_batch_size,
+            return_exceptions=True,
+        )
+        delete_errors = []
+        for tome, result in zip(tomes, delete_results, strict=True):
+            if isinstance(result, Exception):
+                logging.warning("Exception deleting %s during consolidate: %s", tome.id, result)
+                delete_errors.append(str(tome.id))
+            elif not result:
+                delete_errors.append(str(tome.id))
+
+        if delete_errors:
+            failed_ids = constants.ID_SEPARATOR.join(delete_errors)
+            msg = (
+                "Failed to delete tomes during consolidate "
+                f"(duplicate data may exist for: {failed_ids})"
+            )
+            raise ReshardError(msg, tomes=replacements)
+
+        return replacements
+
     async def _dedup_and_store(self, tome: Tome, opts: IngestCallOptions) -> list[Tome]:
         """Insert tome, or reshard with any near-duplicates found in the repository.
 
@@ -264,8 +331,10 @@ class Ingestor:
             [d.content for d in duplicates] + [tome.content]
         )
         shards = await self._reshard(combined, opts)
-        replacement_results = await asyncio.gather(*[self._build_tome(c, opts) for c in shards])
-        replacements = [t for t in replacement_results if t is not None]
+
+        # Deduplicate shards to avoid redundant tomes.
+        unique_shards = list(dict.fromkeys([s.strip() for s in shards if s.strip()]))
+        replacements = await self._build_replacements(unique_shards, opts)
 
         # Step 2 — abort if verification left us with nothing to store.
         if not replacements:
@@ -274,8 +343,9 @@ class Ingestor:
         # Step 3 - Insert replacements. If any insert fails, compensating-delete
         # the ones that succeeded so we leave neither orphans (no replacement
         # without delete) nor partial duplication. Originals stay untouched.
-        insert_results = await asyncio.gather(
-            *[self._tome_repo.insert(r) for r in replacements],
+        insert_results = await self._run_in_batches(
+            [self._tome_repo.insert(r) for r in replacements],
+            self._config.ingest.write_batch_size,
             return_exceptions=True,
         )
         inserted_ok: list[Tome] = []
@@ -316,8 +386,9 @@ class Ingestor:
         # Step 4 - Delete old tomes.
         # Technically if we fail here, we may end up with duplicate data in the
         # library, but that seems like a better choice (IMO) than aborting.
-        delete_results = await asyncio.gather(
-            *[self._tome_repo.delete(dup.id) for dup in duplicates],
+        delete_results = await self._run_in_batches(
+            [self._tome_repo.delete(dup.id) for dup in duplicates],
+            self._config.ingest.write_batch_size,
             return_exceptions=True,
         )
         delete_errors = []
@@ -353,17 +424,51 @@ class Ingestor:
                 llm_shards = await self._reshard_llm(blob)
                 if llm_shards:
                     return llm_shards
-            return self._split_text_recursive(blob)
+            return await self._split_text_recursive(blob)
 
         return self._split_structured(blob, fmt)
 
-    def _split_text_recursive(self, blob: str) -> list[str]:
+    async def _split_text_recursive(self, blob: str) -> list[str]:
         """Generic recursive character split — used as fallback for prose."""
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self._config.ingest.shard_size,
             chunk_overlap=self._config.ingest.shard_overlap,
         )
-        return splitter.split_text(blob)
+        return await asyncio.to_thread(splitter.split_text, blob)
+
+    async def _build_replacements(self, shards: list[str], opts: IngestCallOptions) -> list[Tome]:
+        replacement_results = await self._gather_limited(
+            [self._build_tome(chunk, opts) for chunk in shards],
+            self._config.ingest.build_concurrency,
+        )
+        return [tome for tome in replacement_results if tome is not None]
+
+    async def _gather_limited(
+        self,
+        operations: list[Awaitable[T | None]],
+        concurrency: int,
+    ) -> list[T | None]:
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def _run(operation: Awaitable[T | None]) -> T | None:
+            async with semaphore:
+                return await operation
+
+        return await asyncio.gather(*[_run(operation) for operation in operations])
+
+    async def _run_in_batches(
+        self,
+        operations: list[Awaitable[T]],
+        batch_size: int,
+        *,
+        return_exceptions: bool = False,
+    ) -> list[T | BaseException]:
+        results: list[T | BaseException] = []
+        for start in range(0, len(operations), max(1, batch_size)):
+            batch = operations[start : start + max(1, batch_size)]
+            batch_results = await asyncio.gather(*batch, return_exceptions=return_exceptions)
+            results.extend(batch_results)
+        return results
 
     @staticmethod
     def _strip_code_fences(message: str) -> str:

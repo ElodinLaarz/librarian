@@ -13,11 +13,12 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 from pymongo.errors import CollectionInvalid, OperationFailure
 from pymongo.operations import SearchIndexModel
 
-from src.config import DatabaseSettings
+from src.config import DatabaseSettings, TidySettings
 from src.models.tome import Tome
+from src.services.duplicate_detection import build_duplicate_groups
 from src.services.embedding import EmbeddingService
 from src.storage.mongo.mongo_tome import MongoTome
-from src.storage.tome_repository import TomeRepository
+from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,12 @@ class MongoTomeRepository(TomeRepository):
     configured to support both vector and lexical search.
     """
 
-    def __init__(self, settings: DatabaseSettings, embedding_service: EmbeddingService) -> None:
+    def __init__(
+        self,
+        settings: DatabaseSettings,
+        embedding_service: EmbeddingService,
+        tidy_settings: TidySettings | None = None,
+    ) -> None:
         kwargs: dict[str, Any] = {"uuidRepresentation": "standard"}
         if settings.tls:
             kwargs["tls"] = True
@@ -74,6 +80,7 @@ class MongoTomeRepository(TomeRepository):
         )
 
         self._embedding_service = embedding_service
+        self._tidy_settings = tidy_settings or TidySettings()
         db = self._client.get_database(settings.database)
         self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.tomes_collection]
 
@@ -94,6 +101,14 @@ class MongoTomeRepository(TomeRepository):
         if not doc:
             return None
         return MongoTome.model_validate(doc).to_tome()
+
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
+        """Retrieve a page of Tomes from the library."""
+        cursor = self._collection.find().skip(offset).limit(limit)
+        results = []
+        async for doc in cursor:
+            results.append(MongoTome.model_validate(doc).to_tome())
+        return results
 
     async def search(
         self,
@@ -211,7 +226,7 @@ class MongoTomeRepository(TomeRepository):
         combined.sort(key=lambda x: x[1], reverse=True)
         return combined[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome, threshold: float = 0.95) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
         if tome.embedding is None:
             return []
@@ -231,7 +246,12 @@ class MongoTomeRepository(TomeRepository):
                 }
             },
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
-            {"$match": {"score": {"$gte": threshold}, "document._id": {"$ne": tome.id}}},
+            {
+                "$match": {
+                    "score": {"$gte": self._tidy_settings.threshold},
+                    "document._id": {"$ne": tome.id},
+                }
+            },
         ]
 
         duplicates = []
@@ -239,6 +259,34 @@ class MongoTomeRepository(TomeRepository):
             duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
 
         return duplicates
+
+    async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:
+        """Find duplicate groups for tidy-time consolidation."""
+        projection = {
+            "_id": 1,
+            "title": 1,
+            "content": 1,
+            "summary": 1,
+            "category": 1,
+            "tags": 1,
+            "source_url": 1,
+            "source_type": 1,
+            "confidence": 1,
+            "research_job_id": 1,
+            "embedding": 1,
+            "created_at": 1,
+        }
+        cursor = self._collection.find({}, projection=projection).batch_size(
+            self._tidy_settings.scan_batch_size
+        )
+        all_tomes: list[Tome] = []
+        async for doc in cursor:
+            all_tomes.append(MongoTome.model_validate(doc).to_tome())
+
+        return build_duplicate_groups(
+            all_tomes,
+            self._tidy_settings.model_copy(update={"threshold": threshold}),
+        )
 
     async def ensure_indexes(self) -> None:
         """Create search and vector indexes programmatically.
