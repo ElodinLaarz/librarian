@@ -65,8 +65,18 @@ class LibrarianServer:
 
         import logging
 
+        logger = logging.getLogger(__name__)
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+        logger.info(
+            "LLM claim extraction enabled, model=%s",
+            self.config.verification.claim_model,
+        )
+        logger.info(
+            "LLM extraction model=%s",
+            self.config.ingest.extraction_model,
+        )
 
         self._setup_tools()
 

@@ -50,6 +50,7 @@ Set `skip_verify: true` on ingest to bypass (useful for notes or fictional conte
 ```bash
 docker compose up -d
 docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull gemma2:2b   # for LLM claim extraction (optional)
 ```
 
 **2. Install Python deps:**
