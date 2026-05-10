@@ -78,14 +78,18 @@ async def _resolve_host_ips(host: str) -> list[str]:
     """Resolve `host` to all known IPs. Returns [] on failure.
 
     Defined at module scope so tests can monkeypatch DNS without touching
-    the actual network.
+    the actual network. ``getaddrinfo`` may return the same address under
+    multiple socket types, so we de-duplicate before returning.
+
+    ``asyncio.CancelledError`` is intentionally **not** caught — cancellation
+    must propagate so the surrounding task can shut down cleanly.
     """
     try:
         loop = asyncio.get_running_loop()
         infos = await loop.getaddrinfo(host, None)
-    except (OSError, asyncio.CancelledError):
+    except OSError:
         return []
-    return [str(info[4][0]) for info in infos]
+    return list({str(info[4][0]) for info in infos})
 
 
 async def _validate_url(url: str) -> bool:
@@ -118,12 +122,10 @@ async def _validate_url(url: str) -> bool:
     return all(_is_safe_ip(ip) for ip in ips)
 
 
-async def fetch_url_main_text(url: str, *, timeout: float = 25.0) -> str:
-    """Download HTML and return extracted main text (best-effort).
-
-    Includes an SSRF guard: validates the scheme + DNS-resolved IPs of the
-    initial URL and every redirect hop, refusing to follow redirects to
-    private, loopback, link-local, or otherwise non-public addresses.
+async def _fetch_url_main_text_inner(url: str, *, timeout: float) -> str:
+    """Inner fetch loop. ``timeout`` is the per-HTTP-request budget;
+    the caller wraps the whole call in ``asyncio.wait_for`` so the
+    *overall* deadline (including DNS resolution) is bounded too.
     """
     headers = {"User-Agent": "LibrarianBot/1.0 (+https://github.com/librarian)"}
     current_url = url
@@ -132,9 +134,7 @@ async def fetch_url_main_text(url: str, *, timeout: float = 25.0) -> str:
             html: str | None = None
             for _ in range(_MAX_REDIRECTS + 1):
                 if not await _validate_url(current_url):
-                    logging.debug(
-                        "fetch_url_main_text refused unsafe URL: %s", current_url
-                    )
+                    logging.debug("fetch_url_main_text refused unsafe URL: %s", current_url)
                     return ""
                 response = await client.get(current_url, headers=headers)
                 if 300 <= response.status_code < 400:
@@ -148,9 +148,7 @@ async def fetch_url_main_text(url: str, *, timeout: float = 25.0) -> str:
                 break
             else:
                 # Exceeded redirect budget.
-                logging.debug(
-                    "fetch_url_main_text exceeded redirect limit for %s", url
-                )
+                logging.debug("fetch_url_main_text exceeded redirect limit for %s", url)
                 return ""
     except (httpx.HTTPError, OSError) as exc:
         logging.debug("fetch_url_main_text failed for %s: %s", url, exc)
@@ -159,6 +157,28 @@ async def fetch_url_main_text(url: str, *, timeout: float = 25.0) -> str:
         return ""
     extracted = trafilatura.extract(html)
     return extracted or ""
+
+
+async def fetch_url_main_text(url: str, *, timeout: float = 25.0) -> str:
+    """Download HTML and return extracted main text (best-effort).
+
+    Includes an SSRF guard: validates the scheme + DNS-resolved IPs of the
+    initial URL and every redirect hop, refusing to follow redirects to
+    private, loopback, link-local, or otherwise non-public addresses.
+
+    The ``timeout`` is a hard wall-clock cap on the entire operation —
+    DNS resolution + every HTTP hop — enforced via ``asyncio.wait_for``.
+    A slow/unresponsive resolver therefore cannot block longer than
+    ``timeout``.
+    """
+    try:
+        return await asyncio.wait_for(
+            _fetch_url_main_text_inner(url, timeout=timeout),
+            timeout=timeout,
+        )
+    except TimeoutError:
+        logging.debug("fetch_url_main_text timed out for %s", url)
+        return ""
 
 
 class UnavailableWebSearchClient(WebSearchClient):
