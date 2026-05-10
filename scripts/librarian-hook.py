@@ -67,7 +67,6 @@ async def _get_repo_and_ingestor():
             from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 
             repo: TomeRepository = MongoTomeRepository(config.database, embedding_service)
-            await repo.ensure_indexes()  # type: ignore[attr-defined]
         else:
             from src.storage.filesystem.fs_tome_repository import FsTomeRepository
 

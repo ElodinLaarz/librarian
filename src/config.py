@@ -208,14 +208,36 @@ class LibrarianConfig(BaseSettings):
             # Basic env var interpolation: ${VAR} or ${VAR:-default}
             import re
 
+            missing_env_vars: set[str] = set()
+            pattern = re.compile(r"\${([^}:-]+)(?::-(.*?))?}")
+
             def _replace_env(match: re.Match[str]) -> str:
                 var = match.group(1)
-                default = match.group(2) if match.group(2) else ""
-                return os.environ.get(var, default)
+                default = match.group(2)
+                if var in os.environ:
+                    return os.environ[var]
+                if default is not None:
+                    return default
+                missing_env_vars.add(var)
+                return ""
 
             # Match ${VAR} or ${VAR:-default}
-            content = re.sub(r"\${([^}:-]+)(?::-(.*?))?}", _replace_env, content)
-            raw = yaml.safe_load(content)
+            content = pattern.sub(_replace_env, content)
+
+            if missing_env_vars:
+                missing = ", ".join(sorted(missing_env_vars))
+                raise ValueError(
+                    f"Configuration interpolation failed for {path}: "
+                    f"missing environment variables without defaults: {missing}"
+                )
+
+            try:
+                raw = yaml.safe_load(content)
+            except yaml.YAMLError as exc:
+                raise ValueError(
+                    f"Invalid YAML in {path} after environment interpolation: {exc}"
+                ) from exc
+
             if raw is None:
                 raw = {}
             if not isinstance(raw, dict):
