@@ -50,7 +50,7 @@ The default embedding model has moved from `all-MiniLM-L6-v2` (384 dimensions) t
 ### Migration Options
 
 1. **Re-ingest (Recommended):** Drop your `tomes` collection and re-ingest your data to take advantage of the better model.
-2. **Maintain Compatibility:** If you want to keep your existing 384-dimensional data, set the following environment variables (or update `librarian.config.yaml`):
+1. **Maintain Compatibility:** If you want to keep your existing 384-dimensional data, set the following environment variables (or update `librarian.config.yaml`):
    ```bash
    LIBRARIAN_EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
    LIBRARIAN_EMBEDDING_DIMENSIONS=384
