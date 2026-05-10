@@ -121,6 +121,7 @@ class IngestSettings(BaseSettings):
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
     use_llm_chunking: bool = True
+    use_llm_summary: bool = True
     use_llm_classification: bool = True
     taxonomy: list[str] = Field(
         default_factory=lambda: [

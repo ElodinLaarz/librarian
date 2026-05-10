@@ -564,6 +564,151 @@ async def test_dedup_store_returning_empty_sets_partial_status(
     assert output.status != IngestStatus.STORED
 
 
+# ── LLM-based title and summary generation (issue #36) ───────────────────────
+
+
+def _make_summary_ingestor(
+    config: LibrarianConfig, repo: StubTomeRepository | None = None
+) -> tuple[Ingestor, StubTomeRepository]:
+    """Build a *real* Ingestor (no _generate_title_and_summary override).
+
+    Only verifier/embedder/repo are stubbed — _generate_title_and_summary and
+    _reshard run their real implementations.
+    """
+    repo = repo or StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    return ingestor, repo
+
+
+def _ollama_chat_response(content: str) -> httpx.Response:
+    """Build a fake Ollama-compatible chat completion response."""
+    body = {"choices": [{"message": {"content": content}}]}
+    return httpx.Response(200, json=body, request=httpx.Request("POST", "http://x/y"))
+
+
+async def test_summary_is_not_content_prefix_when_llm_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When use_llm_summary=True, summary must come from the LLM, not truncation."""
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, repo = _make_summary_ingestor(config)
+
+    llm_payload = json.dumps(
+        {
+            "title": "Photosynthesis basics",
+            "summary": "Plants convert sunlight to glucose via photosynthesis.",
+        }
+    )
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        return _ollama_chat_response(llm_payload)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "X" * config.ingest.summary_length + " then a long tail of additional content " * 5
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    assert len(output.tomes) == 1
+    tome = output.tomes[0]
+    assert tome.summary != tome.content[: config.ingest.summary_length]
+    assert tome.summary == "Plants convert sunlight to glucose via photosynthesis."
+    assert tome.title == "Photosynthesis basics"
+
+
+async def test_summary_falls_back_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A network error causes fallback to truncation behaviour."""
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, _ = _make_summary_ingestor(config)
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        raise httpx.ConnectError("nope")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "Z" * (config.ingest.summary_length + 50)
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.summary == tome.content[: config.ingest.summary_length]
+
+
+async def test_summary_falls_back_on_bad_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-JSON LLM output causes fallback to truncation behaviour."""
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, _ = _make_summary_ingestor(config)
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        return _ollama_chat_response("not json at all")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "Q" * (config.ingest.summary_length + 50)
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.summary == tome.content[: config.ingest.summary_length]
+
+
+async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When use_llm_summary=False, the summary LLM endpoint must not be called."""
+    # Disable classification too — it's an unrelated LLM path that would also
+    # post to the same endpoint and false-positive this assertion.
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=False,
+        use_llm_classification=False,
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, _ = _make_summary_ingestor(config)
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        raise AssertionError("LLM endpoint must not be called when use_llm_summary=False")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "M" * (config.ingest.summary_length + 50)
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.summary == tome.content[: config.ingest.summary_length]
+
+
 # ── syntax-aware chunking (issue #47) ────────────────────────────────────────
 
 

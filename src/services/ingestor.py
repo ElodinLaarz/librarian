@@ -365,6 +365,15 @@ class Ingestor:
         )
         return splitter.split_text(blob)
 
+    @staticmethod
+    def _strip_code_fences(message: str) -> str:
+        """Strip surrounding ```json ... ``` markdown fences from an LLM response."""
+        message = message.strip()
+        if message.startswith("```"):
+            message = re.sub(r"^```(?:json)?\s*", "", message)
+            message = re.sub(r"\s*```$", "", message)
+        return message
+
     def _split_structured(self, blob: str, fmt: DetectedFormat) -> list[str]:
         """Format-aware splitting for code / markdown / yaml / json."""
         chunk_size = self._config.ingest.shard_size
@@ -548,7 +557,7 @@ class Ingestor:
             "to be fully understood on its own. "
             f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
             'Output JSON only with the shape `{"facts": ["...", "..."]}`.\n\nTEXT:\n'
-            f"{blob[:8000]}"
+            f"{blob[: constants.MAX_LLM_INPUT_CHARS]}"
         )
         url = f"{base}/v1/chat/completions"
         payload = {
@@ -570,10 +579,7 @@ class Ingestor:
         except (KeyError, IndexError, TypeError):
             return None
 
-        message = message.strip()
-        if message.startswith("```"):
-            message = re.sub(r"(?i)^```\s*(?:json)?\s*", "", message)
-            message = re.sub(r"\s*```$", "", message)
+        message = self._strip_code_fences(message)
 
         try:
             parsed = json.loads(message)
@@ -659,10 +665,10 @@ class Ingestor:
             "temperature": 0.1,
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        client = await self._get_http_client()
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
 
         try:
             message = data["choices"][0]["message"]["content"]
@@ -711,14 +717,90 @@ class Ingestor:
         return category, tags
 
     async def _generate_title_and_summary(self, text: str) -> tuple[str, str]:
-        """Generate a short title and one-to-two sentence summary for a text."""
+        """Generate a short title and one-to-two sentence summary for a text.
+
+        When ``ingest.use_llm_summary`` is enabled, ask an Ollama-compatible
+        chat model to produce both fields as JSON.  Falls back to the
+        deterministic truncation path on any error (network, timeout, malformed
+        JSON, missing fields, etc.).
+        """
+        if self._config.ingest.use_llm_summary:
+            llm_result = await self._summarize_llm(text)
+            if llm_result is not None:
+                return llm_result
+        return self._truncation_title_and_summary(text)
+
+    def _truncation_title_and_summary(self, text: str) -> tuple[str, str]:
+        """Deterministic fallback: head-of-text truncation."""
         clean_text = text.strip().replace("\n", " ")
-        if len(clean_text) > self._config.ingest.title_length:
+        return self._apply_title_summary_limits(clean_text, clean_text)
+
+    async def _summarize_llm(self, text: str) -> tuple[str, str] | None:
+        """Ask an LLM for a short title and 1–2 sentence summary as JSON.
+
+        Returns ``None`` on any failure so the caller can fall back to the
+        deterministic truncation path.  Mirrors :meth:`_reshard_llm`.
+        """
+        title_length = self._config.ingest.title_length
+        summary_length = self._config.ingest.summary_length
+        base = self._config.ingest.ollama_base_url.rstrip("/")
+        model = self._config.ingest.extraction_model
+        prompt = (
+            "Read the text and return JSON only with shape "
+            f'{{"title":"<={title_length} chars>","summary":"<1-2 sentences, '
+            f'<={summary_length} chars>"}}.\n\nTEXT:\n'
+            f"{text[: constants.MAX_LLM_INPUT_CHARS]}"
+        )
+        url = f"{base}/v1/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+        }
+        try:
+            client = await self._get_http_client()
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            logging.debug("_summarize_llm HTTP/parse error: %s", exc)
+            return None
+
+        try:
+            message = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return None
+
+        message = self._strip_code_fences(message)
+
+        try:
+            parsed = json.loads(message)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+
+        raw_title = parsed.get("title")
+        raw_summary = parsed.get("summary")
+        if not isinstance(raw_title, str) or not isinstance(raw_summary, str):
+            return None
+
+        title = raw_title.strip().replace("\n", " ")
+        summary = raw_summary.strip().replace("\n", " ")
+        if not title or not summary:
+            return None
+
+        return self._apply_title_summary_limits(title, summary)
+
+    def _apply_title_summary_limits(self, title: str, summary: str) -> tuple[str, str]:
+        """Enforce the configured title/summary length caps with the truncation suffix."""
+        title_length = self._config.ingest.title_length
+        summary_length = self._config.ingest.summary_length
+        if len(title) > title_length:
             suffix = constants.TRUNCATION_SUFFIX
-            title = clean_text[: self._config.ingest.title_length - len(suffix)] + suffix
-        else:
-            title = clean_text
-        summary = clean_text[: self._config.ingest.summary_length]
+            title = title[: title_length - len(suffix)] + suffix
+        if len(summary) > summary_length:
+            summary = summary[:summary_length]
         return title, summary
 
     def _validate(self, tome: Tome) -> None:
