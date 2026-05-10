@@ -45,9 +45,12 @@ def _is_atlas_search_unsupported(exc: OperationFailure) -> bool:
     if code_name in _ATLAS_SEARCH_UNSUPPORTED_CODE_NAMES:
         return True
     # Older server builds don't populate codeName; fall back to the message.
-    message = str(exc)
-    return "$listSearchIndexes" in message and (
-        "Unrecognized pipeline stage" in message or "unknown" in message.lower()
+    # Match case-insensitively so different server versions / mock implementations
+    # that vary the casing (e.g. 'unrecognized' vs 'Unrecognized') still trip
+    # the same skip path.
+    message = str(exc).lower()
+    return "$listsearchindexes" in message and (
+        "unrecognized pipeline stage" in message or "unknown" in message
     )
 
 
