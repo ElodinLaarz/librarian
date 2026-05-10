@@ -53,6 +53,22 @@ class Ingestor:
         self._embedding_service = embedding_service
         self._verifier = verifier
         self._tome_repo = tome_repo
+        self._http_client: httpx.AsyncClient | None = None
+        self._http_client_lock = asyncio.Lock()
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """Lazily construct and reuse a single httpx client for LLM HTTP calls."""
+        if self._http_client is None:
+            async with self._http_client_lock:
+                if self._http_client is None:
+                    self._http_client = httpx.AsyncClient(timeout=120.0)
+        return self._http_client
+
+    async def aclose(self) -> None:
+        """Release the persistent HTTP client, if one was created."""
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     async def ingest(self, blob: str, options: IngestCallOptions | None = None) -> IngestOutput:
         """Convert unstructured text into one or more Tomes and save them."""
@@ -255,10 +271,10 @@ class Ingestor:
             "temperature": 0.1,
         }
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+            client = await self._get_http_client()
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
         except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
             logging.debug("_reshard_llm HTTP/parse error: %s", exc)
             return None
