@@ -113,6 +113,8 @@ class IngestSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_INGEST_")
     shard_size: int = constants.DEFAULT_SHARD_SIZE
     shard_overlap: int = constants.DEFAULT_SHARD_OVERLAP
+    min_shard_chars: int = constants.DEFAULT_MIN_SHARD_CHARS
+    min_shard_words: int = constants.DEFAULT_MIN_SHARD_WORDS
     summary_length: int = constants.DEFAULT_SUMMARY_LENGTH
     title_length: int = constants.TITLE_MAX_LENGTH
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE

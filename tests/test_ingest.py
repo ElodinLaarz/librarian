@@ -414,3 +414,191 @@ async def test_dedup_store_returning_empty_sets_partial_status(
     output = await ingestor.ingest("Incoming content that triggers a reshard.")
 
     assert output.status != IngestStatus.STORED
+
+
+# ── minimum tome size enforcement (issue #35) ────────────────────────────────
+
+
+def _word_count(text: str) -> int:
+    return len(text.split())
+
+
+async def test_llm_short_facts_are_bundled() -> None:
+    """LLM-emitted sub-floor facts must be merged so each tome meets the floor."""
+    from src.config import IngestSettings
+
+    # Use a small floor so 5 short facts can be bundled into multiple tomes.
+    ingest = IngestSettings(min_shard_chars=40, min_shard_words=8)
+    cfg = make_test_config(ingest=ingest)
+
+    long_blob = "y" * (ingest.min_shard_chars * 5)
+
+    short_facts = [
+        "fact one is here and pretty short though.",
+        "fact two is here and pretty short though.",
+        "fact three is here and pretty short.",
+        "fact four is here and pretty short.",
+        "fact five is here and pretty short.",
+    ]
+
+    class LLMShortFactsIngestor(StubIngestor):
+        async def _reshard_llm(self, blob: str) -> list[str] | None:
+            return list(short_facts)
+
+        async def _reshard(self, blob: str) -> list[str]:
+            # Mirror the production _reshard logic but use our mocked _reshard_llm.
+            return await Ingestor._reshard(self, blob)
+
+    repo = StubTomeRepository()
+    ingestor = LLMShortFactsIngestor(
+        cfg,
+        StubEmbeddingService(dimensions=cfg.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    output = await ingestor.ingest(long_blob)
+
+    assert output.status == IngestStatus.STORED
+    # Every stored tome must meet the floor.
+    for tome in output.tomes:
+        assert (
+            len(tome.content) >= ingest.min_shard_chars
+            and _word_count(tome.content) >= ingest.min_shard_words
+        ), f"tome below floor: chars={len(tome.content)}, words={_word_count(tome.content)}"
+    # Total content must preserve all five facts (no data loss).
+    combined = " ".join(t.content for t in output.tomes)
+    for fact in short_facts:
+        assert fact in combined
+
+
+async def test_all_llm_shards_below_floor_falls_back_to_heuristic(
+    config: LibrarianConfig,
+) -> None:
+    """If LLM returns only sub-floor fragments and bundling cannot help, fall back."""
+    long_blob = "alpha beta gamma delta epsilon. " * 200  # well over the floor
+
+    splitter_called = {"count": 0}
+
+    class FallbackIngestor(StubIngestor):
+        async def _reshard_llm(self, blob: str) -> list[str] | None:
+            # Return a single tiny fragment that cannot satisfy the floor and
+            # is much smaller than the blob → bundling can't recover it.
+            return ["tiny."]
+
+        async def _reshard(self, blob: str) -> list[str]:
+            return await Ingestor._reshard(self, blob)
+
+    # Patch the splitter import inside the production _reshard via a wrapper:
+    # easiest path — monkeypatch langchain_text_splitters.RecursiveCharacterTextSplitter.
+    import langchain_text_splitters as _lcts
+
+    original_cls = _lcts.RecursiveCharacterTextSplitter
+
+    class _SpySplitter(original_cls):  # type: ignore[misc, valid-type]
+        def split_text(self, text: str) -> list[str]:
+            splitter_called["count"] += 1
+            return super().split_text(text)
+
+    _lcts.RecursiveCharacterTextSplitter = _SpySplitter
+    try:
+        repo = StubTomeRepository()
+        ingestor = FallbackIngestor(
+            config,
+            StubEmbeddingService(dimensions=config.embedding.dimensions),
+            StubVerifier(confidence=0.9),
+            repo,
+        )
+        output = await ingestor.ingest(long_blob)
+    finally:
+        _lcts.RecursiveCharacterTextSplitter = original_cls
+
+    assert splitter_called["count"] >= 1
+    assert output.status == IngestStatus.STORED
+
+
+async def test_heuristic_tail_shard_below_floor_merged_with_previous(
+    config: LibrarianConfig,
+) -> None:
+    """Heuristic-path tail fragment below the floor must be bundled with the previous shard."""
+    # Build a config that disables LLM chunking and uses a small shard_size so we
+    # exercise the splitter without a giant blob.
+    from src.config import IngestSettings
+
+    ingest = IngestSettings(
+        use_llm_chunking=False,
+        shard_size=400,
+        shard_overlap=0,
+        min_shard_chars=300,
+        min_shard_words=40,
+    )
+    cfg = make_test_config(ingest=ingest)
+
+    # Produce a blob slightly larger than shard_size so the splitter creates two
+    # shards: one near shard_size, plus a tiny tail.
+    blob = ("alpha. " * 60) + "tail."  # 60 * 7 = 420 chars + tail
+    assert len(blob) > ingest.shard_size
+
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        cfg,
+        StubEmbeddingService(dimensions=cfg.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    assert len(output.tomes) == 1, (
+        f"expected tail to be merged with previous, got {len(output.tomes)} tomes: "
+        f"{[len(t.content) for t in output.tomes]}"
+    )
+
+
+async def test_validate_rejects_below_floor(config: LibrarianConfig) -> None:
+    """_validate must raise when content is below the floor and allow_short=False."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    short_content = "too short."  # well below floor
+    tome = Tome(
+        id=uuid.uuid4(),
+        title="t",
+        content=short_content,
+        summary="s",
+        category="general",
+        tags=["stub"],
+        source_url=None,
+        source_type=SourceType.AGENT_INPUT,
+        confidence=0.9,
+        embedding=np.zeros(config.embedding.dimensions, dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError):
+        ingestor._validate(tome, allow_short=False)
+
+
+async def test_legitimate_short_blob_passes_through(config: LibrarianConfig) -> None:
+    """A genuine short input (e.g. a tweet) must be stored as a single tome."""
+    short_blob = "Cats sleep ~16 hours per day."  # ~30 chars
+    assert len(short_blob) < config.ingest.min_shard_chars
+
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    output = await ingestor.ingest(short_blob)
+
+    assert output.status == IngestStatus.STORED
+    assert len(output.tomes) == 1
+    assert output.tomes[0].content.strip() == short_blob

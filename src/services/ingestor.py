@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -29,6 +29,13 @@ class IngestCallOptions:
     research_job_id: UUID | None = None
     category_hint: str | None = None
     tags_hint: list[str] | None = None
+    allow_short: bool = False
+    """When True, _validate skips the minimum-shard-size floor.
+
+    Set automatically by ingest() when the entire input blob is below the
+    floor (e.g. tweets, short notes) so legitimate short documents are not
+    rejected.
+    """
 
 
 class ReshardError(Exception):
@@ -76,8 +83,16 @@ class Ingestor:
                 ),
             )
 
+        # Whole-blob bypass: if the entire input is below the minimum-shard
+        # floor, treat it as a legitimately short document and skip the floor
+        # enforcement during _validate.
+        allow_short = len(blob.strip()) < self._config.ingest.min_shard_chars
+        per_shard_opts = opts
+        if allow_short and not opts.allow_short:
+            per_shard_opts = replace(opts, allow_short=True)
+
         tomes = await asyncio.gather(
-            *[self._process_text(s, opts) for s in shards],
+            *[self._process_text(s, per_shard_opts) for s in shards],
             return_exceptions=True,
         )
 
@@ -161,7 +176,7 @@ class Ingestor:
             created_at=datetime.now(UTC),
         )
         try:
-            self._validate(tome)
+            self._validate(tome, allow_short=opts.allow_short)
         except ValueError:
             logging.error("Tome validation failed", exc_info=True)
             return None
@@ -222,19 +237,75 @@ class Ingestor:
         return replacements
 
     async def _reshard(self, blob: str) -> list[str]:
-        """Split blob into atomic, self-contained fact shards."""
+        """Split blob into atomic, self-contained fact shards.
+
+        Enforces a minimum-size floor (chars and words) by bundling adjacent
+        sub-floor shards together. Legitimate short inputs (whole blob below
+        the floor) bypass bundling and pass through unchanged.
+        """
+        # Whole-blob bypass: a legitimately short document.
+        if len(blob.strip()) < self._config.ingest.min_shard_chars:
+            stripped = blob.strip()
+            return [stripped] if stripped else []
+
+        # Lazy import to keep startup light and to allow tests to monkeypatch.
+        import langchain_text_splitters as _lcts
+
+        def _heuristic() -> list[str]:
+            splitter = _lcts.RecursiveCharacterTextSplitter(
+                chunk_size=self._config.ingest.shard_size,
+                chunk_overlap=self._config.ingest.shard_overlap,
+            )
+            return splitter.split_text(blob)
+
         if self._config.ingest.use_llm_chunking:
             llm_shards = await self._reshard_llm(blob)
             if llm_shards:
-                return llm_shards
+                bundled = self._apply_min_floor(llm_shards)
+                if bundled:
+                    return bundled
+                # LLM returned only sub-floor fragments and bundling collapsed
+                # them away — fall back to the heuristic splitter.
 
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        return self._apply_min_floor(_heuristic())
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self._config.ingest.shard_size,
-            chunk_overlap=self._config.ingest.shard_overlap,
-        )
-        return splitter.split_text(blob)
+    def _apply_min_floor(self, shards: list[str]) -> list[str]:
+        """Bundle adjacent shards in order until each meets the size floor.
+
+        - Walks shards left-to-right, accumulating into a buffer until the
+          buffer has both >= min_shard_chars and >= min_shard_words.
+        - Any final undersized tail is merged into the previous shard.
+        - Empty / whitespace-only shards are dropped.
+        - Returns [] when the floor cannot be reached even after bundling
+          everything (caller decides whether to fall back).
+        """
+        min_chars = self._config.ingest.min_shard_chars
+        min_words = self._config.ingest.min_shard_words
+
+        cleaned = [s.strip() for s in shards if s and s.strip()]
+        if not cleaned:
+            return []
+
+        out: list[str] = []
+        buf: str = ""
+        for shard in cleaned:
+            buf = shard if not buf else f"{buf}{constants.CONTENT_SEPARATOR}{shard}"
+            if len(buf) >= min_chars and len(buf.split()) >= min_words:
+                out.append(buf)
+                buf = ""
+
+        if buf:
+            # Undersized tail: merge with the previous shard if any, else
+            # accept-as-is so we don't lose data when the entire combined
+            # input cannot reach the floor.
+            if out:
+                out[-1] = f"{out[-1]}{constants.CONTENT_SEPARATOR}{buf}"
+            else:
+                # Nothing met the floor — signal failure so the caller can
+                # fall back to a different strategy.
+                return []
+
+        return out
 
     async def _reshard_llm(self, blob: str) -> list[str] | None:
         """Use an LLM agent to decompose text into atomic facts."""
@@ -245,6 +316,9 @@ class Ingestor:
             "statements or concepts. Each statement or concept must contain enough context "
             "to be fully understood on its own. "
             f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
+            f"Each fact must be at least {self._config.ingest.min_shard_chars} characters "
+            f"and {self._config.ingest.min_shard_words} words; combine related sub-facts to "
+            "meet this minimum. "
             'Output JSON only with the shape `{"facts": ["...", "..."]}`.\\n\\nTEXT:\\n'
             f"{blob[:8000]}"
         )
@@ -310,14 +384,29 @@ class Ingestor:
         summary = clean_text[: self._config.ingest.summary_length]
         return title, summary
 
-    def _validate(self, tome: Tome) -> None:
-        """Post-construction checks; raises on failure."""
+    def _validate(self, tome: Tome, *, allow_short: bool = False) -> None:
+        """Post-construction checks; raises on failure.
+
+        ``allow_short`` skips the minimum-shard-size floor — used when the
+        whole ingest blob was legitimately smaller than the floor.
+        """
         if not tome.content.strip():
             raise ValueError("Tome content cannot be empty")
         if len(tome.title) > self._config.ingest.title_length:
             raise ValueError(
                 f"Tome title too long ({len(tome.title)} > {self._config.ingest.title_length})"
             )
+
+        if not allow_short:
+            min_chars = self._config.ingest.min_shard_chars
+            min_words = self._config.ingest.min_shard_words
+            content_len = len(tome.content)
+            content_words = len(tome.content.split())
+            if content_len < min_chars or content_words < min_words:
+                raise ValueError(
+                    f"Tome content below minimum shard size "
+                    f"(chars={content_len}<{min_chars}, words={content_words}<{min_words})"
+                )
 
         # In a real implementation we would enforce the embedding size.
         # Here we skip the dimension check if a dummy/string embedding is supplied.
