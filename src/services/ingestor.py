@@ -236,6 +236,15 @@ class Ingestor:
         )
         return splitter.split_text(blob)
 
+    @staticmethod
+    def _strip_code_fences(message: str) -> str:
+        """Strip surrounding ```json ... ``` markdown fences from an LLM response."""
+        message = message.strip()
+        if message.startswith("```"):
+            message = re.sub(r"^```(?:json)?\s*", "", message)
+            message = re.sub(r"\s*```$", "", message)
+        return message
+
     async def _reshard_llm(self, blob: str) -> list[str] | None:
         """Use an LLM agent to decompose text into atomic facts."""
         base = self._config.ingest.ollama_base_url.rstrip("/")
@@ -245,8 +254,8 @@ class Ingestor:
             "statements or concepts. Each statement or concept must contain enough context "
             "to be fully understood on its own. "
             f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
-            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\\n\\nTEXT:\\n'
-            f"{blob[:8000]}"
+            'Output JSON only with the shape `{"facts": ["...", "..."]}`.\n\nTEXT:\n'
+            f"{blob[: constants.MAX_LLM_INPUT_CHARS]}"
         )
         url = f"{base}/v1/chat/completions"
         payload = {
@@ -259,7 +268,7 @@ class Ingestor:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()
-        except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
+        except (httpx.HTTPError, OSError, ValueError) as exc:
             logging.debug("_reshard_llm HTTP/parse error: %s", exc)
             return None
 
@@ -268,10 +277,7 @@ class Ingestor:
         except (KeyError, IndexError, TypeError):
             return None
 
-        message = message.strip()
-        if message.startswith("```"):
-            message = re.sub(r"^```(?:json)?\\s*", "", message)
-            message = re.sub(r"\\s*```$", "", message)
+        message = self._strip_code_fences(message)
 
         try:
             parsed = json.loads(message)
@@ -316,13 +322,7 @@ class Ingestor:
     def _truncation_title_and_summary(self, text: str) -> tuple[str, str]:
         """Deterministic fallback: head-of-text truncation."""
         clean_text = text.strip().replace("\n", " ")
-        if len(clean_text) > self._config.ingest.title_length:
-            suffix = constants.TRUNCATION_SUFFIX
-            title = clean_text[: self._config.ingest.title_length - len(suffix)] + suffix
-        else:
-            title = clean_text
-        summary = clean_text[: self._config.ingest.summary_length]
-        return title, summary
+        return self._apply_title_summary_limits(clean_text, clean_text)
 
     async def _summarize_llm(self, text: str) -> tuple[str, str] | None:
         """Ask an LLM for a short title and 1–2 sentence summary as JSON.
@@ -338,7 +338,7 @@ class Ingestor:
             "Read the text and return JSON only with shape "
             f'{{"title":"<={title_length} chars>","summary":"<1-2 sentences, '
             f'<={summary_length} chars>"}}.\n\nTEXT:\n'
-            f"{text[:8000]}"
+            f"{text[: constants.MAX_LLM_INPUT_CHARS]}"
         )
         url = f"{base}/v1/chat/completions"
         payload = {
@@ -351,7 +351,7 @@ class Ingestor:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()
-        except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
+        except (httpx.HTTPError, OSError, ValueError) as exc:
             logging.debug("_summarize_llm HTTP/parse error: %s", exc)
             return None
 
@@ -360,10 +360,7 @@ class Ingestor:
         except (KeyError, IndexError, TypeError):
             return None
 
-        message = message.strip()
-        if message.startswith("```"):
-            message = re.sub(r"^```(?:json)?\s*", "", message)
-            message = re.sub(r"\s*```$", "", message)
+        message = self._strip_code_fences(message)
 
         try:
             parsed = json.loads(message)
@@ -382,6 +379,12 @@ class Ingestor:
         if not title or not summary:
             return None
 
+        return self._apply_title_summary_limits(title, summary)
+
+    def _apply_title_summary_limits(self, title: str, summary: str) -> tuple[str, str]:
+        """Enforce the configured title/summary length caps with the truncation suffix."""
+        title_length = self._config.ingest.title_length
+        summary_length = self._config.ingest.summary_length
         if len(title) > title_length:
             suffix = constants.TRUNCATION_SUFFIX
             title = title[: title_length - len(suffix)] + suffix

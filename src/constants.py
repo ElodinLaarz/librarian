@@ -11,6 +11,10 @@ DEFAULT_UNVERIFIED_CONFIDENCE = 0.5
 DEFAULT_CATEGORY = "Uncategorized"
 DEFAULT_TAGS = ("auto-tag",)  # Use tuple for immutability
 
+# Max characters of input text passed to LLM prompts (keeps requests within
+# typical model context limits and bounds latency/cost).
+MAX_LLM_INPUT_CHARS = 8000
+
 # Verifier defaults
 DEFAULT_MOCK_CONFIDENCE = 0.6
 DEFAULT_NOOP_CONFIDENCE = 1.0
