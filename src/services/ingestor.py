@@ -319,13 +319,11 @@ class Ingestor:
                 f"Tome title too long ({len(tome.title)} > {self._config.ingest.title_length})"
             )
 
-        # In a real implementation we would enforce the embedding size.
-        # Here we skip the dimension check if a dummy/string embedding is supplied.
-        if (
-            tome.embedding is not None
-            and tome.embedding.shape[0] != self._config.embedding.dimensions
-        ):
+        # Enforce embedding size against what the model actually produces, not the
+        # configured value (which may be the default and disagree with the model).
+        expected_dim = self._embedding_service.dimensions
+        if tome.embedding is not None and tome.embedding.shape[0] != expected_dim:
             raise ValueError(
                 f"Tome embedding has dimension {tome.embedding.shape[0]}, "
-                f"expected {self._config.embedding.dimensions}"
+                f"expected {expected_dim}"
             )

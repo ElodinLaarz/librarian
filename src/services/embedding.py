@@ -85,11 +85,37 @@ class EmbeddingService(ABC):
 
     def __init__(self, settings: EmbeddingSettings) -> None:
         self._settings = settings
+        self._measured_dimensions: int | None = None
 
     @property
     def dimensions(self) -> int:
-        """Get the dimensions of the embedding vector."""
+        """Get the dimensions of the embedding vector.
+
+        Prefers the size measured from the underlying model when ``initialize()``
+        has been able to probe it. Falls back to the configured value (used by
+        services with no model, like ``DummyEmbeddingService``).
+        """
+        if self._measured_dimensions is not None:
+            return self._measured_dimensions
         return self._settings.dimensions
+
+    def _check_measured_dimensions(self, measured: int) -> None:
+        """Validate that ``measured`` is consistent with explicitly configured dimensions.
+
+        If the user explicitly set ``embedding.dimensions`` in their config and it
+        disagrees with what the model reports, raise ``ValueError`` so the
+        misconfiguration is loud rather than silently producing wrong-sized
+        Atlas indexes / ingestion checks.
+        """
+        if (
+            "dimensions" in self._settings.model_fields_set
+            and self._settings.dimensions != measured
+        ):
+            raise ValueError(
+                f"Configured dimensions={self._settings.dimensions} but model="
+                f"{self._settings.model_name} produces {measured}. "
+                "Update embedding.dimensions or remove the setting."
+            )
 
     @abstractmethod
     async def initialize(self) -> None:
@@ -125,7 +151,7 @@ class OllamaEmbeddingService(EmbeddingService):
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """Verify Ollama is reachable and the model is available."""
+        """Verify Ollama is reachable, then probe the model for its real dimensions."""
         try:
             response = await self._client.get("/api/tags")
             response.raise_for_status()
@@ -133,6 +159,24 @@ class OllamaEmbeddingService(EmbeddingService):
             raise RuntimeError(
                 f"Cannot connect to Ollama at {self._settings.ollama_url}: {exc}"
             ) from exc
+
+        # Probe the model with a tiny prompt so we discover its real embedding size.
+        try:
+            probe = await self._client.post(
+                "/api/embeddings",
+                json={"model": self._settings.model_name, "prompt": "x"},
+            )
+            probe.raise_for_status()
+            vector = probe.json()["embedding"]
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            raise RuntimeError(
+                f"Cannot probe Ollama model {self._settings.model_name} "
+                f"for embedding dimensions: {exc}"
+            ) from exc
+
+        measured = len(vector)
+        self._check_measured_dimensions(measured)
+        self._measured_dimensions = measured
 
     async def embed(self, text: str) -> np.ndarray:
         key = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -172,12 +216,31 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """Load the model."""
+        """Load the model and probe it for its true embedding dimension."""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
             # Loading model can be slow, run in thread
             self._model = await asyncio.to_thread(SentenceTransformer, self._settings.model_name)
+
+        # Ask the model for its dimension; fall back to a probe embedding if needed.
+        dim: int | None = None
+        getter = getattr(self._model, "get_sentence_embedding_dimension", None)
+        if callable(getter):
+            try:
+                value = await asyncio.to_thread(getter)
+            except Exception:  # noqa: BLE001 - any model error means we fall back
+                value = None
+            if isinstance(value, int) and value > 0:
+                dim = value
+
+        if dim is None:
+            probe = await asyncio.to_thread(self._model.encode, "x", convert_to_numpy=True)
+            probe_arr = np.atleast_1d(np.squeeze(np.asarray(probe, dtype=np.float32)))
+            dim = int(probe_arr.shape[0])
+
+        self._check_measured_dimensions(dim)
+        self._measured_dimensions = dim
 
     async def embed(self, text: str) -> np.ndarray:
         """Produce embedding with LRU cache."""

@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 
 from src.config import EmbeddingSettings
-from src.services.embedding import OllamaEmbeddingService, SentenceTransformerEmbeddingService
+from src.services.embedding import (
+    DummyEmbeddingService,
+    OllamaEmbeddingService,
+    SentenceTransformerEmbeddingService,
+)
 
 
 @pytest.mark.asyncio
@@ -15,6 +19,9 @@ async def test_sentence_transformer_embedding(monkeypatch: pytest.MonkeyPatch) -
         def __init__(self, model_name: str) -> None:
             self.model_name = model_name
             self.encode_calls = 0
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 384
 
         def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
             self.encode_calls += 1
@@ -62,6 +69,9 @@ async def test_sentence_transformer_embedding_cache_eviction(
         def __init__(self, model_name: str) -> None:
             self.encode_calls = 0
 
+        def get_sentence_embedding_dimension(self) -> int:
+            return 384
+
         def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
             self.encode_calls += 1
             return np.zeros(384, dtype=np.float32)
@@ -101,6 +111,9 @@ async def test_sentence_transformer_embedding_concurrency(monkeypatch: pytest.Mo
         def __init__(self, model_name: str) -> None:
             self.encode_calls = 0
 
+        def get_sentence_embedding_dimension(self) -> int:
+            return 384
+
         def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
             self.encode_calls += 1
             import time
@@ -126,6 +139,154 @@ async def test_sentence_transformer_embedding_concurrency(monkeypatch: pytest.Mo
     # In our current implementation, both will miss cache initially and call encode!
     # So encode_calls should be 2!
     assert fake_model.encode_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_sentence_transformer_dimensions_measured_from_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The service should expose the model's actual dimension after initialize()."""
+    pytest.importorskip("sentence_transformers")
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name: str) -> None:
+            self.model_name = model_name
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 768
+
+        def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
+            return np.zeros(768, dtype=np.float32)
+
+    fake_model = FakeSentenceTransformer("fake-768-model")
+    import sentence_transformers
+
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+
+    # Use defaults — dimensions is NOT explicitly set
+    settings = EmbeddingSettings(model_name="fake-768-model")
+    service = SentenceTransformerEmbeddingService(settings)
+
+    await service.initialize()
+
+    assert service.dimensions == 768
+
+
+@pytest.mark.asyncio
+async def test_initialize_raises_on_dim_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When config explicitly sets dimensions and model disagrees, initialize() should raise."""
+    pytest.importorskip("sentence_transformers")
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name: str) -> None:
+            self.model_name = model_name
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 768
+
+        def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
+            return np.zeros(768, dtype=np.float32)
+
+    fake_model = FakeSentenceTransformer("fake-768-model")
+    import sentence_transformers
+
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+
+    # Explicitly set dimensions=384 — disagrees with the model's 768
+    settings = EmbeddingSettings(dimensions=384, model_name="fake-768-model")
+    service = SentenceTransformerEmbeddingService(settings)
+
+    with pytest.raises(ValueError) as exc_info:
+        await service.initialize()
+
+    msg = str(exc_info.value)
+    assert "384" in msg
+    assert "768" in msg
+    assert "fake-768-model" in msg
+
+
+@pytest.mark.asyncio
+async def test_initialize_uses_measured_when_setting_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If config dimensions is not explicitly set, accept and use the measured value."""
+    pytest.importorskip("sentence_transformers")
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name: str) -> None:
+            self.model_name = model_name
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 768
+
+        def encode(self, text: str, convert_to_numpy: bool = True) -> np.ndarray:
+            return np.zeros(768, dtype=np.float32)
+
+    fake_model = FakeSentenceTransformer("fake-768-model")
+    import sentence_transformers
+
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda name: fake_model)
+
+    settings = EmbeddingSettings(model_name="fake-768-model")  # default dimensions, not set
+    service = SentenceTransformerEmbeddingService(settings)
+
+    # Should not raise
+    await service.initialize()
+
+    assert service.dimensions == 768
+
+
+@pytest.mark.asyncio
+async def test_dummy_keeps_settings_dimensions() -> None:
+    """DummyEmbeddingService has no model — should keep config dimensions and not probe."""
+    settings = EmbeddingSettings(dimensions=512, provider="dummy")
+    service = DummyEmbeddingService(settings)
+
+    await service.initialize()
+
+    assert service.dimensions == 512
+    # Sanity: embedding produced is 512-dim
+    vec = await service.embed("hello")
+    assert vec.shape == (512,)
+
+
+@pytest.mark.asyncio
+async def test_ollama_initialize_probes_model_for_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OllamaEmbeddingService.initialize should probe /api/embeddings to measure dimensions."""
+    import httpx
+
+    settings = EmbeddingSettings(
+        provider="ollama",
+        model_name="nomic-embed-text",
+        ollama_url="http://localhost:11434",
+    )
+    service = OllamaEmbeddingService(settings)
+
+    captured_calls: list[tuple[str, str]] = []
+
+    async def fake_get(self: httpx.AsyncClient, url: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+        captured_calls.append(("GET", url))
+        return httpx.Response(200, json={"models": []}, request=httpx.Request("GET", url))
+
+    async def fake_post(self: httpx.AsyncClient, url: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+        captured_calls.append(("POST", url))
+        # Return a 768-dim embedding
+        return httpx.Response(
+            200,
+            json={"embedding": [0.1] * 768},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    await service.initialize()
+
+    assert service.dimensions == 768
+    assert any(call[0] == "POST" and "/api/embeddings" in call[1] for call in captured_calls)
+    await service.aclose()
 
 
 @pytest.mark.asyncio
