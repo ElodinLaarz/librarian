@@ -244,7 +244,7 @@ class Ingestor:
         )
         delete_errors = []
         for dup, delete_result in zip(duplicates, delete_results, strict=True):
-            if isinstance(delete_result, Exception):
+            if isinstance(delete_result, BaseException):
                 logging.warning("Exception deleting %s during reshard: %s", dup.id, delete_result)
                 delete_errors.append(str(dup.id))
             elif not delete_result:
