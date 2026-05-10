@@ -460,6 +460,228 @@ async def test_dedup_store_returning_empty_sets_partial_status(
     assert output.status != IngestStatus.STORED
 
 
+# ── LLM classification & tagging (issue #37) ─────────────────────────────────
+# These tests exercise the real Ingestor._classify_and_tag (NOT the stub
+# override) by subclassing Ingestor and overriding only the unrelated I/O
+# methods so the LLM-classification path is the one under test.
+
+
+class _LlmClassifyIngestor(Ingestor):
+    """Real-classify Ingestor: stubs _reshard / title-and-summary only."""
+
+    async def _reshard(self, blob: str) -> list[str]:
+        return [seg.strip() for seg in blob.split("\n\n") if seg.strip()]
+
+    async def _generate_title_and_summary(self, chunk: str) -> tuple[str, str]:
+        title = chunk[:50].strip()
+        return (title, f"Summary: {chunk[:80].strip()}")
+
+
+def _make_llm_classify_ingestor(
+    config: LibrarianConfig | None = None,
+    *,
+    confidence: float = 0.8,
+) -> tuple[_LlmClassifyIngestor, StubTomeRepository]:
+    cfg = config or make_test_config()
+    repo = StubTomeRepository()
+    embedding = StubEmbeddingService(dimensions=cfg.embedding.dimensions)
+    verifier = StubVerifier(confidence=confidence)
+    ingestor = _LlmClassifyIngestor(cfg, embedding, verifier, repo)
+    return ingestor, repo
+
+
+def _ollama_response(content: str) -> Any:
+    """Build a fake httpx.Response-like object holding an Ollama chat payload."""
+
+    class _FakeResp:
+        status_code = 200
+
+        def __init__(self, content_str: str) -> None:
+            self._content_str = content_str
+
+        def raise_for_status(self) -> None:  # noqa: D401
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"choices": [{"message": {"content": self._content_str}}]}
+
+    return _FakeResp(content)
+
+
+def _patch_httpx_post(monkeypatch: pytest.MonkeyPatch, handler: Any) -> dict[str, int]:
+    """Replace httpx.AsyncClient.post with `handler` and return a call-count dict."""
+    counter = {"calls": 0}
+
+    async def _fake_post(self: Any, url: str, **kwargs: Any) -> Any:  # noqa: ANN401
+        counter["calls"] += 1
+        if callable(handler):
+            return handler(url, **kwargs)
+        return handler
+
+    import httpx as _httpx
+
+    monkeypatch.setattr(_httpx.AsyncClient, "post", _fake_post)
+    return counter
+
+
+async def test_classify_uses_llm_when_no_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM result drives category and tags when no hints are supplied."""
+    config = make_test_config()
+    ingestor, repo = _make_llm_classify_ingestor(config)
+
+    payload = '{"category": "Science", "tags": ["photosynthesis", "biology"]}'
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest("Photosynthesis converts sunlight into glucose.")
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.category == "Science"
+    assert "photosynthesis" in tome.tags
+    assert "biology" in tome.tags
+
+
+async def test_classify_hint_overrides_llm_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A category_hint always wins over whatever the LLM returns."""
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    payload = '{"category": "Science", "tags": ["a", "b"]}'
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest(
+        "Some text.",
+        IngestCallOptions(category_hint="History"),
+    )
+
+    assert output.tomes[0].category == "History"
+
+
+async def test_classify_tags_hint_merged_with_llm_tags_deduped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tags hint is merged with LLM tags; duplicates removed; order preserved."""
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    payload = '{"category": "Science", "tags": ["photosynthesis", "biology"]}'
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest(
+        "Some text about plants.",
+        IngestCallOptions(tags_hint=["x", "photosynthesis"]),
+    )
+
+    tags = output.tomes[0].tags
+    # Hints come first, LLM tags added afterwards, dedupe preserves first-seen order.
+    assert tags[0] == "x"
+    assert tags[1] == "photosynthesis"
+    assert "biology" in tags
+    assert tags.count("photosynthesis") == 1
+
+
+async def test_classify_out_of_taxonomy_falls_back_to_uncategorized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If LLM picks a category outside the taxonomy, default category is used; tags kept."""
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    payload = '{"category": "Sportsball", "tags": ["football", "rules"]}'
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest("Some text.")
+
+    tome = output.tomes[0]
+    assert tome.category == config.ingest.default_category
+    assert "football" in tome.tags
+    assert "rules" in tome.tags
+
+
+async def test_classify_llm_failure_falls_back_to_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A network error during classification must not crash ingest."""
+    import httpx as _httpx
+
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    def _raise(url: str, **kwargs: Any) -> Any:
+        raise _httpx.HTTPError("boom")
+
+    _patch_httpx_post(monkeypatch, _raise)
+
+    output = await ingestor.ingest("Resilient text.")
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.category == config.ingest.default_category
+    assert tome.tags == list(config.ingest.default_tags)
+
+
+async def test_use_llm_classification_flag_off_skips_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the flag is disabled, no HTTP call is made and defaults are used."""
+    from src.config import IngestSettings
+
+    config = make_test_config(ingest=IngestSettings(use_llm_classification=False))
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    counter = _patch_httpx_post(
+        monkeypatch,
+        _ollama_response('{"category":"Science","tags":["x"]}'),
+    )
+
+    output = await ingestor.ingest("Some text.")
+
+    # The classifier never reached out to the model.
+    assert counter["calls"] == 0
+    tome = output.tomes[0]
+    assert tome.category == config.ingest.default_category
+    assert tome.tags == list(config.ingest.default_tags)
+
+
+async def test_classify_extracts_json_from_filler_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM responses with conversational filler around the JSON are still parsed."""
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    # LLM wraps JSON in filler + markdown fences mid-stream.
+    payload = (
+        "Sure! Here is the classification you asked for:\n"
+        '```json\n{"category": "Science", "tags": ["physics"]}\n```\n'
+        "Hope that helps!"
+    )
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest("Some text about quanta.")
+
+    tome = output.tomes[0]
+    assert tome.category == "Science"
+    assert "physics" in tome.tags
+
+
+async def test_classify_taxonomy_match_is_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM-returned category matches taxonomy regardless of casing; canonical form kept."""
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    # Lowercase category from the model; "Science" in taxonomy.
+    payload = '{"category": "science", "tags": ["chem"]}'
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest("Some text.")
+
+    # Stored category preserves the canonical taxonomy casing.
+    assert output.tomes[0].category == "Science"
+
+
 # ── prompt / fence-stripper escape regression (issue #20) ────────────────────
 
 
