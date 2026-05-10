@@ -292,12 +292,114 @@ class Ingestor:
         category_hint: str | None = None,
         tags_hint: list[str] | None = None,
     ) -> tuple[str, list[str]]:
-        """Auto-classify into a category and extract topic tags."""
-        category = category_hint or self._config.ingest.default_category
-        if tags_hint:
-            merged = list(dict.fromkeys([*tags_hint, *self._config.ingest.default_tags]))
-            return category, merged
-        return category, list(self._config.ingest.default_tags)
+        """Auto-classify into a category and extract topic tags.
+
+        Resolution order:
+        1. If both ``category_hint`` and ``tags_hint`` are supplied, short-circuit
+           and skip the LLM entirely.
+        2. Otherwise, when ``ingest.use_llm_classification`` is on, call the
+           extraction model for a `(category, tags)` pair.
+        3. Hints always win over LLM output for category; tag hints are merged
+           with LLM tags (hints first, deduped, order-preserving).
+        4. On any HTTP/parse error or out-of-taxonomy category, fall back to
+           ``ingest.default_category`` / ``ingest.default_tags``.
+        """
+        default_category = self._config.ingest.default_category
+        default_tags = list(self._config.ingest.default_tags)
+
+        if category_hint and tags_hint:
+            merged = list(dict.fromkeys([*tags_hint, *default_tags]))
+            return category_hint, merged
+
+        llm_category: str | None = None
+        llm_tags: list[str] | None = None
+        if self._config.ingest.use_llm_classification:
+            try:
+                llm_category, llm_tags = await self._classify_and_tag_llm(text)
+            except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
+                logging.debug("_classify_and_tag LLM error: %s", exc)
+                llm_category, llm_tags = None, None
+
+        category = category_hint or llm_category or default_category
+
+        if tags_hint and llm_tags:
+            tags = list(dict.fromkeys([*tags_hint, *llm_tags]))
+        elif tags_hint:
+            tags = list(dict.fromkeys([*tags_hint, *default_tags]))
+        elif llm_tags:
+            tags = list(dict.fromkeys(llm_tags))
+        else:
+            tags = list(default_tags)
+
+        return category, tags
+
+    async def _classify_and_tag_llm(self, text: str) -> tuple[str | None, list[str] | None]:
+        """Use the extraction model to pick a category from the configured taxonomy.
+
+        Returns (category_or_None, tags_or_None).  ``category`` is ``None`` if the
+        LLM picked something outside ``ingest.taxonomy``.  ``tags`` is ``None`` if
+        the model produced no usable list.  Errors are *not* swallowed here — the
+        caller catches them.
+        """
+        base = self._config.ingest.ollama_base_url.rstrip("/")
+        model = self._config.ingest.extraction_model
+        taxonomy = list(self._config.ingest.taxonomy)
+        taxonomy_str = ", ".join(taxonomy)
+        prompt = (
+            "Classify the following text into exactly one category from this list: "
+            f"[{taxonomy_str}]. Then list up to 5 short, lowercase topic tags. "
+            'Output JSON only with the shape `{"category": "...", "tags": ["..."]}`.'
+            "\n\nTEXT:\n"
+            f"{text[:8000]}"
+        )
+        url = f"{base}/v1/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+        }
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        try:
+            message = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return None, None
+
+        message = message.strip()
+        if message.startswith("```"):
+            message = re.sub(r"^```(?:json)?\s*", "", message)
+            message = re.sub(r"\s*```$", "", message)
+
+        try:
+            parsed = json.loads(message)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None, None
+        if not isinstance(parsed, dict):
+            return None, None
+
+        raw_category = parsed.get("category")
+        category: str | None = None
+        if isinstance(raw_category, str) and raw_category in taxonomy:
+            category = raw_category
+
+        raw_tags = parsed.get("tags")
+        tags: list[str] | None = None
+        if isinstance(raw_tags, list):
+            normalised: list[str] = []
+            for t in raw_tags:
+                if not isinstance(t, str):
+                    continue
+                cleaned = t.strip().lower()
+                if cleaned:
+                    normalised.append(cleaned)
+            if normalised:
+                tags = list(dict.fromkeys(normalised))[:5]
+
+        return category, tags
 
     async def _generate_title_and_summary(self, text: str) -> tuple[str, str]:
         """Generate a short title and one-to-two sentence summary for a text."""
