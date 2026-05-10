@@ -1,10 +1,12 @@
 import asyncio
+import os
 import uuid
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
+import pymongo.errors
 
 from src.config import DatabaseSettings
 from src.models.enums import SourceType
@@ -12,41 +14,54 @@ from src.models.tome import Tome
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from tests.stubs import StubEmbeddingService
 
+# Skip all MongoDB tests if no live Mongo is reachable
+_MONGO_URI = os.environ.get(
+    "LIBRARIAN_TEST_MONGO_URI",
+    "mongodb://localhost:27017/?directConnection=true",
+)
+
+
+def _mongo_is_reachable() -> bool:
+    """Check if a MongoDB instance is reachable with a short timeout."""
+    try:
+        from pymongo import MongoClient
+
+        client = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=500)
+        client.admin.command("ping")
+        client.close()
+        return True
+    except (pymongo.errors.ServerSelectionTimeoutError, pymongo.errors.ConnectionFailure):
+        return False
+    except Exception:
+        return False
+
+
+mongo_available = _mongo_is_reachable()
+pytestmark = pytest.mark.skipif(
+    not mongo_available,
+    reason=f"MongoDB not reachable at {_MONGO_URI}",
+)
+
 
 @pytest.fixture
 async def mongo_repo() -> AsyncIterator[MongoTomeRepository]:
     settings = DatabaseSettings(
-        uri="mongodb://localhost:27017/?directConnection=true",
-        tls=False,
-        tls_cert_path="/dev/null",
-        database="test_library",
+        uri=_MONGO_URI,
+        database="test_librarian",
+        tomes_collection="test_tomes",
     )
-    embedding_service = StubEmbeddingService()
+    embedding_service = StubEmbeddingService(dimensions=768)
     repo = MongoTomeRepository(settings, embedding_service)
-
-    await repo._collection.delete_many({})
-
-    # Check existing indexes BEFORE ensure_indexes
-    existing_search_indexes = []
+    # Clean up any leftover test data, then drop collection after tests
     try:
-        async for index in repo._collection.aggregate([{"$listSearchIndexes": {}}]):
-            existing_search_indexes.append(index["name"])
+        await repo._collection.drop()
     except Exception:
         pass
-
-    await repo.ensure_indexes()
-
-    if "vectors" not in existing_search_indexes or "default" not in existing_search_indexes:
-        print("DEBUG: Indexes being created, waiting 20s...")
-        await asyncio.sleep(20)
-    else:
-        print("DEBUG: Indexes already existed, skipping long wait.")
-        await asyncio.sleep(2)
-
     yield repo
-
-    await repo._collection.delete_many({})
-    repo.close()
+    try:
+        await repo._collection.drop()
+    except Exception:
+        pass
 
 
 @pytest.mark.asyncio

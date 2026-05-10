@@ -24,15 +24,6 @@ dependencies = [
 [project.optional-dependencies]
 # Heavy ML deps (pulls torch ~870MB) — install separately when needed
 sentence-transformers = ["sentence-transformers"]
-dev = [
-    "pytest",
-    "pytest-asyncio",
-    "ruff",
-    "mypy",
-    "mdformat",
-    "pre-commit",
-]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 
@@ -81,5 +72,10 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.5",
     "mypy>=1.19.1",
+    "mdformat>=0.7",
+    "pre-commit>=3.8",
 ]
