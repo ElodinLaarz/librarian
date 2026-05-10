@@ -166,9 +166,7 @@ async def _llm_verdict(
     if not model:
         return None
 
-    evidence_snippets = [
-        {"title": h.title, "snippet": h.snippet, "url": h.url} for h in hits[:3]
-    ]
+    evidence_snippets = [{"title": h.title, "snippet": h.snippet, "url": h.url} for h in hits[:3]]
     prompt = (
         "You are a fact-checking verifier. Given a CLAIM and up to three EVIDENCE "
         "snippets retrieved from the web, decide whether the evidence supports, "
