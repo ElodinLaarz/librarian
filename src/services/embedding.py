@@ -229,7 +229,11 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
         if callable(getter):
             try:
                 value = await asyncio.to_thread(getter)
-            except Exception:  # noqa: BLE001 - any model error means we fall back
+            except Exception as exc:  # noqa: BLE001 - any model error means we fall back
+                logger.warning(
+                    "get_sentence_embedding_dimension failed: %s. Falling back to probe.",
+                    exc,
+                )
                 value = None
             if isinstance(value, int) and value > 0:
                 dim = value
