@@ -107,6 +107,7 @@ Gemini CLI supports hooks that run after agent responses or tool invocations. Li
 ```
 
 This updates your `~/.gemini/settings.json` to include:
+
 - **`AfterAgent`**: Automatically ingests informative agent responses.
 - **`AfterTool`**: Automatically ingests facts from `save_memory` or `library_ingest` tool calls.
 
