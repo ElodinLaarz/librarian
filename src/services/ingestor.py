@@ -426,7 +426,7 @@ class Ingestor:
                     return llm_shards
             return await self._split_text_recursive(blob)
 
-        return self._split_structured(blob, fmt)
+        return await self._split_structured(blob, fmt)
 
     async def _split_text_recursive(self, blob: str) -> list[str]:
         """Generic recursive character split — used as fallback for prose."""
@@ -479,7 +479,7 @@ class Ingestor:
             message = re.sub(r"\s*```$", "", message)
         return message
 
-    def _split_structured(self, blob: str, fmt: DetectedFormat) -> list[str]:
+    async def _split_structured(self, blob: str, fmt: DetectedFormat) -> list[str]:
         """Format-aware splitting for code / markdown / yaml / json."""
         chunk_size = self._config.ingest.shard_size
         chunk_overlap = self._config.ingest.shard_overlap
@@ -508,7 +508,7 @@ class Ingestor:
             return self._split_json(blob)
 
         # Unreachable given DetectedFormat literal — defensive fallback.
-        return self._split_text_recursive(blob)
+        return await self._split_text_recursive(blob)
 
     def _split_yaml(self, blob: str) -> list[str]:
         """Split YAML at top-level keys; coalesce small keys to fill ``shard_size``.
