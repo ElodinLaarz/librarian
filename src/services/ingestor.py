@@ -66,9 +66,11 @@ class Ingestor:
 
     async def aclose(self) -> None:
         """Release the persistent HTTP client, if one was created."""
-        if self._http_client is not None:
-            await self._http_client.aclose()
+        async with self._http_client_lock:
+            client = self._http_client
             self._http_client = None
+        if client is not None:
+            await client.aclose()
 
     async def ingest(self, blob: str, options: IngestCallOptions | None = None) -> IngestOutput:
         """Convert unstructured text into one or more Tomes and save them."""
