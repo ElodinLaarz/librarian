@@ -665,10 +665,10 @@ class Ingestor:
             "temperature": 0.1,
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        client = await self._get_http_client()
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
 
         try:
             message = data["choices"][0]["message"]["content"]
@@ -758,10 +758,10 @@ class Ingestor:
             "temperature": 0.1,
         }
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+            client = await self._get_http_client()
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
         except (httpx.HTTPError, OSError, ValueError) as exc:
             logging.debug("_summarize_llm HTTP/parse error: %s", exc)
             return None
