@@ -163,12 +163,15 @@ class OllamaEmbeddingService(EmbeddingService):
         # Probe the model with a tiny prompt so we discover its real embedding size.
         try:
             probe = await self._client.post(
-                "/api/embeddings",
-                json={"model": self._settings.model_name, "prompt": "x"},
+                "/api/embed",
+                json={"model": self._settings.model_name, "input": "x"},
             )
             probe.raise_for_status()
-            vector = probe.json()["embedding"]
-            measured = len(vector)
+            payload = probe.json()
+            embeddings = payload.get("embeddings")
+            if not isinstance(embeddings, list) or not embeddings:
+                raise ValueError("Response missing 'embeddings' array")
+            measured = len(embeddings[0])
         except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
             raise RuntimeError(
                 f"Cannot probe Ollama model {self._settings.model_name} "

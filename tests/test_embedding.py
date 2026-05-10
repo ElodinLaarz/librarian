@@ -272,10 +272,10 @@ async def test_ollama_initialize_probes_model_for_dimensions(
 
     async def fake_post(self: httpx.AsyncClient, url: str, *args, **kwargs):  # type: ignore[no-untyped-def]
         captured_calls.append(("POST", url))
-        # Return a 768-dim embedding
+        # Return a 768-dim embedding in the new format
         return httpx.Response(
             200,
-            json={"embedding": [0.1] * 768},
+            json={"embeddings": [[0.1] * 768]},
             request=httpx.Request("POST", url),
         )
 
@@ -285,7 +285,7 @@ async def test_ollama_initialize_probes_model_for_dimensions(
     await service.initialize()
 
     assert service.dimensions == 768
-    assert any(call[0] == "POST" and "/api/embeddings" in call[1] for call in captured_calls)
+    assert any(call[0] == "POST" and "/api/embed" in call[1] for call in captured_calls)
     await service.aclose()
 
 

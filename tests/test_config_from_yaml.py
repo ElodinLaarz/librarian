@@ -64,6 +64,8 @@ def test_dotenv_supplies_database_when_yaml_section_empty(
     )
     (tmp_path / "cfg.yml").write_text("database: {}\n")
     monkeypatch.chdir(tmp_path)
+    # Re-enable for this specific test
+    monkeypatch.delenv("LIBRARIAN_SKIP_DOTENV", raising=False)
     cfg = LibrarianConfig.from_yaml(tmp_path / "cfg.yml")
     assert cfg.database.uri == "mongodb://envfile-test:27017"
     assert cfg.database.tls is False
@@ -110,3 +112,36 @@ def test_ingest_settings_use_canonical_shard_defaults(
 
     assert cfg.ingest.shard_size == constants.DEFAULT_SHARD_SIZE
     assert cfg.ingest.shard_overlap == constants.DEFAULT_SHARD_OVERLAP
+
+
+def test_from_yaml_interpolates_env_vars(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("TEST_URI", "mongodb://interp-test:27017")
+    path = tmp_path / "interp.yml"
+    path.write_text("database:\n  uri: ${TEST_URI}\n")
+
+    cfg = LibrarianConfig.from_yaml(path)
+    assert cfg.database.uri == "mongodb://interp-test:27017"
+
+
+def test_from_yaml_interpolates_env_vars_with_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("TEST_URI", raising=False)
+    path = tmp_path / "interp_default.yml"
+    path.write_text("database:\n  uri: ${TEST_URI:-mongodb://default-uri:27017}\n")
+
+    cfg = LibrarianConfig.from_yaml(path)
+    assert cfg.database.uri == "mongodb://default-uri:27017"
+
+
+def test_from_yaml_raises_on_missing_env_var_without_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("MISSING_VAR", raising=False)
+    path = tmp_path / "missing_var.yml"
+    path.write_text("database:\n  uri: ${MISSING_VAR}\n")
+
+    with pytest.raises(
+        ValueError, match="missing environment variables without defaults: MISSING_VAR"
+    ):
+        LibrarianConfig.from_yaml(path)
