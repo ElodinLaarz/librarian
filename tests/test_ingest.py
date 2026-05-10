@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import uuid
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import numpy as np
 import pytest
+import yaml
 
 from src import constants
 from src.config import (
@@ -355,7 +358,7 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
     class EmptyChunkIngestor(StubIngestor):
         _chunked_once = False
 
-        async def _reshard(self, blob: str) -> list[str]:
+        async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
             # First call (the original blob) returns one chunk so ingest proceeds.
             # Subsequent calls (reshard) return nothing.
             if not self._chunked_once:
@@ -439,6 +442,105 @@ async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     assert len(output.tomes) >= 1
 
 
+# ── persistent http client ────────────────────────────────────────────────────
+
+
+async def test_http_client_lazy_until_first_use(config: LibrarianConfig) -> None:
+    """The persistent httpx client is not constructed at __init__ time."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    assert ingestor._http_client is None
+    await ingestor.aclose()  # safe no-op when never created
+
+
+async def test_reshard_llm_reuses_single_http_client(
+    monkeypatch: pytest.MonkeyPatch, config: LibrarianConfig
+) -> None:
+    """Multiple `_reshard_llm` calls share one `httpx.AsyncClient` instance."""
+    from unittest.mock import MagicMock
+
+    import httpx as _httpx
+
+    posted_clients: list[object] = []
+
+    async def _fake_post(self: _httpx.AsyncClient, url: str, **kwargs: object) -> MagicMock:
+        posted_clients.append(self)
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json = MagicMock(
+            return_value={
+                "choices": [{"message": {"content": '{"facts": ["fact one.", "fact two."]}'}}]
+            }
+        )
+        return response
+
+    monkeypatch.setattr("httpx.AsyncClient.post", _fake_post)
+
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    try:
+        first = await ingestor._reshard_llm("Some text to shard.")
+        client_after_first = ingestor._http_client
+        second = await ingestor._reshard_llm("More text to shard.")
+        client_after_second = ingestor._http_client
+
+        assert first == ["fact one.", "fact two."]
+        assert second == ["fact one.", "fact two."]
+        assert client_after_first is not None
+        assert client_after_first is client_after_second
+        assert len(posted_clients) == 2
+        assert posted_clients[0] is posted_clients[1]
+        assert posted_clients[0] is client_after_first
+    finally:
+        await ingestor.aclose()
+
+
+async def test_aclose_closes_and_resets_http_client(
+    monkeypatch: pytest.MonkeyPatch, config: LibrarianConfig
+) -> None:
+    """`aclose` closes the persistent client and resets the slot to None."""
+    from unittest.mock import MagicMock
+
+    import httpx as _httpx
+
+    async def _fake_post(self: _httpx.AsyncClient, url: str, **kwargs: object) -> MagicMock:
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json = MagicMock(
+            return_value={"choices": [{"message": {"content": '{"facts": ["a."]}'}}]}
+        )
+        return response
+
+    monkeypatch.setattr("httpx.AsyncClient.post", _fake_post)
+
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    await ingestor._reshard_llm("Text.")
+    client = ingestor._http_client
+    assert client is not None
+    assert not client.is_closed
+
+    await ingestor.aclose()
+
+    assert ingestor._http_client is None
+    assert client.is_closed
+
+
 async def test_dedup_store_returning_empty_sets_partial_status(
     config: LibrarianConfig,
 ) -> None:
@@ -465,7 +567,7 @@ async def test_dedup_store_returning_empty_sets_partial_status(
 # ── LLM-based title and summary generation (issue #36) ───────────────────────
 
 
-def _make_real_ingestor(
+def _make_summary_ingestor(
     config: LibrarianConfig, repo: StubTomeRepository | None = None
 ) -> tuple[Ingestor, StubTomeRepository]:
     """Build a *real* Ingestor (no _generate_title_and_summary override).
@@ -493,12 +595,16 @@ async def test_summary_is_not_content_prefix_when_llm_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When use_llm_summary=True, summary must come from the LLM, not truncation."""
-    ingest_settings = IngestSettings(use_llm_chunking=False, use_llm_summary=True)
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+    )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
         ingest=ingest_settings,
     )
-    ingestor, repo = _make_real_ingestor(config)
+    ingestor, repo = _make_summary_ingestor(config)
 
     llm_payload = json.dumps(
         {
@@ -525,12 +631,16 @@ async def test_summary_is_not_content_prefix_when_llm_enabled(
 
 async def test_summary_falls_back_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """A network error causes fallback to truncation behaviour."""
-    ingest_settings = IngestSettings(use_llm_chunking=False, use_llm_summary=True)
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+    )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
         ingest=ingest_settings,
     )
-    ingestor, _ = _make_real_ingestor(config)
+    ingestor, _ = _make_summary_ingestor(config)
 
     async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
         raise httpx.ConnectError("nope")
@@ -547,12 +657,16 @@ async def test_summary_falls_back_on_http_error(monkeypatch: pytest.MonkeyPatch)
 
 async def test_summary_falls_back_on_bad_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-JSON LLM output causes fallback to truncation behaviour."""
-    ingest_settings = IngestSettings(use_llm_chunking=False, use_llm_summary=True)
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+    )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
         ingest=ingest_settings,
     )
-    ingestor, _ = _make_real_ingestor(config)
+    ingestor, _ = _make_summary_ingestor(config)
 
     async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
         return _ollama_chat_response("not json at all")
@@ -580,7 +694,7 @@ async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatc
         verification=VerificationSettings(enabled=False),
         ingest=ingest_settings,
     )
-    ingestor, _ = _make_real_ingestor(config)
+    ingestor, _ = _make_summary_ingestor(config)
 
     async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
         raise AssertionError("LLM endpoint must not be called when use_llm_summary=False")
@@ -595,6 +709,226 @@ async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatc
     assert tome.summary == tome.content[: config.ingest.summary_length]
 
 
+# ── syntax-aware chunking (issue #47) ────────────────────────────────────────
+
+
+def _make_real_ingestor(
+    *,
+    shard_size: int = 400,
+    shard_overlap: int = 0,
+    use_llm_chunking: bool = False,
+) -> Ingestor:
+    """Build a real Ingestor (not StubIngestor) to exercise _reshard logic."""
+    config = make_test_config(
+        ingest=IngestSettings(
+            shard_size=shard_size,
+            shard_overlap=shard_overlap,
+            use_llm_chunking=use_llm_chunking,
+        )
+    )
+    return Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        StubTomeRepository(),
+    )
+
+
+async def test_python_module_chunks_are_ast_parseable() -> None:
+    """Each chunk of a multi-function Python module must be ast.parse-able.
+
+    Generic character splitting truncates `def`/`class` mid-body. A
+    language-aware splitter splits at structural boundaries.
+    """
+    blob = (
+        "def alpha(x):\n"
+        '    """First function."""\n'
+        "    y = x + 1\n"
+        "    z = y * 2\n"
+        "    return z\n"
+        "\n\n"
+        "def beta(a, b):\n"
+        '    """Second function."""\n'
+        "    result = a * b\n"
+        "    for i in range(10):\n"
+        "        result += i\n"
+        "    return result\n"
+        "\n\n"
+        "def gamma():\n"
+        '    """Third function."""\n'
+        "    data = [1, 2, 3, 4, 5]\n"
+        "    return sum(data)\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=120, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    for s in shards:
+        # Must parse as Python; raises SyntaxError if a def line was truncated.
+        ast.parse(s)
+
+
+async def test_markdown_preserves_fenced_code_blocks() -> None:
+    """Each markdown chunk must have a balanced count of triple-backticks."""
+    blob = (
+        "# Heading\n\n"
+        "Intro paragraph with explanation.\n\n"
+        "```python\n"
+        "def hello():\n"
+        "    print('hello world')\n"
+        "    return 42\n"
+        "```\n\n"
+        "Middle paragraph between code blocks for context.\n\n"
+        "```python\n"
+        "class Greeter:\n"
+        "    def greet(self):\n"
+        "        return 'hi'\n"
+        "```\n\n"
+        "Closing remarks.\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=120, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    for s in shards:
+        assert s.count("```") % 2 == 0, f"Unbalanced fences in shard: {s!r}"
+
+
+async def test_yaml_chunks_split_on_top_level_keys() -> None:
+    """YAML with multiple top-level keys must split into yaml.safe_load-able chunks."""
+    blob = (
+        "alpha:\n"
+        "  description: first key\n"
+        "  value: 1\n"
+        "\n"
+        "beta:\n"
+        "  description: second key\n"
+        "  value: 2\n"
+        "\n"
+        "gamma:\n"
+        "  description: third key\n"
+        "  value: 3\n"
+        "\n"
+        "delta:\n"
+        "  description: fourth key\n"
+        "  value: 4\n"
+        "\n"
+        "epsilon:\n"
+        "  description: fifth key\n"
+        "  value: 5\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=80, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    for s in shards:
+        loaded = yaml.safe_load(s)
+        # Each shard must be parseable YAML (mapping or None/scalar).
+        assert loaded is None or isinstance(loaded, dict | list | str | int | float | bool)
+
+
+async def test_json_chunks_split_on_top_level_elements() -> None:
+    """JSON array of N objects must split into chunks that each parse (when wrapped)."""
+    objects = [{"id": i, "name": f"item-{i}", "value": i * 10} for i in range(10)]
+    blob = json.dumps(objects, indent=2)
+    ingestor = _make_real_ingestor(shard_size=200, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    # Each shard must contain valid JSON object(s). Wrap in [] if needed for parsing.
+    for s in shards:
+        s_clean = s.strip().rstrip(",")
+        # Try direct parse; otherwise wrap as array element(s).
+        try:
+            json.loads(s_clean)
+        except json.JSONDecodeError:
+            wrapped = f"[{s_clean.rstrip(',')}]"
+            json.loads(wrapped)
+
+
+async def test_json_array_greedy_packing_avoids_fragmentation() -> None:
+    """Many small JSON array elements must be coalesced rather than emitted one-per-chunk.
+
+    Per Gemini code-review feedback on PR #62: previously each array element
+    became its own Tome, producing extreme fragmentation. The packer should
+    yield far fewer shards than the element count for a generously-sized
+    shard_size, while still respecting the size cap.
+    """
+    objects = [{"id": i, "n": i} for i in range(50)]
+    blob = json.dumps(objects, indent=2)
+    shard_size = 400
+    ingestor = _make_real_ingestor(shard_size=shard_size, shard_overlap=0)
+
+    shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    # Should be far fewer than one-per-element (50). Be generous: at most ~half.
+    assert len(shards) < len(objects) // 2, (
+        f"Expected greedy packing; got {len(shards)} shards for {len(objects)} elements"
+    )
+    # Every shard must be a valid JSON array (or the size-guard fallback) and
+    # within the size cap (allow small overshoot from the recursive splitter
+    # boundary — but the packed-array path must respect the cap exactly).
+    for s in shards:
+        parsed = json.loads(s)
+        assert isinstance(parsed, list)
+        assert len(s) <= shard_size, f"Shard exceeds shard_size={shard_size}: {len(s)}"
+
+
+async def test_force_format_override_routes_to_correct_splitter() -> None:
+    """force_format='python' on a prose blob must invoke the PYTHON language splitter."""
+    from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+
+    prose = (
+        "This is a long prose paragraph about gardening. "
+        "It contains no code at all and would normally be treated as text. "
+        "However the caller has overridden the format detection."
+    )
+    ingestor = _make_real_ingestor(shard_size=80, shard_overlap=0)
+
+    real_from_language = RecursiveCharacterTextSplitter.from_language
+    seen_languages: list[Language] = []
+
+    def spy(language: Language, **kwargs: object) -> RecursiveCharacterTextSplitter:
+        seen_languages.append(language)
+        return real_from_language(language, **kwargs)
+
+    with patch.object(RecursiveCharacterTextSplitter, "from_language", side_effect=spy):
+        shards = await ingestor._reshard(prose, IngestCallOptions(force_format="python"))
+
+    assert shards
+    assert Language.PYTHON in seen_languages, (
+        f"Expected PYTHON splitter to be invoked; saw {seen_languages!r}"
+    )
+
+
+async def test_use_llm_chunking_skipped_for_detected_code() -> None:
+    """When detected format is code, _reshard_llm must NOT be awaited."""
+    blob = (
+        "import os\n"
+        "import sys\n"
+        "\n"
+        "def main():\n"
+        "    print('hello')\n"
+        "    return 0\n"
+        "\n"
+        "class Foo:\n"
+        "    def bar(self):\n"
+        "        return 42\n"
+    )
+    ingestor = _make_real_ingestor(shard_size=200, shard_overlap=0, use_llm_chunking=True)
+
+    with patch.object(Ingestor, "_reshard_llm", autospec=True, return_value=None) as llm_spy:
+        shards = await ingestor._reshard(blob, IngestCallOptions())
+
+    assert shards, "Expected at least one shard"
+    assert not llm_spy.called, "_reshard_llm must NOT be invoked for detected code"
+
+
 # ── LLM classification & tagging (issue #37) ─────────────────────────────────
 # These tests exercise the real Ingestor._classify_and_tag (NOT the stub
 # override) by subclassing Ingestor and overriding only the unrelated I/O
@@ -604,7 +938,7 @@ async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatc
 class _LlmClassifyIngestor(Ingestor):
     """Real-classify Ingestor: stubs _reshard / title-and-summary only."""
 
-    async def _reshard(self, blob: str) -> list[str]:
+    async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
         return [seg.strip() for seg in blob.split("\n\n") if seg.strip()]
 
     async def _generate_title_and_summary(self, chunk: str) -> tuple[str, str]:
