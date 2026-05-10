@@ -439,17 +439,11 @@ class TestPromptEscapes:
                 return None
 
             def json(self) -> dict[str, Any]:
-                return {
-                    "choices": [
-                        {"message": {"content": '{"facts": ["a fact"]}'}}
-                    ]
-                }
+                return {"choices": [{"message": {"content": '{"facts": ["a fact"]}'}}]}
 
-        async def _fake_post(
-            self: httpx.AsyncClient, url: str, *, json: dict[str, Any]
-        ) -> _FakeResponse:
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
             captured["url"] = url
-            captured["payload"] = json
+            captured["payload"] = kwargs.get("json")
             return _FakeResponse()
 
         monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
@@ -492,12 +486,10 @@ class TestPromptEscapes:
             def raise_for_status(self) -> None:
                 return None
 
-            def json(self_inner) -> dict[str, Any]:  # noqa: N805
+            def json(self) -> dict[str, Any]:
                 return {"choices": [{"message": {"content": fenced}}]}
 
-        async def _fake_post(
-            self: httpx.AsyncClient, url: str, *, json: dict[str, Any]
-        ) -> _FakeResponse:
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
             return _FakeResponse()
 
         monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)

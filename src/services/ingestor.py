@@ -270,7 +270,7 @@ class Ingestor:
 
         message = message.strip()
         if message.startswith("```"):
-            message = re.sub(r"^```(?:json)?\s*", "", message)
+            message = re.sub(r"(?i)^```\s*(?:json)?\s*", "", message)
             message = re.sub(r"\s*```$", "", message)
 
         try:
