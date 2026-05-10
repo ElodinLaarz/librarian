@@ -300,7 +300,8 @@ class Ingestor:
         2. Otherwise, when ``ingest.use_llm_classification`` is on, call the
            extraction model for a `(category, tags)` pair.
         3. Hints always win over LLM output for category; tag hints are merged
-           with LLM tags (hints first, deduped, order-preserving).
+           uniformly with the chosen base tags (LLM tags when available, else
+           ``ingest.default_tags``) — hints first, deduped, order-preserving.
         4. On any HTTP/parse error or out-of-taxonomy category, fall back to
            ``ingest.default_category`` / ``ingest.default_tags``.
         """
@@ -316,20 +317,17 @@ class Ingestor:
         if self._config.ingest.use_llm_classification:
             try:
                 llm_category, llm_tags = await self._classify_and_tag_llm(text)
-            except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
+            except (httpx.HTTPError, OSError, ValueError) as exc:
                 logging.debug("_classify_and_tag LLM error: %s", exc)
                 llm_category, llm_tags = None, None
 
         category = category_hint or llm_category or default_category
 
-        if tags_hint and llm_tags:
-            tags = list(dict.fromkeys([*tags_hint, *llm_tags]))
-        elif tags_hint:
-            tags = list(dict.fromkeys([*tags_hint, *default_tags]))
-        elif llm_tags:
-            tags = list(dict.fromkeys(llm_tags))
-        else:
-            tags = list(default_tags)
+        # Uniform merge: prefer LLM tags when present, otherwise fall back to
+        # configured defaults; user-supplied hints always take precedence and
+        # are deduplicated while preserving order.
+        base_tags = llm_tags if llm_tags else default_tags
+        tags = list(dict.fromkeys([*(tags_hint or []), *base_tags]))
 
         return category, tags
 
