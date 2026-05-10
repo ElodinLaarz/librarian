@@ -168,13 +168,13 @@ class OllamaEmbeddingService(EmbeddingService):
             )
             probe.raise_for_status()
             vector = probe.json()["embedding"]
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            measured = len(vector)
+        except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
             raise RuntimeError(
                 f"Cannot probe Ollama model {self._settings.model_name} "
                 f"for embedding dimensions: {exc}"
             ) from exc
 
-        measured = len(vector)
         self._check_measured_dimensions(measured)
         self._measured_dimensions = measured
 
