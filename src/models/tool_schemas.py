@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from src.models.enums import IngestStatus, ResearchDepth
@@ -30,6 +32,14 @@ class IngestInput(BaseModel):
     category: str | None = None
     tags: list[str] | None = None
     source_url: str | None = None
+    force_format: Literal["text", "code", "python", "yaml", "json", "markdown"] | None = Field(
+        default=None,
+        description=(
+            "Override automatic format detection. When set, the chunker uses a "
+            "syntax-aware splitter for the given format instead of the default "
+            "LLM/recursive text splitter."
+        ),
+    )
 
 
 class IngestOutput(BaseModel):
