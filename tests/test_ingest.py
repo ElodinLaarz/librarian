@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 import httpx
 import numpy as np
@@ -372,6 +373,48 @@ async def test_reshard_aborts_without_data_loss_when_chunk_returns_empty(
     assert await repo.get_by_id(existing.id) is not None
 
 
+async def test_reshard_rolls_back_partial_inserts_on_failure() -> None:
+    """If a replacement insert fails mid-reshard, previously-inserted replacements
+    must be compensating-deleted, originals must remain, and ingest must report
+    REJECTED with a reason mentioning the insert abort."""
+    test_config = make_test_config()
+
+    # Pre-existing duplicates that the new content will collide with.
+    original_a = _make_tome("Original fact A.")
+    original_b = _make_tome("Original fact B.")
+
+    # Stub repo: second insert call raises, simulating a mid-flight failure.
+    repo = StubTomeRepository(fail_inserts_after=1)
+    repo.seed_near_duplicates([original_a, original_b])
+
+    ingestor = StubIngestor(
+        test_config,
+        StubEmbeddingService(dimensions=test_config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    # Two new shards (split on \n\n by StubIngestor._reshard) → combined content
+    # produces multiple replacement tomes, so >1 inserts will be attempted.
+    output = await ingestor.ingest("New shard one.\n\nNew shard two.")
+
+    # (a) No replacement tome should remain — compensating delete must have run.
+    original_ids = {original_a.id, original_b.id}
+    leftover_replacements = [t for t in repo.all_tomes() if t.id not in original_ids]
+    assert leftover_replacements == [], (
+        f"Expected zero replacement tomes after rollback, found: {leftover_replacements}"
+    )
+
+    # (b) Both original duplicates must still be present (delete step never ran).
+    assert await repo.get_by_id(original_a.id) is not None
+    assert await repo.get_by_id(original_b.id) is not None
+
+    # (c) Output reflects rejection with a reason mentioning the insert abort.
+    assert output.status in (IngestStatus.REJECTED, IngestStatus.PARTIAL)
+    assert output.reject_reason is not None
+    assert "insert" in output.reject_reason.lower()
+
+
 async def test_reshard_returns_partial_status_on_delete_failure() -> None:
     """A failed tome deletion during reshard returns IngestOutput with error rather than raising."""
     repo = StubTomeRepository(fail_deletes=True)
@@ -544,3 +587,94 @@ async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatc
     assert output.status == IngestStatus.STORED
     tome = output.tomes[0]
     assert tome.summary == tome.content[: config.ingest.summary_length]
+
+
+# ── prompt / fence-stripper escape regression (issue #20) ────────────────────
+
+
+class TestPromptEscapes:
+    """Regression tests for issue #20: literal ``\\n``/``\\s`` escapes in ingestor."""
+
+    async def test_prompt_uses_real_newlines(
+        self,
+        config: LibrarianConfig,
+        repo: StubTomeRepository,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The LLM prompt must contain real newlines, not literal ``\\n`` escapes."""
+        sample = "Photosynthesis converts sunlight into glucose. " * 4
+        captured: dict[str, Any] = {}
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {"choices": [{"message": {"content": '{"facts": ["a fact"]}'}}]}
+
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
+            captured["url"] = url
+            captured["payload"] = kwargs.get("json")
+            return _FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+        ingestor = Ingestor(
+            config,
+            StubEmbeddingService(dimensions=config.embedding.dimensions),
+            StubVerifier(confidence=0.9),
+            repo,
+        )
+
+        result = await ingestor._reshard_llm(sample)
+
+        assert result == ["a fact"]
+        content = captured["payload"]["messages"][0]["content"]
+        # No literal backslash-n sequences in the prompt the LLM sees.
+        assert "\\n" not in content
+        # Real newlines are present (header + blank line + TEXT: + body).
+        assert content.count("\n") >= 3
+        assert content.endswith("TEXT:\n" + sample[:8000])
+
+    @pytest.mark.parametrize(
+        "fenced",
+        [
+            '```json\n{"facts": ["one", "two"]}\n```',
+            '```\n{"facts": ["one", "two"]}\n```',
+            '```json {"facts": ["one", "two"]} ```',
+        ],
+    )
+    async def test_fence_stripper_strips_whitespace(
+        self,
+        config: LibrarianConfig,
+        repo: StubTomeRepository,
+        monkeypatch: pytest.MonkeyPatch,
+        fenced: str,
+    ) -> None:
+        """``_reshard_llm`` must strip ``\\n``/space whitespace inside JSON code fences."""
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {"choices": [{"message": {"content": fenced}}]}
+
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+        ingestor = Ingestor(
+            config,
+            StubEmbeddingService(dimensions=config.embedding.dimensions),
+            StubVerifier(confidence=0.9),
+            repo,
+        )
+
+        # With the correct ``\s`` regex, the fence is stripped cleanly and the
+        # JSON parses to ["one", "two"]. With the buggy ``\\s`` literal-backslash
+        # regex, the fence is left in place, ``json.loads`` raises, and
+        # ``_reshard_llm`` silently returns None.
+        result = await ingestor._reshard_llm("any text")
+        assert result == ["one", "two"]
