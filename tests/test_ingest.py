@@ -598,3 +598,42 @@ async def test_use_llm_classification_flag_off_skips_llm(
     tome = output.tomes[0]
     assert tome.category == config.ingest.default_category
     assert tome.tags == list(config.ingest.default_tags)
+
+
+async def test_classify_extracts_json_from_filler_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM responses with conversational filler around the JSON are still parsed."""
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    # LLM wraps JSON in filler + markdown fences mid-stream.
+    payload = (
+        "Sure! Here is the classification you asked for:\n"
+        '```json\n{"category": "Science", "tags": ["physics"]}\n```\n'
+        "Hope that helps!"
+    )
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest("Some text about quanta.")
+
+    tome = output.tomes[0]
+    assert tome.category == "Science"
+    assert "physics" in tome.tags
+
+
+async def test_classify_taxonomy_match_is_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM-returned category matches taxonomy regardless of casing; canonical form kept."""
+    config = make_test_config()
+    ingestor, _ = _make_llm_classify_ingestor(config)
+
+    # Lowercase category from the model; "Science" in taxonomy.
+    payload = '{"category": "science", "tags": ["chem"]}'
+    _patch_httpx_post(monkeypatch, _ollama_response(payload))
+
+    output = await ingestor.ingest("Some text.")
+
+    # Stored category preserves the canonical taxonomy casing.
+    assert output.tomes[0].category == "Science"

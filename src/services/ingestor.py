@@ -370,9 +370,11 @@ class Ingestor:
             return None, None
 
         message = message.strip()
-        if message.startswith("```"):
-            message = re.sub(r"^```(?:json)?\s*", "", message)
-            message = re.sub(r"\s*```$", "", message)
+        # Extract JSON object even when the LLM wraps it in markdown fences or
+        # prefixes conversational filler (e.g. "Sure, here is the JSON: ...").
+        match = re.search(r"\{.*\}", message, re.DOTALL)
+        if match:
+            message = match.group(0)
 
         try:
             parsed = json.loads(message)
@@ -383,8 +385,15 @@ class Ingestor:
 
         raw_category = parsed.get("category")
         category: str | None = None
-        if isinstance(raw_category, str) and raw_category in taxonomy:
-            category = raw_category
+        if isinstance(raw_category, str):
+            # Case-insensitive match against taxonomy: LLMs often vary casing
+            # (e.g. "science" vs "Science"). Preserve the canonical taxonomy
+            # form so downstream filters stay consistent.
+            normalised_request = raw_category.strip().lower()
+            for item in taxonomy:
+                if item.lower() == normalised_request:
+                    category = item
+                    break
 
         raw_tags = parsed.get("tags")
         tags: list[str] | None = None
