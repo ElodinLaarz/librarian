@@ -252,10 +252,15 @@ class MongoTomeRepository(TomeRepository):
             # Collection already exists — the documented "already exists" path.
             pass
         except OperationFailure as exc:
-            # Some server versions surface "already exists" as an OperationFailure
-            # rather than CollectionInvalid; log at debug since it's expected on
-            # subsequent startups.
-            logger.debug("create_collection skipped: %s", exc)
+            # Code 48 is NamespaceExists. Some server versions surface this as
+            # an OperationFailure rather than CollectionInvalid; treat that as
+            # the documented "already exists" path and re-raise everything
+            # else (e.g. auth/permission failures) so startup fails loudly.
+            if exc.code == 48:
+                logger.debug("Collection already exists, skipping creation.")
+            else:
+                logger.error("Failed to create collection", exc_info=True)
+                raise
 
         existing_search_indexes: list[str] = []
 
@@ -265,8 +270,7 @@ class MongoTomeRepository(TomeRepository):
         except OperationFailure as exc:
             if _is_atlas_search_unsupported(exc):
                 logger.warning(
-                    "Atlas search indexes unsupported on this backend; skipping search index setup",
-                    exc_info=True,
+                    "Atlas search indexes unsupported on this backend; skipping search index setup"
                 )
                 return
             logger.error(
