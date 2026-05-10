@@ -35,13 +35,27 @@ Set `skip_verify: true` on ingest to bypass (useful for notes or fictional conte
 | MCP Framework | FastMCP (Python) |
 | Database | MongoDB 7.x via `motor` (async) |
 | Vector Search | Atlas Vector Search (cosine similarity) |
-| Embedding (default) | `sentence-transformers/all-MiniLM-L6-v2` (384 dims) |
-| Embedding (alt) | Ollama `/api/embeddings` (`LIBRARIAN_EMBEDDING__PROVIDER=ollama`) |
+| Embedding (default) | `nomic-embed-text` (768 dims) via Ollama |
+| Embedding (alt) | `sentence-transformers/all-MiniLM-L6-v2` (384 dims) |
 | Chunking | LangChain `RecursiveCharacterTextSplitter` |
 | Claim extraction | Ollama OpenAI-compatible JSON (optional) or heuristic sentences |
 | Web search | Brave / Serper / Tavily (`build_web_search_client`) |
 | HTML extraction | `trafilatura` |
 | Config | Pydantic Settings + `librarian.config.yaml` |
+
+## Breaking Change: Embedding Model (May 2026)
+
+The default embedding model has moved from `all-MiniLM-L6-v2` (384 dimensions) to `nomic-embed-text` (768 dimensions). This provides better retrieval quality but **will cause dimension mismatch errors** if you have an existing MongoDB Atlas Vector Search index.
+
+### Migration Options
+
+1. **Re-ingest (Recommended):** Drop your `tomes` collection and re-ingest your data to take advantage of the better model.
+2. **Maintain Compatibility:** If you want to keep your existing 384-dimensional data, set the following environment variables (or update `librarian.config.yaml`):
+   ```bash
+   LIBRARIAN_EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+   LIBRARIAN_EMBEDDING_DIMENSIONS=384
+   LIBRARIAN_EMBEDDING_PROVIDER=sentence-transformers
+   ```
 
 ## Quick Start
 

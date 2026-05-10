@@ -40,22 +40,33 @@ tmp="$(mktemp)"
 if [[ -f "$SETTINGS" ]]; then
   # Merge into existing settings.json
   jq --argjson agent "$AFTER_AGENT_HOOK" --argjson tool "$AFTER_TOOL_HOOK" '
-    def has_hook_named($hook_name):
-      any((.hooks // [])[]?; .name == $hook_name);
-
     .hooks = (if (.hooks | type) == "object" then .hooks else {} end) |
 
     # Update AfterAgent
     .hooks.AfterAgent = (
-      (if (.hooks.AfterAgent | type) == "array" then .hooks.AfterAgent else [] end) 
-      | map(select(has_hook_named("librarian-after-agent") | not))
+      (if (.hooks.AfterAgent | type) == "array" then .hooks.AfterAgent else [] end)
+      | map(
+          if (.hooks | type) == "array" then
+            .hooks |= map(select(.name != "librarian-after-agent"))
+          else
+            .
+          end
+        )
+      | map(select((.hooks | type) != "array" or (.hooks | length) > 0))
     ) |
     .hooks.AfterAgent += [$agent] |
 
     # Update AfterTool
     .hooks.AfterTool = (
       (if (.hooks.AfterTool | type) == "array" then .hooks.AfterTool else [] end)
-      | map(select(has_hook_named("librarian-after-tool") | not))
+      | map(
+          if (.hooks | type) == "array" then
+            .hooks |= map(select(.name != "librarian-after-tool"))
+          else
+            .
+          end
+        )
+      | map(select((.hooks | type) != "array" or (.hooks | length) > 0))
     ) |
     .hooks.AfterTool += [$tool]
   ' "$SETTINGS" >"$tmp"

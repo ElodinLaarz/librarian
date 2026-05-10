@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from mcp.server import FastMCP
 
-from src.config import LibrarianConfig, _load_dotenv
+from src.config import LibrarianConfig
 from src.models.enums import ResearchJobStatus
 from src.models.research_job import ResearchJob
 from src.models.tool_schemas import (
@@ -37,7 +37,6 @@ from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
 
-_load_dotenv()
 config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
 config = LibrarianConfig.from_yaml(config_path)
 
