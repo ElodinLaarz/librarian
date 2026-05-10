@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from src.config import VerificationSettings
 from src.models.enums import VerificationVerdict
+from src.services import verifier as verifier_module
 from src.services.verifier import (
     ClaimResult,
     Verifier,
@@ -40,11 +43,13 @@ class _FakeWeb(WebSearchClient):
 
 
 def test_verdict_supported_when_claim_words_overlap() -> None:
+    # Stricter heuristic: snippet that merely echoes the claim (no extra evidence)
+    # should bias UNVERIFIABLE, not SUPPORTED.
     verdict = _verdict_from_snippets(
         "water boils at 100 degrees",
         "Water boils at 100 degrees Celsius at sea level",
     )
-    assert verdict == VerificationVerdict.SUPPORTED
+    assert verdict == VerificationVerdict.UNVERIFIABLE
 
 
 def test_verdict_unverifiable_when_no_overlap() -> None:
@@ -62,10 +67,165 @@ def test_verdict_contradicted_when_negation_and_overlap() -> None:
 
 def test_verdict_supported_without_negation_words() -> None:
     verdict = _verdict_from_snippets(
-        "earth orbits the sun",
-        "earth orbits the sun in approximately 365 days",
+        "earth orbits",
+        "earth orbits the sun in approximately 365 days at an average speed of 30 km per second",
     )
     assert verdict == VerificationVerdict.SUPPORTED
+
+
+# ── LLM verdict path ─────────────────────────────────────────────────────────
+
+
+class _StubResponse:
+    def __init__(
+        self,
+        payload: dict[str, Any] | None = None,
+        *,
+        raw_text: str | None = None,
+    ) -> None:
+        self._payload = payload
+        self._raw_text = raw_text
+
+    def raise_for_status(self) -> None:  # pragma: no cover - trivial
+        return None
+
+    def json(self) -> dict[str, Any]:
+        if self._payload is None:
+            raise ValueError("invalid json")
+        return self._payload
+
+
+class _StubClient:
+    """Minimal async-context-manager stand-in for httpx.AsyncClient."""
+
+    def __init__(
+        self,
+        response: _StubResponse,
+        *,
+        calls: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._response = response
+        self._calls = calls if calls is not None else []
+
+    async def __aenter__(self) -> _StubClient:
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+    async def post(self, url: str, json: dict[str, Any]) -> _StubResponse:  # noqa: A002 - mirror httpx api
+        self._calls.append({"url": url, "json": json})
+        return self._response
+
+
+def _llm_chat_payload(verdict: str, reasoning: str = "") -> dict[str, Any]:
+    body = '{"verdict":"' + verdict + '","reasoning":"' + reasoning + '"}'
+    return {"choices": [{"message": {"content": body}}]}
+
+
+@pytest.mark.asyncio
+async def test_verdict_unverifiable_when_snippet_just_echoes_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM says unverifiable when snippet only echoes claim words."""
+    config = make_test_config(
+        verification=VerificationSettings(
+            enabled=True, use_llm_claims=False, use_llm_verdict=True, claim_model="stub-model"
+        ),
+    )
+
+    calls: list[dict[str, Any]] = []
+    response = _StubResponse(_llm_chat_payload("unverifiable"))
+
+    def _factory(*_: Any, **__: Any) -> _StubClient:
+        return _StubClient(response, calls=calls)
+
+    monkeypatch.setattr(verifier_module.httpx, "AsyncClient", _factory)
+
+    web = _FakeWeb("Water boils at 100 degrees Celsius at sea level")
+    v = Verifier(config, web)
+    r = await v.verify("Water boils at 100 degrees Celsius.")
+
+    assert r.skipped is False
+    assert calls, "expected LLM verdict endpoint to be called"
+    assert all(c.verdict == VerificationVerdict.UNVERIFIABLE for c in r.claims)
+
+
+@pytest.mark.asyncio
+async def test_verdict_llm_path_falls_back_on_json_parse_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-JSON LLM body -> fall back to (tightened) heuristic."""
+    config = make_test_config(
+        verification=VerificationSettings(
+            enabled=True, use_llm_claims=False, use_llm_verdict=True, claim_model="stub-model"
+        ),
+    )
+
+    bad_body = {"choices": [{"message": {"content": "not json at all"}}]}
+    response = _StubResponse(bad_body)
+
+    def _factory(*_: Any, **__: Any) -> _StubClient:
+        return _StubClient(response)
+
+    monkeypatch.setattr(verifier_module.httpx, "AsyncClient", _factory)
+
+    # Snippet has high overlap and no negation tokens, but only echoes the claim.
+    # Under the tightened heuristic this is UNVERIFIABLE.
+    web = _FakeWeb("Water boils at 100 degrees Celsius at sea level")
+    v = Verifier(config, web)
+    r = await v.verify("Water boils at 100 degrees Celsius.")
+
+    assert r.skipped is False
+    assert all(c.verdict == VerificationVerdict.UNVERIFIABLE for c in r.claims)
+
+
+@pytest.mark.asyncio
+async def test_verdict_contradicted_via_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM 'contradicted' wins even without negation tokens in the snippet."""
+    config = make_test_config(
+        verification=VerificationSettings(
+            enabled=True, use_llm_claims=False, use_llm_verdict=True, claim_model="stub-model"
+        ),
+    )
+
+    response = _StubResponse(_llm_chat_payload("contradicted"))
+
+    def _factory(*_: Any, **__: Any) -> _StubClient:
+        return _StubClient(response)
+
+    monkeypatch.setattr(verifier_module.httpx, "AsyncClient", _factory)
+
+    # Snippet has overlap, no negation tokens — heuristic alone wouldn't flag it.
+    web = _FakeWeb(
+        "Vaccines cause autism is a topic that has been studied extensively in research."
+    )
+    v = Verifier(config, web)
+    r = await v.verify("Vaccines cause autism.")
+
+    assert r.skipped is False
+    assert r.claims
+    assert all(c.verdict == VerificationVerdict.CONTRADICTED for c in r.claims)
+
+
+@pytest.mark.asyncio
+async def test_use_llm_verdict_flag_disables_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When use_llm_verdict=False, no LLM call is made."""
+    config = make_test_config(
+        verification=VerificationSettings(
+            enabled=True, use_llm_claims=False, use_llm_verdict=False, claim_model="stub-model"
+        ),
+    )
+
+    def _factory(*_: Any, **__: Any) -> _StubClient:  # pragma: no cover - must not run
+        raise AssertionError("LLM verdict path must not be invoked when flag is off")
+
+    monkeypatch.setattr(verifier_module.httpx, "AsyncClient", _factory)
+
+    web = _FakeWeb("evidence supported here")
+    v = Verifier(config, web)
+    r = await v.verify("Evidence supported claim here.")
+    assert r.skipped is False
 
 
 # ── _aggregate_confidence ────────────────────────────────────────────────────
