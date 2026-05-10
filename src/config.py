@@ -14,7 +14,8 @@ def _load_dotenv() -> None:
     """Merge ``.env`` into the process env (does not override existing keys).
 
     Searches for ``.env`` in the current working directory, then upwards from
-    the location of this file. See ``.env.example``.
+    the location of this file up to ``constants.DOTENV_SEARCH_DEPTH`` levels.
+    See ``.env.example``.
     """
     if os.environ.get("LIBRARIAN_SKIP_DOTENV"):
         return
@@ -24,9 +25,8 @@ def _load_dotenv() -> None:
 
     # 2. Try upwards from this file's directory
     if not path.is_file():
-        max_depth = 5
         current = Path(__file__).resolve().parent
-        for _ in range(max_depth):
+        for _ in range(constants.DOTENV_SEARCH_DEPTH):
             candidate = current / ".env"
             if candidate.is_file():
                 path = candidate
