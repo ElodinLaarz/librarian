@@ -119,6 +119,7 @@ class IngestSettings(BaseSettings):
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
     use_llm_chunking: bool = True
+    use_llm_summary: bool = True
     extraction_model: str = "gemma4:e2b"
     ollama_base_url: str = "http://localhost:11434"
 
