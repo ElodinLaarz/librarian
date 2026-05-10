@@ -593,9 +593,7 @@ async def test_llm_short_facts_are_bundled() -> None:
         async def _reshard_llm(self, blob: str) -> list[str] | None:
             return list(short_facts)
 
-        async def _reshard(
-            self, blob: str, opts: IngestCallOptions | None = None
-        ) -> list[str]:
+        async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
             # Mirror the production _reshard logic but use our mocked _reshard_llm.
             return await Ingestor._reshard(self, blob, opts)
 
@@ -636,9 +634,7 @@ async def test_all_llm_shards_below_floor_falls_back_to_heuristic(
             # is much smaller than the blob → bundling can't recover it.
             return ["tiny."]
 
-        async def _reshard(
-            self, blob: str, opts: IngestCallOptions | None = None
-        ) -> list[str]:
+        async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
             return await Ingestor._reshard(self, blob, opts)
 
     # Patch the splitter symbol that ingestor.py actually uses. The production

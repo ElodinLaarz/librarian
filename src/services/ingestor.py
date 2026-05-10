@@ -161,10 +161,18 @@ class Ingestor:
                 ),
             )
 
-        # Whole-blob bypass: if the entire input is below the minimum-shard
-        # floor, treat it as a legitimately short document and skip the floor
-        # enforcement during _validate.
-        allow_short = len(blob.strip()) < self._config.ingest.min_shard_chars
+        # Allow-short rules:
+        # - Whole-blob bypass: if the entire input is below the minimum-shard
+        #   floor, treat it as a legitimately short document.
+        # - Structured formats (code / json / yaml / markdown): individual
+        #   structural shards may be below the floor, so skip the floor.
+        # In both cases, _validate skips the minimum-shard-size enforcement.
+        fmt = opts.force_format or _detect_format(blob)
+        allow_short = (
+            opts.allow_short
+            or fmt != "text"
+            or len(blob.strip()) < self._config.ingest.min_shard_chars
+        )
         per_shard_opts = opts
         if allow_short and not opts.allow_short:
             per_shard_opts = replace(opts, allow_short=True)
@@ -360,19 +368,21 @@ class Ingestor:
         to a language-aware splitter. Code, config, and markdown skip the LLM
         "atomic facts" rewrite, which would destroy their syntax.
 
-        Enforces a minimum-size floor (chars and words) on all splitter
-        outputs by bundling adjacent sub-floor shards together. Legitimate
-        short inputs (whole blob below the floor) bypass bundling and pass
-        through unchanged.
+        For prose, enforces a minimum-size floor (chars and words) by bundling
+        adjacent sub-floor shards together. Structured formats (code / json /
+        yaml / markdown) intentionally skip floor bundling because that would
+        break structural integrity (e.g. concatenating two JSON arrays). The
+        caller must therefore mark structured ingests with ``allow_short=True``
+        to bypass the per-tome floor in ``_validate``.
         """
         opts = opts or IngestCallOptions()
 
-        # Whole-blob bypass: a legitimately short document.
-        if len(blob.strip()) < self._config.ingest.min_shard_chars:
+        fmt: DetectedFormat = opts.force_format or _detect_format(blob)
+
+        # Whole-blob bypass for prose: a legitimately short document.
+        if fmt == "text" and len(blob.strip()) < self._config.ingest.min_shard_chars:
             stripped = blob.strip()
             return [stripped] if stripped else []
-
-        fmt: DetectedFormat = opts.force_format or _detect_format(blob)
 
         if fmt == "text":
             if self._config.ingest.use_llm_chunking:
@@ -386,7 +396,8 @@ class Ingestor:
                     # splitter.
             return self._apply_min_floor(self._split_text_recursive(blob))
 
-        return self._apply_min_floor(self._split_structured(blob, fmt))
+        # Structured formats: preserve structural integrity, no floor bundling.
+        return self._split_structured(blob, fmt)
 
     def _split_text_recursive(self, blob: str) -> list[str]:
         """Generic recursive character split — used as fallback for prose."""
