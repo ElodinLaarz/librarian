@@ -50,10 +50,7 @@ class StubTomeRepository(TomeRepository):
 
     async def insert(self, tome: Tome) -> UUID:
         self._insert_count += 1
-        if (
-            self._fail_inserts_after is not None
-            and self._insert_count > self._fail_inserts_after
-        ):
+        if self._fail_inserts_after is not None and self._insert_count > self._fail_inserts_after:
             raise RuntimeError(
                 f"StubTomeRepository: simulated insert failure on call "
                 f"#{self._insert_count} (fail_inserts_after={self._fail_inserts_after})"
