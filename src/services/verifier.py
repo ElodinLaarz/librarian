@@ -37,6 +37,24 @@ class Verifier:
     ) -> None:
         self._config = config
         self._web = web_client
+        self._http: httpx.AsyncClient | None = None
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        """Lazily construct and reuse a single httpx.AsyncClient.
+
+        Constructing a fresh client per claim is wasteful and risks socket
+        exhaustion under load; reuse a single client for the lifetime of
+        this Verifier instance.
+        """
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=60.0)
+        return self._http
+
+    async def aclose(self) -> None:
+        """Release the cached HTTP client, if any."""
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
 
     async def verify(self, content: str) -> VerificationResult:
         """Run the full verification pipeline on a piece of content."""
@@ -87,7 +105,7 @@ class Verifier:
         if verification.use_llm_verdict:
             model = verification.verdict_model or verification.claim_model
             if model:
-                verdict = await _llm_verdict(claim, hits, self._config)
+                verdict = await _llm_verdict(claim, hits, self._config, self._get_http_client())
 
         if verdict is None:
             blob = " ".join(f"{h.title} {h.snippet}" for h in hits)
@@ -154,11 +172,13 @@ async def _llm_verdict(
     claim: str,
     hits: list[WebSearchResult],
     config: LibrarianConfig,
+    client: httpx.AsyncClient,
 ) -> VerificationVerdict | None:
     """Ask the configured LLM for a strict JSON verdict on a single claim.
 
     Returns None on any HTTP, parsing, or schema failure so the caller can
-    fall back to the heuristic.
+    fall back to the heuristic. The supplied ``client`` is reused across
+    calls to avoid per-claim socket churn.
     """
     verification = config.verification
     base = verification.ollama_base_url.rstrip("/")
@@ -184,10 +204,9 @@ async def _llm_verdict(
         "temperature": 0.1,
     }
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
     except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
         logging.debug("_llm_verdict HTTP/parse error: %s", exc)
         return None
