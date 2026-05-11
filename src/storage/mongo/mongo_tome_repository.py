@@ -360,12 +360,8 @@ class MongoTomeRepository(TomeRepository):
             else:
                 logger.error("Failed to create collection", exc_info=True)
                 raise StorageError("Failed to create Mongo collection") from exc
-        except (ServerSelectionTimeoutError, ConnectionFailure) as exc:
-            raise BackendUnavailableError(
-                "Mongo backend unavailable during ensure_indexes"
-            ) from exc
         except PyMongoError as exc:
-            raise StorageError("Mongo ensure_indexes failed") from exc
+            raise _wrap_mongo(exc, "ensure_indexes") from exc
 
         existing_search_indexes: list[str] = []
 
@@ -383,12 +379,8 @@ class MongoTomeRepository(TomeRepository):
                 exc_info=True,
             )
             raise StorageError("Failed to enumerate Atlas search indexes") from exc
-        except (ServerSelectionTimeoutError, ConnectionFailure) as exc:
-            raise BackendUnavailableError(
-                "Mongo backend unavailable during ensure_indexes"
-            ) from exc
         except PyMongoError as exc:
-            raise StorageError("Mongo ensure_indexes failed") from exc
+            raise _wrap_mongo(exc, "ensure_indexes (list search indexes)") from exc
 
         # 2. Define Vector Search Index
         if "vectors" not in existing_search_indexes:
@@ -417,7 +409,7 @@ class MongoTomeRepository(TomeRepository):
                 )
                 raise StorageError("Failed to create Atlas vector search index 'vectors'") from exc
             except PyMongoError as exc:
-                raise StorageError("Failed to create Atlas vector search index 'vectors'") from exc
+                raise _wrap_mongo(exc, "create_search_index (vectors)") from exc
 
         # 3. Define Lexical Search Index
         if "default" not in existing_search_indexes:
@@ -433,7 +425,7 @@ class MongoTomeRepository(TomeRepository):
                 )
                 raise StorageError("Failed to create Atlas lexical search index 'default'") from exc
             except PyMongoError as exc:
-                raise StorageError("Failed to create Atlas lexical search index 'default'") from exc
+                raise _wrap_mongo(exc, "create_search_index (default)") from exc
 
     def close(self) -> None:
         """Close the MongoDB client connection."""

@@ -128,19 +128,15 @@ class Researcher:
 
             await self._jobs.update(job)
 
-        except StorageError as exc:
-            logging.exception("Research job %s failed: storage error", job_id)
-            job.status = ResearchJobStatus.FAILED
-            job.error = f"Storage error: {exc}"
-            job.finished_at = datetime.now(UTC)
-            try:
-                await self._jobs.update(job)
-            except StorageError:
-                logging.exception("Research job %s failure write also failed (storage)", job_id)
         except Exception as exc:
-            logging.exception("Research job %s failed", job_id)
+            is_storage = isinstance(exc, StorageError)
+            logging.exception(
+                "Research job %s failed%s",
+                job_id,
+                ": storage error" if is_storage else "",
+            )
             job.status = ResearchJobStatus.FAILED
-            job.error = str(exc)
+            job.error = f"Storage error: {exc}" if is_storage else str(exc)
             job.finished_at = datetime.now(UTC)
             try:
                 await self._jobs.update(job)

@@ -42,9 +42,9 @@ class FsResearchJobRepository(ResearchJobRepository):
         """Create a new job."""
         try:
             self._get_path(job.id).write_text(job.model_dump_json(indent=2))
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, PermissionError) as exc:
             raise BackendUnavailableError(
-                f"Filesystem storage root unreachable: {self._jobs_dir}"
+                f"Filesystem storage root unreachable or not writable: {self._jobs_dir}"
             ) from exc
         except OSError as exc:
             raise StorageError(f"Failed to write job {job.id}") from exc
@@ -57,9 +57,9 @@ class FsResearchJobRepository(ResearchJobRepository):
             raise NotFoundError(f"Job {job.id} does not exist")
         try:
             path.write_text(job.model_dump_json(indent=2))
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, PermissionError) as exc:
             raise BackendUnavailableError(
-                f"Filesystem storage root unreachable: {self._jobs_dir}"
+                f"Filesystem storage root unreachable or not writable: {self._jobs_dir}"
             ) from exc
         except OSError as exc:
             raise StorageError(f"Failed to update job {job.id}") from exc
