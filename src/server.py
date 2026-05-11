@@ -4,6 +4,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TypeVar
 from uuid import UUID, uuid4
 
 from mcp.server import FastMCP
@@ -37,6 +38,8 @@ from src.storage.mongo.mongo_research_job_repository import MongoResearchJobRepo
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
+
+_T = TypeVar("_T")
 
 
 def load_config() -> LibrarianConfig:
@@ -84,6 +87,21 @@ class LibrarianServer:
     def _track_background_task(self, task: asyncio.Task[None]) -> None:
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
+
+    def _require(self, value: _T | None, name: str) -> _T:
+        """Return ``value`` if not ``None`` else raise a clear ``RuntimeError``.
+
+        Tool handlers cannot rely on ``assert`` for this because ``assert``
+        statements are stripped under ``python -O``, which would turn an
+        un-initialised server into a silent ``AttributeError`` on ``None``
+        instead of a clear, actionable error. Using a helper that returns the
+        non-``None`` value also preserves type narrowing under mypy strict.
+        """
+        if value is None:
+            raise RuntimeError(
+                f"LibrarianServer not initialised — lifespan did not run (missing: {name})"
+            )
+        return value
 
     @asynccontextmanager
     async def lifespan(self, _server_mcp: FastMCP) -> AsyncIterator[None]:
@@ -166,8 +184,8 @@ class LibrarianServer:
                 await asyncio.sleep(60)  # Wait a bit before retrying after error
 
     async def _research_poll(self, job_id: UUID) -> ResearchOutput:
-        assert self.job_repo is not None
-        job = await self.job_repo.get_by_id(job_id)
+        job_repo = self._require(self.job_repo, "job_repo")
+        job = await job_repo.get_by_id(job_id)
         if job is None:
             return ResearchOutput(
                 job_id=str(job_id),
@@ -196,9 +214,9 @@ class LibrarianServer:
         @self.mcp.tool()
         async def library_search(params: SearchInput) -> SearchOutput:
             """Search the library for relevant Tomes using semantic vector search."""
-            assert self.tome_repo is not None, "Server not initialised"
+            tome_repo = self._require(self.tome_repo, "tome_repo")
 
-            results = await self.tome_repo.search(
+            results = await tome_repo.search(
                 query=params.query,
                 top_k=params.top_k,
                 min_confidence=params.min_confidence,
@@ -223,7 +241,7 @@ class LibrarianServer:
         @self.mcp.tool()
         async def library_ingest(params: IngestInput) -> IngestOutput:
             """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
-            assert self.ingestor is not None, "Server not initialised"
+            ingestor = self._require(self.ingestor, "ingestor")
             opts = IngestCallOptions(
                 skip_verify=params.skip_verify,
                 category_hint=params.category,
@@ -231,14 +249,13 @@ class LibrarianServer:
                 source_url=params.source_url,
                 force_format=params.force_format,
             )
-            return await self.ingestor.ingest(params.content, opts)
+            return await ingestor.ingest(params.content, opts)
 
         @self.mcp.tool()
         async def library_research(params: ResearchInput) -> ResearchOutput:
             """Research a topic on the web and ingest findings as new Tomes."""
-            assert self.job_repo is not None and self.researcher is not None, (
-                "Server not initialised"
-            )
+            job_repo = self._require(self.job_repo, "job_repo")
+            researcher = self._require(self.researcher, "researcher")
 
             if params.job_id:
                 job_id_str = params.job_id.strip()
@@ -267,24 +284,24 @@ class LibrarianServer:
                 max_tomes=params.max_tomes,
                 category=params.category,
             )
-            await self.job_repo.insert(job)
+            await job_repo.insert(job)
 
             if params.async_:
-                task = asyncio.create_task(self.researcher.run_job(job.id))
+                task = asyncio.create_task(researcher.run_job(job.id))
                 self._track_background_task(task)
                 return ResearchOutput(
                     job_id=str(job.id),
                     status=ResearchJobStatus.PENDING.value,
                 )
 
-            await self.researcher.run_job(job.id)
+            await researcher.run_job(job.id)
             return await self._research_poll(job.id)
 
         @self.mcp.tool()
         async def library_tidy(params: TidyInput) -> TidyOutput:
             """Review the library tomes and remove duplicates by combining similar topics."""
-            assert self.tidier is not None, "Server not initialised"
-            report = await self.tidier.run_cleanup(
+            tidier = self._require(self.tidier, "tidier")
+            report = await tidier.run_cleanup(
                 limit=params.limit,
                 threshold=params.threshold,
                 skip_verify=params.skip_verify,

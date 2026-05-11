@@ -72,3 +72,21 @@ def test_no_unexpected_tools_registered() -> None:
         "library_research",
         "library_tidy",
     }
+
+
+async def test_library_search_outside_lifespan_raises_runtime_error() -> None:
+    """Tool handlers must raise RuntimeError (not AssertionError or AttributeError)
+    when invoked before the lifespan has initialised the server's repositories."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+
+    server = LibrarianServer(make_test_config())
+    # Sanity: repositories are not initialised because lifespan was not entered.
+    assert server.tome_repo is None
+
+    library_search = next(
+        t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_search"
+    )
+
+    with pytest.raises(RuntimeError, match="LibrarianServer not initialised"):
+        await library_search(SearchInput(query="anything"))
