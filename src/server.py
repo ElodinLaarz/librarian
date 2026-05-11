@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -67,8 +68,6 @@ class LibrarianServer:
             log_level=config.server.log_level.value.upper(),  # type: ignore[arg-type]
         )
 
-        import logging
-
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -105,9 +104,9 @@ class LibrarianServer:
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
         self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
 
-        import logging
-
-        if self.config.verification.enabled and self.config.verification.use_llm_claims:
+        if not self.config.verification.enabled:
+            logging.info("Verification disabled; skipping claim extraction.")
+        elif self.config.verification.use_llm_claims:
             logging.info(
                 "LLM claim extraction enabled, model=%s (ollama=%s). "
                 "Run `ollama pull %s` if you have not already.",
@@ -149,16 +148,12 @@ class LibrarianServer:
             try:
                 await asyncio.sleep(self.config.tidy.interval_seconds)
                 if self.tidier:
-                    import logging
-
                     logging.info("Starting background library tidy...")
                     report = await self.tidier.run_cleanup()
                     logging.info("Library tidy complete: %s", report)
             except asyncio.CancelledError:
                 break
             except Exception:
-                import logging
-
                 logging.error("Exception in background tidy loop", exc_info=True)
                 await asyncio.sleep(60)  # Wait a bit before retrying after error
 

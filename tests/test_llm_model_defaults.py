@@ -63,3 +63,52 @@ async def test_lifespan_logs_llm_claim_extraction_enabled(
         "Expected an INFO log 'LLM claim extraction enabled, model=...' on startup. "
         f"Got records: {[r.getMessage() for r in caplog.records]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_lifespan_logs_verification_disabled(
+    caplog: pytest.LogCaptureFixture, tmp_path: object
+) -> None:
+    """When verification is disabled, the startup log must say so explicitly."""
+    from src.config import DatabaseSettings, LibrarianConfig, VerificationSettings
+    from src.server import LibrarianServer
+
+    cfg = LibrarianConfig(
+        database=DatabaseSettings(uri=f"file://{tmp_path}"),
+        verification=VerificationSettings(enabled=False),
+    )
+    server = LibrarianServer(cfg)
+
+    caplog.set_level(logging.INFO)
+
+    async with server.lifespan(server.mcp):
+        pass
+
+    assert any("Verification disabled" in r.getMessage() for r in caplog.records), (
+        f"Expected 'Verification disabled' log. Got: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lifespan_logs_llm_claim_extraction_disabled(
+    caplog: pytest.LogCaptureFixture, tmp_path: object
+) -> None:
+    """When verification is on but use_llm_claims=False, the heuristic note must log."""
+    from src.config import DatabaseSettings, LibrarianConfig, VerificationSettings
+    from src.server import LibrarianServer
+
+    cfg = LibrarianConfig(
+        database=DatabaseSettings(uri=f"file://{tmp_path}"),
+        verification=VerificationSettings(enabled=True, use_llm_claims=False),
+    )
+    server = LibrarianServer(cfg)
+
+    caplog.set_level(logging.INFO)
+
+    async with server.lifespan(server.mcp):
+        pass
+
+    assert any("LLM claim extraction disabled" in r.getMessage() for r in caplog.records), (
+        "Expected 'LLM claim extraction disabled' log when use_llm_claims=False. "
+        f"Got: {[r.getMessage() for r in caplog.records]}"
+    )
