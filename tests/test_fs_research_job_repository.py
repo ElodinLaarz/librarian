@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -67,3 +68,70 @@ def test_all_jobs_skips_when_read_raises_os_error(
 
     assert len(out) == 1
     assert out[0].id == good_id
+
+
+@pytest.mark.asyncio
+async def test_insert_does_not_block_event_loop(repo: FsResearchJobRepository) -> None:
+    """insert must run blocking write_text in a worker thread, not on the loop."""
+    main_thread = threading.main_thread()
+    observed: dict[str, threading.Thread] = {}
+
+    real_write_text = Path.write_text
+
+    def recording_write_text(self: Path, *args: Any, **kwargs: Any) -> int:
+        observed["thread"] = threading.current_thread()
+        return real_write_text(self, *args, **kwargs)
+
+    job = ResearchJob(id=uuid.uuid4(), topic="async-insert")
+    with mock.patch.object(Path, "write_text", recording_write_text):
+        await repo.insert(job)
+
+    assert observed["thread"] is not main_thread, (
+        "Path.write_text ran on the event loop thread — insert is not actually async"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_does_not_block_event_loop(repo: FsResearchJobRepository) -> None:
+    """update must run blocking write_text and exists in a worker thread."""
+    main_thread = threading.main_thread()
+    job = ResearchJob(id=uuid.uuid4(), topic="async-update")
+    # Seed the file synchronously so update() finds it.
+    repo._get_path(job.id).write_text(job.model_dump_json())
+
+    observed: dict[str, threading.Thread] = {}
+    real_write_text = Path.write_text
+
+    def recording_write_text(self: Path, *args: Any, **kwargs: Any) -> int:
+        observed["thread"] = threading.current_thread()
+        return real_write_text(self, *args, **kwargs)
+
+    with mock.patch.object(Path, "write_text", recording_write_text):
+        await repo.update(job)
+
+    assert observed["thread"] is not main_thread, (
+        "Path.write_text ran on the event loop thread — update is not actually async"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_by_id_does_not_block_event_loop(repo: FsResearchJobRepository) -> None:
+    """get_by_id must run blocking read_text in a worker thread."""
+    main_thread = threading.main_thread()
+    job = ResearchJob(id=uuid.uuid4(), topic="async-get")
+    repo._get_path(job.id).write_text(job.model_dump_json())
+
+    observed: dict[str, threading.Thread] = {}
+    real_read_text = Path.read_text
+
+    def recording_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        observed["thread"] = threading.current_thread()
+        return real_read_text(self, *args, **kwargs)
+
+    with mock.patch.object(Path, "read_text", recording_read_text):
+        result = await repo.get_by_id(job.id)
+
+    assert result is not None
+    assert observed["thread"] is not main_thread, (
+        "Path.read_text ran on the event loop thread — get_by_id is not actually async"
+    )

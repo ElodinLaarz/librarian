@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -24,23 +25,27 @@ class FsResearchJobRepository(ResearchJobRepository):
 
     async def insert(self, job: ResearchJob) -> UUID:
         """Create a new job."""
-        self._get_path(job.id).write_text(job.model_dump_json(indent=2))
+        path = self._get_path(job.id)
+        await asyncio.to_thread(path.write_text, job.model_dump_json(indent=2))
         return job.id
 
     async def update(self, job: ResearchJob) -> None:
         """Replace the existing job with the full current state."""
         path = self._get_path(job.id)
-        if not path.exists():
+        exists = await asyncio.to_thread(path.exists)
+        if not exists:
             raise ValueError(f"Job {job.id} does not exist")
-        path.write_text(job.model_dump_json(indent=2))
+        await asyncio.to_thread(path.write_text, job.model_dump_json(indent=2))
 
     async def get_by_id(self, job_id: UUID) -> ResearchJob | None:
         """Load a job if it exists."""
         path = self._get_path(job_id)
-        if not path.exists():
+        exists = await asyncio.to_thread(path.exists)
+        if not exists:
             return None
         try:
-            return ResearchJob.model_validate_json(path.read_text())
+            content = await asyncio.to_thread(path.read_text)
+            return ResearchJob.model_validate_json(content)
         except Exception:
             return None
 
