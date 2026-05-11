@@ -79,6 +79,16 @@ uv sync --extra sentence-transformers
 
 **3. Configure (optional):**
 
+Copy the example config to the default location (the server looks for
+`librarian.config.yaml` in the current working directory by default):
+
+```bash
+cp librarian.config.example.yaml librarian.config.yaml
+# then edit as needed
+```
+
+Minimal config:
+
 ```yaml
 # librarian.config.yaml
 database:
@@ -90,6 +100,7 @@ server:
   port: 8000
 ```
 
+To point at a different path, set `LIBRARIAN_CONFIG=/path/to/config.yaml`.
 Environment variables override YAML using each section's prefix:
 
 ```bash

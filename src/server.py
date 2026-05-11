@@ -41,16 +41,43 @@ from src.storage.tome_repository import TomeRepository
 
 _T = TypeVar("_T")
 
+DEFAULT_CONFIG_PATH = Path("librarian.config.yaml")
+EXAMPLE_CONFIG_FILENAME = "librarian.config.example.yaml"
+
 
 def load_config() -> LibrarianConfig:
-    """Resolve the config path from the environment and load the config.
+    """Resolve the config path and load it, with a friendly error on first run.
 
     Kept separate from module import so that importing :mod:`src.server` is
     side-effect free; configuration errors only surface when callers (e.g.
     :func:`src.__main__.main`) actually invoke this function.
+
+    Resolution order:
+    1. ``LIBRARIAN_CONFIG`` env var (explicit, no fallback message).
+    2. ``DEFAULT_CONFIG_PATH`` (``librarian.config.yaml``) in CWD.
+
+    When the default path is missing and no env var is set, attempt to load
+    so that environment-only configuration still works; if that fails, raise
+    a friendly error pointing users at ``librarian.config.example.yaml``.
     """
-    config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
-    return LibrarianConfig.from_yaml(config_path)
+    explicit = os.environ.get("LIBRARIAN_CONFIG")
+    path = Path(explicit) if explicit else DEFAULT_CONFIG_PATH
+
+    if explicit or path.exists():
+        return LibrarianConfig.from_yaml(path)
+
+    # Default path missing and no explicit env var. Allow env-only configuration
+    # (e.g. LIBRARIAN_DATABASE_URI is set) by attempting the load; if validation
+    # fails, surface a message that points at the example file.
+    try:
+        return LibrarianConfig.from_yaml(path)
+    except ValueError as exc:
+        raise ValueError(
+            f"No config found at {path} and LIBRARIAN_CONFIG is not set. "
+            f"Copy {EXAMPLE_CONFIG_FILENAME} to {DEFAULT_CONFIG_PATH} "
+            f"(or set LIBRARIAN_CONFIG to point at your config file) and edit "
+            f"as needed.\n\nUnderlying error:\n{exc}"
+        ) from exc
 
 
 class LibrarianServer:
