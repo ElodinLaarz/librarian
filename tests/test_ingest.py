@@ -458,10 +458,10 @@ async def test_http_client_lazy_until_first_use(config: LibrarianConfig) -> None
     await ingestor.aclose()  # safe no-op when never created
 
 
-async def test_reshard_llm_reuses_single_http_client(
+async def test_extract_facts_llm_reuses_single_http_client(
     monkeypatch: pytest.MonkeyPatch, config: LibrarianConfig
 ) -> None:
-    """Multiple `_reshard_llm` calls share one `httpx.AsyncClient` instance."""
+    """Multiple `_extract_facts_llm` calls share one `httpx.AsyncClient` instance."""
     from unittest.mock import MagicMock
 
     import httpx as _httpx
@@ -489,9 +489,9 @@ async def test_reshard_llm_reuses_single_http_client(
         repo,
     )
     try:
-        first = await ingestor._reshard_llm("Some text to shard.")
+        first = await ingestor._extract_facts_llm("Some text to shard.")
         client_after_first = ingestor._http_client
-        second = await ingestor._reshard_llm("More text to shard.")
+        second = await ingestor._extract_facts_llm("More text to shard.")
         client_after_second = ingestor._http_client
 
         assert first == ["fact one.", "fact two."]
@@ -530,7 +530,7 @@ async def test_aclose_closes_and_resets_http_client(
         StubVerifier(confidence=0.9),
         repo,
     )
-    await ingestor._reshard_llm("Text.")
+    await ingestor._extract_facts_llm("Text.")
     client = ingestor._http_client
     assert client is not None
     assert not client.is_closed
@@ -907,7 +907,7 @@ async def test_force_format_override_routes_to_correct_splitter() -> None:
 
 
 async def test_use_llm_chunking_skipped_for_detected_code() -> None:
-    """When detected format is code, _reshard_llm must NOT be awaited."""
+    """When detected format is code, _extract_facts_llm must NOT be awaited."""
     blob = (
         "import os\n"
         "import sys\n"
@@ -922,11 +922,11 @@ async def test_use_llm_chunking_skipped_for_detected_code() -> None:
     )
     ingestor = _make_real_ingestor(shard_size=200, shard_overlap=0, use_llm_chunking=True)
 
-    with patch.object(Ingestor, "_reshard_llm", autospec=True, return_value=None) as llm_spy:
+    with patch.object(Ingestor, "_extract_facts_llm", autospec=True, return_value=None) as llm_spy:
         shards = await ingestor._reshard(blob, IngestCallOptions())
 
     assert shards, "Expected at least one shard"
-    assert not llm_spy.called, "_reshard_llm must NOT be invoked for detected code"
+    assert not llm_spy.called, "_extract_facts_llm must NOT be invoked for detected code"
 
 
 # ── LLM classification & tagging (issue #37) ─────────────────────────────────
@@ -1188,7 +1188,7 @@ class TestPromptEscapes:
             repo,
         )
 
-        result = await ingestor._reshard_llm(sample)
+        result = await ingestor._extract_facts_llm(sample)
 
         assert result == ["a fact"]
         content = captured["payload"]["messages"][0]["content"]
@@ -1213,7 +1213,7 @@ class TestPromptEscapes:
         monkeypatch: pytest.MonkeyPatch,
         fenced: str,
     ) -> None:
-        """``_reshard_llm`` must strip ``\\n``/space whitespace inside JSON code fences."""
+        """``_extract_facts_llm`` must strip ``\\n``/space whitespace inside JSON code fences."""
 
         class _FakeResponse:
             def raise_for_status(self) -> None:
@@ -1237,6 +1237,101 @@ class TestPromptEscapes:
         # With the correct ``\s`` regex, the fence is stripped cleanly and the
         # JSON parses to ["one", "two"]. With the buggy ``\\s`` literal-backslash
         # regex, the fence is left in place, ``json.loads`` raises, and
-        # ``_reshard_llm`` silently returns None.
-        result = await ingestor._reshard_llm("any text")
+        # ``_extract_facts_llm`` silently returns None.
+        result = await ingestor._extract_facts_llm("any text")
         assert result == ["one", "two"]
+
+
+# ── issue #32: LLM fact-extraction semantics ─────────────────────────────────
+
+
+class TestLlmFactExtractionRename:
+    """Regression tests for issue #32: rename + configurable cap + safe defaults."""
+
+    def test_extract_facts_llm_method_exists(self) -> None:
+        """``_reshard_llm`` is renamed to ``_extract_facts_llm`` to reflect that
+        the LLM rewrites content into atomic facts (it does not split the source).
+        """
+        assert hasattr(Ingestor, "_extract_facts_llm"), (
+            "Ingestor must expose _extract_facts_llm (renamed from _reshard_llm)"
+        )
+        assert not hasattr(Ingestor, "_reshard_llm"), (
+            "Old name _reshard_llm must be removed after the rename"
+        )
+
+    def test_use_llm_chunking_defaults_to_false(self) -> None:
+        """LLM fact extraction rewrites content semantically, so it must be opt-in."""
+        assert IngestSettings().use_llm_chunking is False
+        assert make_test_config().ingest.use_llm_chunking is False
+
+    def test_llm_extraction_max_chars_is_configurable(self) -> None:
+        """The previously-hardcoded 8000-char truncation must be a configurable field."""
+        settings = IngestSettings()
+        assert hasattr(settings, "llm_extraction_max_chars"), (
+            "IngestSettings must expose llm_extraction_max_chars"
+        )
+        assert settings.llm_extraction_max_chars == 8000
+
+    async def test_llm_extraction_uses_configured_max_chars(
+        self,
+        repo: StubTomeRepository,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The configured ``llm_extraction_max_chars`` value must drive truncation,
+        not the legacy hard-coded 8000 constant.
+        """
+        captured: dict[str, Any] = {}
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {"choices": [{"message": {"content": '{"facts": ["a fact"]}'}}]}
+
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
+            captured["payload"] = kwargs.get("json")
+            return _FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+        ingest_settings = IngestSettings(llm_extraction_max_chars=42)
+        config = make_test_config(ingest=ingest_settings)
+        ingestor = Ingestor(
+            config,
+            StubEmbeddingService(dimensions=config.embedding.dimensions),
+            StubVerifier(confidence=0.9),
+            repo,
+        )
+
+        blob = "X" * 200
+        await ingestor._extract_facts_llm(blob)
+
+        content = captured["payload"]["messages"][0]["content"]
+        # The prompt body must contain only the first 42 chars of the source.
+        assert content.endswith("TEXT:\n" + blob[:42])
+        # The full 200-char blob must NOT have been forwarded.
+        assert blob not in content
+
+    def test_enabling_llm_chunking_emits_startup_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Constructing an Ingestor with ``use_llm_chunking=True`` must log a
+        WARNING that the feature rewrites content semantics.
+        """
+        import logging as _logging
+
+        config = make_test_config(ingest=IngestSettings(use_llm_chunking=True))
+        with caplog.at_level(_logging.WARNING, logger="src.services.ingestor"):
+            Ingestor(
+                config,
+                StubEmbeddingService(dimensions=config.embedding.dimensions),
+                StubVerifier(confidence=0.9),
+                StubTomeRepository(),
+            )
+
+        warning_records = [r for r in caplog.records if r.levelno >= _logging.WARNING]
+        assert any("use_llm_chunking" in r.getMessage() for r in warning_records), (
+            "Expected a startup WARNING mentioning use_llm_chunking"
+        )

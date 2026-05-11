@@ -7,7 +7,7 @@ An MCP server that gives AI agents a persistent, searchable knowledge base. The 
 | Tool | Status | Description |
 | --- | --- | --- |
 | `library.search` | Implemented | Hybrid vector + lexical search over stored tomes, with optional category and confidence filtering |
-| `library.ingest` | Implemented | Chunks content, generates embeddings, deduplicates, and stores tomes; optional `skip_verify`, `category`, `tags`, `source_url` |
+| `library.ingest` | Implemented | Splits content into shards, generates embeddings, deduplicates, and stores tomes; optional `skip_verify`, `category`, `tags`, `source_url` |
 | `library.research` | Implemented | Plans queries (Ollama optional), searches the web, fetches pages, ingests findings; `async: true` returns a `job_id` for polling |
 
 ### Usage pattern
@@ -28,6 +28,26 @@ Before storing, a Verifier cross-references key factual claims against web searc
 
 Set `skip_verify: true` on ingest to bypass (useful for notes or fictional content). With no search API key, verification is skipped and a synthetic confidence of `0.6` is assigned. To enable live checks and `library.research`, set `LIBRARIAN_WEB_SEARCH_PROVIDER` (`brave` / `serper` / `tavily`) and an API key (`LIBRARIAN_WEB_SEARCH_API_KEY`, or `BRAVE_API_KEY` / `SERPER_API_KEY` / `TAVILY_API_KEY`). Claim extraction uses Ollama’s OpenAI-compatible chat JSON when reachable (`LIBRARIAN_VERIFICATION__OLLAMA_BASE_URL`, `LIBRARIAN_VERIFICATION__CLAIM_MODEL`); otherwise text is split into sentence-like claims.
 
+## LLM Fact Extraction (opt-in, changes content semantics)
+
+The default ingestion path **splits** prose with LangChain's
+`RecursiveCharacterTextSplitter` — the stored content is byte-equal to slices
+of the source. Setting `ingest.use_llm_chunking: true` (env:
+`LIBRARIAN_INGEST_USE_LLM_CHUNKING=true`) replaces that path with **LLM fact
+extraction** (`Ingestor._extract_facts_llm`), which is **not** chunking:
+
+- The prompt asks the model to "decompose into atomic factual statements".
+  Stored content is **generated text**, not slices of the source, so wording
+  and meaning may differ from the original.
+- The source is **silently truncated** at `ingest.llm_extraction_max_chars`
+  (default `8000`) before the prompt is built. Anything past that limit is
+  discarded; large documents lose their tail unless the LLM call fails and
+  the deterministic splitter is used as a fallback.
+- The ingestor logs a `WARNING` on startup whenever this flag is enabled.
+
+Default is `false`. Enable only when you explicitly want LLM-rewritten facts
+and have a model you trust for paraphrase.
+
 ## Stack
 
 | Component | Technology |
@@ -37,7 +57,8 @@ Set `skip_verify: true` on ingest to bypass (useful for notes or fictional conte
 | Vector Search | Atlas Vector Search (cosine similarity) |
 | Embedding (default) | `nomic-embed-text` (768 dims) via Ollama |
 | Embedding (alt) | `sentence-transformers/all-MiniLM-L6-v2` (384 dims) |
-| Chunking | LangChain `RecursiveCharacterTextSplitter` |
+| Sharding (default) | LangChain `RecursiveCharacterTextSplitter` (deterministic split) |
+| Fact extraction (opt-in) | Ollama LLM, `ingest.use_llm_chunking=true` — see caveat below |
 | Claim extraction | Ollama OpenAI-compatible JSON (optional) or heuristic sentences |
 | Web search | Brave / Serper / Tavily (`build_web_search_client`) |
 | HTML extraction | `trafilatura` |

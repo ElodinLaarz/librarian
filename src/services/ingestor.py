@@ -119,6 +119,15 @@ class Ingestor:
         self._tome_repo = tome_repo
         self._http_client: httpx.AsyncClient | None = None
         self._http_client_lock = asyncio.Lock()
+        if config.ingest.use_llm_chunking:
+            logging.warning(
+                "ingest.use_llm_chunking=True: the ingestor will rewrite prose "
+                "into LLM-generated atomic facts (NOT a deterministic split). "
+                "Source text is truncated at ingest.llm_extraction_max_chars=%d "
+                "and replaced with model output, so stored content may differ "
+                "in wording and meaning from the original. See README/lld.md.",
+                config.ingest.llm_extraction_max_chars,
+            )
 
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Lazily construct and reuse a single httpx client for LLM HTTP calls."""
@@ -458,15 +467,17 @@ class Ingestor:
         """Split blob into syntax-aware shards.
 
         Detects the input format (or honours ``opts.force_format``) and routes
-        to a language-aware splitter. Code, config, and markdown skip the LLM
-        "atomic facts" rewrite, which would destroy their syntax.
+        to a language-aware splitter. For prose, optionally diverts to LLM
+        fact extraction (:meth:`_extract_facts_llm`), which **rewrites** rather
+        than splits the source — see that method for caveats. Code, config,
+        and markdown skip the LLM rewrite, which would destroy their syntax.
         """
         opts = opts or IngestCallOptions()
         fmt: DetectedFormat = opts.force_format or _detect_format(blob)
 
         if fmt == "text":
             if self._config.ingest.use_llm_chunking:
-                llm_shards = await self._reshard_llm(blob)
+                llm_shards = await self._extract_facts_llm(blob)
                 if llm_shards:
                     return llm_shards
             return await self._split_text_recursive(blob)
@@ -697,17 +708,27 @@ class Ingestor:
         flush()
         return out
 
-    async def _reshard_llm(self, blob: str) -> list[str] | None:
-        """Use an LLM agent to decompose text into atomic facts."""
+    async def _extract_facts_llm(self, blob: str) -> list[str] | None:
+        """Use an LLM to **rewrite** text into atomic factual statements.
+
+        WARNING — this is *not* chunking. Unlike the deterministic
+        ``RecursiveCharacterTextSplitter`` fallback, the returned items are
+        generated text that may differ in wording (and meaning) from the
+        source.  The source is also silently truncated at
+        ``ingest.llm_extraction_max_chars`` before the prompt is built; long
+        inputs lose their tail without warning.  Enable
+        ``ingest.use_llm_chunking`` only when these semantics are acceptable.
+        """
         base = self._config.ingest.ollama_base_url.rstrip("/")
         model = self._config.ingest.extraction_model
+        max_chars = self._config.ingest.llm_extraction_max_chars
         prompt = (
             "Decompose the following text into a list of atomic, self-contained factual "
             "statements or concepts. Each statement or concept must contain enough context "
             "to be fully understood on its own. "
             f"Do not exceed {self._config.ingest.shard_size} characters per fact. "
             'Output JSON only with the shape `{"facts": ["...", "..."]}`.\n\nTEXT:\n'
-            f"{blob[: constants.MAX_LLM_INPUT_CHARS]}"
+            f"{blob[:max_chars]}"
         )
         url = f"{base}/v1/chat/completions"
         payload = {
@@ -721,7 +742,7 @@ class Ingestor:
             response.raise_for_status()
             data = response.json()
         except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
-            logging.debug("_reshard_llm HTTP/parse error: %s", exc)
+            logging.debug("_extract_facts_llm HTTP/parse error: %s", exc)
             return None
 
         try:
@@ -889,7 +910,7 @@ class Ingestor:
         """Ask an LLM for a short title and 1–2 sentence summary as JSON.
 
         Returns ``None`` on any failure so the caller can fall back to the
-        deterministic truncation path.  Mirrors :meth:`_reshard_llm`.
+        deterministic truncation path.  Mirrors :meth:`_extract_facts_llm`.
         """
         title_length = self._config.ingest.title_length
         summary_length = self._config.ingest.summary_length
