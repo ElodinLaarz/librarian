@@ -1113,11 +1113,6 @@ sentence-transformers = [
     { name = "sentence-transformers" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
@@ -1126,7 +1121,7 @@ requires-dist = [
     { name = "mcp", specifier = "==1.26.0" },
     { name = "mdformat", marker = "extra == 'dev'" },
     { name = "motor", specifier = "==3.7.0" },
-    { name = "mypy", marker = "extra == 'dev'" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19.1" },
     { name = "numpy", specifier = "==2.4.3" },
     { name = "numpydantic", specifier = "==1.8.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
@@ -1141,9 +1136,6 @@ requires-dist = [
     { name = "trafilatura", specifier = "==2.0.0" },
 ]
 provides-extras = ["sentence-transformers", "dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "mypy", specifier = ">=1.19.1" }]
 
 [[package]]
 name = "librt"

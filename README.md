@@ -64,6 +64,9 @@ The default embedding model has moved from `all-MiniLM-L6-v2` (384 dimensions) t
 ```bash
 docker compose up -d
 docker compose exec ollama ollama pull nomic-embed-text
+# Required for default LLM claim extraction (override via
+# LIBRARIAN_VERIFICATION__CLAIM_MODEL / LIBRARIAN_INGEST__EXTRACTION_MODEL):
+docker compose exec ollama ollama pull gemma2:2b
 ```
 
 **2. Install Python deps:**
@@ -187,15 +190,26 @@ Then point the client at the SSE endpoint:
 
 ## Development
 
+Install dev tools (pytest, pytest-asyncio, ruff, mypy, mdformat, pre-commit):
+
+```bash
+uv sync --extra dev
+```
+
+Then:
+
 ```bash
 # Run tests (no external deps required)
-pytest
+uv run pytest
 
 # Lint + format
-ruff check . && ruff format .
+uv run ruff check . && uv run ruff format .
 
 # Type check
-mypy src
+uv run mypy src
+
+# Markdown formatting check
+git ls-files -z '*.md' | xargs -0 -r uv run mdformat --check
 ```
 
 Tests use in-memory stubs for all services — no MongoDB or embedding model needed for the unit test suite. Integration tests in `tests/test_mongo_repository.py` require a running MongoDB instance.

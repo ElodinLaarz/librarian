@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -40,8 +41,16 @@ from src.storage.tome_repository import TomeRepository
 
 _T = TypeVar("_T")
 
-config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
-config = LibrarianConfig.from_yaml(config_path)
+
+def load_config() -> LibrarianConfig:
+    """Resolve the config path from the environment and load the config.
+
+    Kept separate from module import so that importing :mod:`src.server` is
+    side-effect free; configuration errors only surface when callers (e.g.
+    :func:`src.__main__.main`) actually invoke this function.
+    """
+    config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
+    return LibrarianConfig.from_yaml(config_path)
 
 
 class LibrarianServer:
@@ -65,12 +74,10 @@ class LibrarianServer:
                 "is thin on a topic. Use library_tidy to consolidate duplicates."
             ),
             lifespan=self.lifespan,
-            host=config.server.host,
-            port=config.server.port,
-            log_level=config.server.log_level.value.upper(),  # type: ignore[arg-type]
+            host=self.config.server.host,
+            port=self.config.server.port,
+            log_level=self.config.server.log_level.value.upper(),  # type: ignore[arg-type]
         )
-
-        import logging
 
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -123,6 +130,19 @@ class LibrarianServer:
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
         self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
 
+        if not self.config.verification.enabled:
+            logging.info("Verification disabled; skipping claim extraction.")
+        elif self.config.verification.use_llm_claims:
+            logging.info(
+                "LLM claim extraction enabled, model=%s (ollama=%s). "
+                "Run `ollama pull %s` if you have not already.",
+                self.config.verification.claim_model,
+                self.config.verification.ollama_base_url,
+                self.config.verification.claim_model,
+            )
+        else:
+            logging.info("LLM claim extraction disabled; using heuristic sentence split.")
+
         if self.config.tidy.enabled:
             task = asyncio.create_task(self._tidy_loop())
             self._track_background_task(task)
@@ -154,16 +174,12 @@ class LibrarianServer:
             try:
                 await asyncio.sleep(self.config.tidy.interval_seconds)
                 if self.tidier:
-                    import logging
-
                     logging.info("Starting background library tidy...")
                     report = await self.tidier.run_cleanup()
                     logging.info("Library tidy complete: %s", report)
             except asyncio.CancelledError:
                 break
             except Exception:
-                import logging
-
                 logging.error("Exception in background tidy loop", exc_info=True)
                 await asyncio.sleep(60)  # Wait a bit before retrying after error
 
@@ -291,7 +307,3 @@ class LibrarianServer:
                 skip_verify=params.skip_verify,
             )
             return TidyOutput(**report)
-
-
-_server = LibrarianServer(config)
-mcp: FastMCP = _server.mcp  # type: ignore[has-type]
