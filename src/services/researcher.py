@@ -12,6 +12,7 @@ from src.config import LibrarianConfig
 from src.models.enums import ResearchDepth, ResearchJobStatus, SourceType
 from src.services.ingestor import IngestCallOptions, Ingestor
 from src.services.web_search import WebSearchClient
+from src.storage.errors import StorageError
 from src.storage.research_job_repository import ResearchJobRepository
 
 
@@ -127,12 +128,24 @@ class Researcher:
 
             await self._jobs.update(job)
 
+        except StorageError as exc:
+            logging.exception("Research job %s failed: storage error", job_id)
+            job.status = ResearchJobStatus.FAILED
+            job.error = f"Storage error: {exc}"
+            job.finished_at = datetime.now(UTC)
+            try:
+                await self._jobs.update(job)
+            except StorageError:
+                logging.exception("Research job %s failure write also failed (storage)", job_id)
         except Exception as exc:
             logging.exception("Research job %s failed", job_id)
             job.status = ResearchJobStatus.FAILED
             job.error = str(exc)
             job.finished_at = datetime.now(UTC)
-            await self._jobs.update(job)
+            try:
+                await self._jobs.update(job)
+            except StorageError:
+                logging.exception("Research job %s failure write also failed (storage)", job_id)
 
 
 async def plan_search_queries(

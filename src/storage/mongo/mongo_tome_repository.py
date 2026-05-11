@@ -10,13 +10,25 @@ from uuid import UUID
 import numpy as np
 from bson.binary import Binary, BinaryVectorDtype
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
-from pymongo.errors import CollectionInvalid, OperationFailure
+from pymongo.errors import (
+    CollectionInvalid,
+    ConnectionFailure,
+    DuplicateKeyError,
+    OperationFailure,
+    PyMongoError,
+    ServerSelectionTimeoutError,
+)
 from pymongo.operations import SearchIndexModel
 
 from src.config import DatabaseSettings, TidySettings
 from src.models.tome import Tome
 from src.services.duplicate_detection import build_duplicate_groups
 from src.services.embedding import EmbeddingService
+from src.storage.errors import (
+    BackendUnavailableError,
+    DuplicateError,
+    StorageError,
+)
 from src.storage.mongo.mongo_tome import MongoTome
 from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
@@ -55,6 +67,18 @@ def _is_atlas_search_unsupported(exc: OperationFailure) -> bool:
     )
 
 
+def _wrap_mongo(exc: PyMongoError, context: str) -> StorageError:
+    """Translate a generic PyMongoError into the right StorageError subclass.
+
+    Used for read paths where DuplicateKeyError is not a concern. Connectivity
+    failures map to ``BackendUnavailableError``; everything else falls through
+    to a bare ``StorageError`` so the original cause is preserved via ``from``.
+    """
+    if isinstance(exc, ServerSelectionTimeoutError | ConnectionFailure):
+        return BackendUnavailableError(f"Mongo backend unavailable during {context}")
+    return StorageError(f"Mongo {context} failed: {exc.__class__.__name__}")
+
+
 class MongoTomeRepository(TomeRepository):
     """MongoDB implementation of the TomeRepository using Atlas Search.
 
@@ -87,17 +111,28 @@ class MongoTomeRepository(TomeRepository):
     async def insert(self, tome: Tome) -> UUID:
         """Insert a new Tome into MongoDB."""
         mongo_tome = MongoTome.from_tome(tome)
-        await self._collection.insert_one(mongo_tome.model_dump(by_alias=True))
+        try:
+            await self._collection.insert_one(mongo_tome.model_dump(by_alias=True))
+        except DuplicateKeyError as exc:
+            raise DuplicateError(f"Tome {tome.id} already exists") from exc
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "insert") from exc
         return tome.id
 
     async def delete(self, tome_id: UUID) -> bool:
         """Permanently remove a Tome by ID."""
-        result = await self._collection.delete_one({"_id": tome_id})
+        try:
+            result = await self._collection.delete_one({"_id": tome_id})
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "delete") from exc
         return result.deleted_count > 0
 
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Retrieve a single Tome by its ID."""
-        doc = await self._collection.find_one({"_id": tome_id})
+        try:
+            doc = await self._collection.find_one({"_id": tome_id})
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "get_by_id") from exc
         if not doc:
             return None
         return MongoTome.model_validate(doc).to_tome()
@@ -106,8 +141,11 @@ class MongoTomeRepository(TomeRepository):
         """Retrieve a page of Tomes from the library."""
         cursor = self._collection.find().skip(offset).limit(limit)
         results = []
-        async for doc in cursor:
-            results.append(MongoTome.model_validate(doc).to_tome())
+        try:
+            async for doc in cursor:
+                results.append(MongoTome.model_validate(doc).to_tome())
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "list_all") from exc
         return results
 
     async def search(
@@ -126,10 +164,13 @@ class MongoTomeRepository(TomeRepository):
             np.array(query_embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
 
-        lexical_results, vector_results = await asyncio.gather(
-            self._lexical_search(query, top_k, min_confidence, category),
-            self._vector_search(query_vector, top_k, min_confidence, category),
-        )
+        try:
+            lexical_results, vector_results = await asyncio.gather(
+                self._lexical_search(query, top_k, min_confidence, category),
+                self._vector_search(query_vector, top_k, min_confidence, category),
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "search") from exc
 
         return self._merge_results(lexical_results, vector_results, top_k)
 
@@ -256,8 +297,11 @@ class MongoTomeRepository(TomeRepository):
         ]
 
         duplicates = []
-        async for doc in self._collection.aggregate(pipeline):
-            duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
+        try:
+            async for doc in self._collection.aggregate(pipeline):
+                duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "find_near_duplicates") from exc
 
         return duplicates
 
@@ -281,8 +325,11 @@ class MongoTomeRepository(TomeRepository):
             self._tidy_settings.scan_batch_size
         )
         all_tomes: list[Tome] = []
-        async for doc in cursor:
-            all_tomes.append(MongoTome.model_validate(doc).to_tome())
+        try:
+            async for doc in cursor:
+                all_tomes.append(MongoTome.model_validate(doc).to_tome())
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "find_all_near_duplicates") from exc
 
         return build_duplicate_groups(
             all_tomes,
@@ -312,7 +359,13 @@ class MongoTomeRepository(TomeRepository):
                 logger.debug("Collection already exists, skipping creation.")
             else:
                 logger.error("Failed to create collection", exc_info=True)
-                raise
+                raise StorageError("Failed to create Mongo collection") from exc
+        except (ServerSelectionTimeoutError, ConnectionFailure) as exc:
+            raise BackendUnavailableError(
+                "Mongo backend unavailable during ensure_indexes"
+            ) from exc
+        except PyMongoError as exc:
+            raise StorageError("Mongo ensure_indexes failed") from exc
 
         existing_search_indexes: list[str] = []
 
@@ -329,7 +382,13 @@ class MongoTomeRepository(TomeRepository):
                 "Failed to enumerate Atlas search indexes; aborting startup",
                 exc_info=True,
             )
-            raise
+            raise StorageError("Failed to enumerate Atlas search indexes") from exc
+        except (ServerSelectionTimeoutError, ConnectionFailure) as exc:
+            raise BackendUnavailableError(
+                "Mongo backend unavailable during ensure_indexes"
+            ) from exc
+        except PyMongoError as exc:
+            raise StorageError("Mongo ensure_indexes failed") from exc
 
         # 2. Define Vector Search Index
         if "vectors" not in existing_search_indexes:
@@ -351,12 +410,14 @@ class MongoTomeRepository(TomeRepository):
             )
             try:
                 await self._collection.create_search_index(model=vector_model)
-            except OperationFailure:
+            except OperationFailure as exc:
                 logger.error(
                     "Failed to create Atlas vector search index 'vectors'",
                     exc_info=True,
                 )
-                raise
+                raise StorageError("Failed to create Atlas vector search index 'vectors'") from exc
+            except PyMongoError as exc:
+                raise StorageError("Failed to create Atlas vector search index 'vectors'") from exc
 
         # 3. Define Lexical Search Index
         if "default" not in existing_search_indexes:
@@ -365,12 +426,14 @@ class MongoTomeRepository(TomeRepository):
             )
             try:
                 await self._collection.create_search_index(model=lexical_model)
-            except OperationFailure:
+            except OperationFailure as exc:
                 logger.error(
                     "Failed to create Atlas lexical search index 'default'",
                     exc_info=True,
                 )
-                raise
+                raise StorageError("Failed to create Atlas lexical search index 'default'") from exc
+            except PyMongoError as exc:
+                raise StorageError("Failed to create Atlas lexical search index 'default'") from exc
 
     def close(self) -> None:
         """Close the MongoDB client connection."""
