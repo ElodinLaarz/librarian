@@ -64,6 +64,9 @@ The default embedding model has moved from `all-MiniLM-L6-v2` (384 dimensions) t
 ```bash
 docker compose up -d
 docker compose exec ollama ollama pull nomic-embed-text
+# Required for default LLM claim extraction (override via
+# LIBRARIAN_VERIFICATION__CLAIM_MODEL / LIBRARIAN_INGEST__EXTRACTION_MODEL):
+docker compose exec ollama ollama pull gemma2:2b
 ```
 
 **2. Install Python deps:**

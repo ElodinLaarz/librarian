@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -75,8 +76,6 @@ class LibrarianServer:
             log_level=self.config.server.log_level.value.upper(),  # type: ignore[arg-type]
         )
 
-        import logging
-
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -113,6 +112,19 @@ class LibrarianServer:
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
         self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
 
+        if not self.config.verification.enabled:
+            logging.info("Verification disabled; skipping claim extraction.")
+        elif self.config.verification.use_llm_claims:
+            logging.info(
+                "LLM claim extraction enabled, model=%s (ollama=%s). "
+                "Run `ollama pull %s` if you have not already.",
+                self.config.verification.claim_model,
+                self.config.verification.ollama_base_url,
+                self.config.verification.claim_model,
+            )
+        else:
+            logging.info("LLM claim extraction disabled; using heuristic sentence split.")
+
         if self.config.tidy.enabled:
             task = asyncio.create_task(self._tidy_loop())
             self._track_background_task(task)
@@ -144,16 +156,12 @@ class LibrarianServer:
             try:
                 await asyncio.sleep(self.config.tidy.interval_seconds)
                 if self.tidier:
-                    import logging
-
                     logging.info("Starting background library tidy...")
                     report = await self.tidier.run_cleanup()
                     logging.info("Library tidy complete: %s", report)
             except asyncio.CancelledError:
                 break
             except Exception:
-                import logging
-
                 logging.error("Exception in background tidy loop", exc_info=True)
                 await asyncio.sleep(60)  # Wait a bit before retrying after error
 
