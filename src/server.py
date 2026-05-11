@@ -37,8 +37,16 @@ from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
 
-config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
-config = LibrarianConfig.from_yaml(config_path)
+
+def load_config() -> LibrarianConfig:
+    """Resolve the config path from the environment and load the config.
+
+    Kept separate from module import so that importing :mod:`src.server` is
+    side-effect free; configuration errors only surface when callers (e.g.
+    :func:`src.__main__.main`) actually invoke this function.
+    """
+    config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
+    return LibrarianConfig.from_yaml(config_path)
 
 
 class LibrarianServer:
@@ -62,9 +70,9 @@ class LibrarianServer:
                 "is thin on a topic. Use library_tidy to consolidate duplicates."
             ),
             lifespan=self.lifespan,
-            host=config.server.host,
-            port=config.server.port,
-            log_level=config.server.log_level.value.upper(),  # type: ignore[arg-type]
+            host=self.config.server.host,
+            port=self.config.server.port,
+            log_level=self.config.server.log_level.value.upper(),  # type: ignore[arg-type]
         )
 
         import logging
@@ -274,7 +282,3 @@ class LibrarianServer:
                 skip_verify=params.skip_verify,
             )
             return TidyOutput(**report)
-
-
-_server = LibrarianServer(config)
-mcp: FastMCP = _server.mcp  # type: ignore[has-type]

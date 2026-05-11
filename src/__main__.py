@@ -1,6 +1,6 @@
 import argparse
 
-from src.server import _server, mcp
+from src.server import LibrarianServer, load_config
 
 _TRANSPORTS = ("stdio", "sse", "streamable-http")
 
@@ -19,8 +19,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    transport = args.transport or _server.config.server.transport
-    mcp.run(transport=transport)  # type: ignore[arg-type]
+    config = load_config()
+    server = LibrarianServer(config)
+    transport = args.transport or server.config.server.transport
+    server.mcp.run(transport=transport)  # type: ignore[arg-type]
 
 
 main()
