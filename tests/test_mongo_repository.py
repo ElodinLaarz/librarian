@@ -24,7 +24,8 @@ def _mongo_available(uri: str) -> bool:
     """Ping the configured Mongo URI with a short timeout.
 
     Returns True iff a `ping` command succeeds. Any pymongo / network failure
-    is interpreted as "no live Mongo" and triggers a clean skip of the module.
+    is interpreted as "no live Mongo" and triggers a clean skip of the tests
+    decorated with `requires_live_mongo`.
     """
     client: MongoClient | None = None
     try:
