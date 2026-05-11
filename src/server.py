@@ -105,6 +105,19 @@ class LibrarianServer:
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
         self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
 
+        import logging
+
+        if self.config.verification.enabled and self.config.verification.use_llm_claims:
+            logging.info(
+                "LLM claim extraction enabled, model=%s (ollama=%s). "
+                "Run `ollama pull %s` if you have not already.",
+                self.config.verification.claim_model,
+                self.config.verification.ollama_base_url,
+                self.config.verification.claim_model,
+            )
+        else:
+            logging.info("LLM claim extraction disabled; using heuristic sentence split.")
+
         if self.config.tidy.enabled:
             task = asyncio.create_task(self._tidy_loop())
             self._track_background_task(task)

@@ -109,7 +109,7 @@ class VerificationSettings(BaseSettings):
     mock_confidence: float = constants.DEFAULT_MOCK_CONFIDENCE
     noop_confidence: float = constants.DEFAULT_NOOP_CONFIDENCE
     ollama_base_url: str = "http://localhost:11434"
-    claim_model: str = "gemma4:e2b"
+    claim_model: str = "gemma2:2b"
     use_llm_claims: bool = True
     use_llm_verdict: bool = True
     verdict_model: str = ""
@@ -138,7 +138,7 @@ class IngestSettings(BaseSettings):
             "Uncategorized",
         ]
     )
-    extraction_model: str = "gemma4:e2b"
+    extraction_model: str = "gemma2:2b"
     ollama_base_url: str = "http://localhost:11434"
 
 
