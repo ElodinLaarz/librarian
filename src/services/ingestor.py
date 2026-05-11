@@ -21,6 +21,7 @@ from src.models.tome import Tome
 from src.models.tool_schemas import IngestOutput
 from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
+from src.storage.errors import StorageError
 from src.storage.tome_repository import TomeRepository
 
 # Format identifiers used by the syntax-aware chunker. "text" = generic prose
@@ -372,9 +373,17 @@ class Ingestor:
         3. Insert all replacements first to ensure no data loss if the operation is interrupted.
         4. Delete old tomes only once all replacements are successfully persisted.
         """
-        duplicates = await self._tome_repo.find_near_duplicates(tome)
+        try:
+            duplicates = await self._tome_repo.find_near_duplicates(tome)
+        except StorageError as exc:
+            logging.error("Storage error during find_near_duplicates for %s: %s", tome.id, exc)
+            raise ReshardError(f"Storage error during dedup scan: {exc}", tomes=[]) from exc
         if not duplicates:
-            await self._tome_repo.insert(tome)
+            try:
+                await self._tome_repo.insert(tome)
+            except StorageError as exc:
+                logging.error("Storage error during insert for %s: %s", tome.id, exc)
+                raise ReshardError(f"Storage error during insert: {exc}", tomes=[]) from exc
             return [tome]
 
         # Step 1 — build replacements from combined content (nothing persisted yet).
@@ -741,7 +750,7 @@ class Ingestor:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
-        except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
             logging.debug("_extract_facts_llm HTTP/parse error: %s", exc)
             return None
 
@@ -796,7 +805,7 @@ class Ingestor:
         if self._config.ingest.use_llm_classification:
             try:
                 llm_category, llm_tags = await self._classify_and_tag_llm(text)
-            except (httpx.HTTPError, OSError, ValueError) as exc:
+            except (httpx.HTTPError, ValueError) as exc:
                 logging.debug("_classify_and_tag LLM error: %s", exc)
                 llm_category, llm_tags = None, None
 
@@ -933,7 +942,7 @@ class Ingestor:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
-        except (httpx.HTTPError, OSError, ValueError) as exc:
+        except (httpx.HTTPError, ValueError) as exc:
             logging.debug("_summarize_llm HTTP/parse error: %s", exc)
             return None
 
