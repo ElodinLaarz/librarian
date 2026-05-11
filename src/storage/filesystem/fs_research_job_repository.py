@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -40,8 +41,9 @@ class FsResearchJobRepository(ResearchJobRepository):
 
     async def insert(self, job: ResearchJob) -> UUID:
         """Create a new job."""
+        path = self._get_path(job.id)
         try:
-            self._get_path(job.id).write_text(job.model_dump_json(indent=2))
+            await asyncio.to_thread(path.write_text, job.model_dump_json(indent=2))
         except (FileNotFoundError, PermissionError) as exc:
             raise BackendUnavailableError(
                 f"Filesystem storage root unreachable or not writable: {self._jobs_dir}"
@@ -53,10 +55,11 @@ class FsResearchJobRepository(ResearchJobRepository):
     async def update(self, job: ResearchJob) -> None:
         """Replace the existing job with the full current state."""
         path = self._get_path(job.id)
-        if not path.exists():
+        exists = await asyncio.to_thread(path.exists)
+        if not exists:
             raise NotFoundError(f"Job {job.id} does not exist")
         try:
-            path.write_text(job.model_dump_json(indent=2))
+            await asyncio.to_thread(path.write_text, job.model_dump_json(indent=2))
         except (FileNotFoundError, PermissionError) as exc:
             raise BackendUnavailableError(
                 f"Filesystem storage root unreachable or not writable: {self._jobs_dir}"
@@ -67,10 +70,11 @@ class FsResearchJobRepository(ResearchJobRepository):
     async def get_by_id(self, job_id: UUID) -> ResearchJob | None:
         """Load a job if it exists."""
         path = self._get_path(job_id)
-        if not path.exists():
+        exists = await asyncio.to_thread(path.exists)
+        if not exists:
             return None
         try:
-            content = path.read_text()
+            content = await asyncio.to_thread(path.read_text)
         except OSError as exc:
             # Existence check passed but read failed (race, permission).
             # Surface as a storage failure rather than silently masquerading

@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TypeVar
 from uuid import UUID, uuid4
 
 from mcp.server import FastMCP
@@ -37,8 +39,45 @@ from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from src.storage.research_job_repository import ResearchJobRepository
 from src.storage.tome_repository import TomeRepository
 
-config_path = Path(os.environ.get("LIBRARIAN_CONFIG", "config.yml"))
-config = LibrarianConfig.from_yaml(config_path)
+_T = TypeVar("_T")
+
+DEFAULT_CONFIG_PATH = Path("librarian.config.yaml")
+EXAMPLE_CONFIG_FILENAME = "librarian.config.example.yaml"
+
+
+def load_config() -> LibrarianConfig:
+    """Resolve the config path and load it, with a friendly error on first run.
+
+    Kept separate from module import so that importing :mod:`src.server` is
+    side-effect free; configuration errors only surface when callers (e.g.
+    :func:`src.__main__.main`) actually invoke this function.
+
+    Resolution order:
+    1. ``LIBRARIAN_CONFIG`` env var (explicit, no fallback message).
+    2. ``DEFAULT_CONFIG_PATH`` (``librarian.config.yaml``) in CWD.
+
+    When the default path is missing and no env var is set, attempt to load
+    so that environment-only configuration still works; if that fails, raise
+    a friendly error pointing users at ``librarian.config.example.yaml``.
+    """
+    explicit = os.environ.get("LIBRARIAN_CONFIG")
+    path = Path(explicit) if explicit else DEFAULT_CONFIG_PATH
+
+    if explicit or path.exists():
+        return LibrarianConfig.from_yaml(path)
+
+    # Default path missing and no explicit env var. Allow env-only configuration
+    # (e.g. LIBRARIAN_DATABASE_URI is set) by attempting the load; if validation
+    # fails, surface a message that points at the example file.
+    try:
+        return LibrarianConfig.from_yaml(path)
+    except ValueError as exc:
+        raise ValueError(
+            f"No config found at {path} and LIBRARIAN_CONFIG is not set. "
+            f"Copy {EXAMPLE_CONFIG_FILENAME} to {DEFAULT_CONFIG_PATH} "
+            f"(or set LIBRARIAN_CONFIG to point at your config file) and edit "
+            f"as needed.\n\nUnderlying error:\n{exc}"
+        ) from exc
 
 
 class LibrarianServer:
@@ -62,12 +101,10 @@ class LibrarianServer:
                 "is thin on a topic. Use library_tidy to consolidate duplicates."
             ),
             lifespan=self.lifespan,
-            host=config.server.host,
-            port=config.server.port,
-            log_level=config.server.log_level.value.upper(),  # type: ignore[arg-type]
+            host=self.config.server.host,
+            port=self.config.server.port,
+            log_level=self.config.server.log_level.value.upper(),  # type: ignore[arg-type]
         )
-
-        import logging
 
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -77,6 +114,21 @@ class LibrarianServer:
     def _track_background_task(self, task: asyncio.Task[None]) -> None:
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
+
+    def _require(self, value: _T | None, name: str) -> _T:
+        """Return ``value`` if not ``None`` else raise a clear ``RuntimeError``.
+
+        Tool handlers cannot rely on ``assert`` for this because ``assert``
+        statements are stripped under ``python -O``, which would turn an
+        un-initialised server into a silent ``AttributeError`` on ``None``
+        instead of a clear, actionable error. Using a helper that returns the
+        non-``None`` value also preserves type narrowing under mypy strict.
+        """
+        if value is None:
+            raise RuntimeError(
+                f"LibrarianServer not initialised — lifespan did not run (missing: {name})"
+            )
+        return value
 
     @asynccontextmanager
     async def lifespan(self, _server_mcp: FastMCP) -> AsyncIterator[None]:
@@ -104,6 +156,19 @@ class LibrarianServer:
         self.ingestor = Ingestor(self.config, self._embedding_service, verifier, self.tome_repo)
         self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
         self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
+
+        if not self.config.verification.enabled:
+            logging.info("Verification disabled; skipping claim extraction.")
+        elif self.config.verification.use_llm_claims:
+            logging.info(
+                "LLM claim extraction enabled, model=%s (ollama=%s). "
+                "Run `ollama pull %s` if you have not already.",
+                self.config.verification.claim_model,
+                self.config.verification.ollama_base_url,
+                self.config.verification.claim_model,
+            )
+        else:
+            logging.info("LLM claim extraction disabled; using heuristic sentence split.")
 
         if self.config.tidy.enabled:
             task = asyncio.create_task(self._tidy_loop())
@@ -136,22 +201,18 @@ class LibrarianServer:
             try:
                 await asyncio.sleep(self.config.tidy.interval_seconds)
                 if self.tidier:
-                    import logging
-
                     logging.info("Starting background library tidy...")
                     report = await self.tidier.run_cleanup()
                     logging.info("Library tidy complete: %s", report)
             except asyncio.CancelledError:
                 break
             except Exception:
-                import logging
-
                 logging.error("Exception in background tidy loop", exc_info=True)
                 await asyncio.sleep(60)  # Wait a bit before retrying after error
 
     async def _research_poll(self, job_id: UUID) -> ResearchOutput:
-        assert self.job_repo is not None
-        job = await self.job_repo.get_by_id(job_id)
+        job_repo = self._require(self.job_repo, "job_repo")
+        job = await job_repo.get_by_id(job_id)
         if job is None:
             return ResearchOutput(
                 job_id=str(job_id),
@@ -180,9 +241,9 @@ class LibrarianServer:
         @self.mcp.tool()
         async def library_search(params: SearchInput) -> SearchOutput:
             """Search the library for relevant Tomes using semantic vector search."""
-            assert self.tome_repo is not None, "Server not initialised"
+            tome_repo = self._require(self.tome_repo, "tome_repo")
 
-            results = await self.tome_repo.search(
+            results = await tome_repo.search(
                 query=params.query,
                 top_k=params.top_k,
                 min_confidence=params.min_confidence,
@@ -207,7 +268,7 @@ class LibrarianServer:
         @self.mcp.tool()
         async def library_ingest(params: IngestInput) -> IngestOutput:
             """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
-            assert self.ingestor is not None, "Server not initialised"
+            ingestor = self._require(self.ingestor, "ingestor")
             opts = IngestCallOptions(
                 skip_verify=params.skip_verify,
                 category_hint=params.category,
@@ -215,14 +276,13 @@ class LibrarianServer:
                 source_url=params.source_url,
                 force_format=params.force_format,
             )
-            return await self.ingestor.ingest(params.content, opts)
+            return await ingestor.ingest(params.content, opts)
 
         @self.mcp.tool()
         async def library_research(params: ResearchInput) -> ResearchOutput:
             """Research a topic on the web and ingest findings as new Tomes."""
-            assert self.job_repo is not None and self.researcher is not None, (
-                "Server not initialised"
-            )
+            job_repo = self._require(self.job_repo, "job_repo")
+            researcher = self._require(self.researcher, "researcher")
 
             if params.job_id:
                 job_id_str = params.job_id.strip()
@@ -251,30 +311,26 @@ class LibrarianServer:
                 max_tomes=params.max_tomes,
                 category=params.category,
             )
-            await self.job_repo.insert(job)
+            await job_repo.insert(job)
 
             if params.async_:
-                task = asyncio.create_task(self.researcher.run_job(job.id))
+                task = asyncio.create_task(researcher.run_job(job.id))
                 self._track_background_task(task)
                 return ResearchOutput(
                     job_id=str(job.id),
                     status=ResearchJobStatus.PENDING.value,
                 )
 
-            await self.researcher.run_job(job.id)
+            await researcher.run_job(job.id)
             return await self._research_poll(job.id)
 
         @self.mcp.tool()
         async def library_tidy(params: TidyInput) -> TidyOutput:
             """Review the library tomes and remove duplicates by combining similar topics."""
-            assert self.tidier is not None, "Server not initialised"
-            report = await self.tidier.run_cleanup(
+            tidier = self._require(self.tidier, "tidier")
+            report = await tidier.run_cleanup(
                 limit=params.limit,
                 threshold=params.threshold,
                 skip_verify=params.skip_verify,
             )
             return TidyOutput(**report)
-
-
-_server = LibrarianServer(config)
-mcp: FastMCP = _server.mcp  # type: ignore[has-type]

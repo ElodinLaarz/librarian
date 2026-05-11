@@ -186,31 +186,45 @@ Dependencies: `LibrarianConfig`, `EmbeddingService`, `Verifier`,
 
 | Method | Signature | Returns | Notes |
 | ----------------------------- | ----------------------------------------- | ------------ | --------------------------------------------------------------- |
-| `ingest` | `(blob: str)` | `list[Tome]` | Full pipeline: chunk → per-chunk (classify+summarize+embed) → validate → dedup → store |
-| `_chunk` | `(blob: str)` | `list[str]` | LLM-driven decomposition into atomic, self-contained facts |
+| `ingest` | `(blob: str)` | `list[Tome]` | Full pipeline: shard → per-shard (classify+summarize+embed) → validate → dedup → store |
+| `_reshard` | `(blob: str)` | `list[str]` | Syntax-aware deterministic split of the source into shards |
+| `_extract_facts_llm` | `(blob: str)` | `list[str] \| None` | **Opt-in rewrite** (not split): LLM regenerates source as atomic facts; truncates at `ingest.llm_extraction_max_chars`. Disabled by default — see caveat below. |
 | `_validate` | `(tome: Tome)` | `None` | Post-construction checks; raises on failure |
-| `_classify_and_tag` | `(chunk: str, category_hint: str\|None)` | `(str, list[str])` | Returns `(category, tags)` |
-| `_generate_title_and_summary` | `(chunk: str)` | `(str, str)` | Returns `(title, summary)` |
+| `_classify_and_tag` | `(shard: str, category_hint: str\|None)` | `(str, list[str])` | Returns `(category, tags)` |
+| `_generate_title_and_summary` | `(shard: str)` | `(str, str)` | Returns `(title, summary)` |
 | `_dedup_and_store` | `(tome: Tome)` | `list[UUID]` | Near-dup check → reshard or insert; returns stored Tome IDs |
 
 **Pipeline:**
 
-1. `_chunk` — LLM prompt decomposes the input blob into atomic,
-   self-contained facts. Each chunk must stand alone without requiring
-   surrounding context. A short single-fact input produces one chunk; a dense
-   multi-topic document produces many.
-1. For each chunk, concurrently via `asyncio.gather`:
+1. `_reshard` — split the input blob into shards. The default path is
+   syntax-aware deterministic splitting via LangChain's
+   `RecursiveCharacterTextSplitter` (and language-specific variants for code /
+   markdown / JSON / YAML). For prose, if `ingest.use_llm_chunking` is enabled,
+   the splitter is replaced with `_extract_facts_llm`, which **rewrites** the
+   source into atomic factual statements rather than splitting it (see
+   semantic caveat at the end of this section). A short single-fact input
+   produces one shard; a dense multi-topic document produces many.
+1. For each shard, concurrently via `asyncio.gather`:
    - `_classify_and_tag`
    - `_generate_title_and_summary`
    - `EmbeddingService.embed`
 1. Construct a `Tome` from the results and run `_validate`
-1. `Verifier.verify` on the chunk — reject chunk if `confidence < reject_threshold`
+1. `Verifier.verify` on the shard — reject shard if `confidence < reject_threshold`
 1. `_dedup_and_store`:
    - Call `TomeRepository.find_near_duplicates(tome)`
    - **No duplicates** → `TomeRepository.insert(tome)`
-   - **Duplicates found** → reshard: combine this chunk's content with all
+   - **Duplicates found** → reshard: combine this shard's content with all
      overlapping Tomes' content, re-run from step 1 on the combined text,
      delete old Tomes, insert fresh ones
+
+**Caveat — `ingest.use_llm_chunking` rewrites content semantics.** Despite the
+flag name, `_extract_facts_llm` is **not** a chunker: it asks the LLM to
+decompose prose into atomic factual statements, which are generated text and
+may differ in wording (and meaning) from the source. Input is silently
+truncated at `ingest.llm_extraction_max_chars` (default `8000`) before the
+prompt is built, so the tail of long documents is dropped. The flag defaults
+to `False`; the ingestor emits a `WARNING` log on construction whenever it is
+enabled.
 
 ______________________________________________________________________
 
@@ -338,17 +352,19 @@ ______________________________________________________________________
 
 ### Journey C — Ingest (new content, no duplicates)
 
-A large document is decomposed into two atomic facts upfront; each is stored as
-an independent Tome.
+A large document is split into two shards upfront; each is stored as an
+independent Tome.
 
 ```
 Agent → library_ingest(content="<article covering facts A and B>")
   Ingestor.ingest(blob):
-    _chunk(blob):
-      LLM: "decompose into atomic, self-contained facts"
+    _reshard(blob):
+      RecursiveCharacterTextSplitter (default) — or, if
+      ingest.use_llm_chunking=True, _extract_facts_llm rewrites the
+      blob into atomic factual statements (see caveat in §3.2).
       → ["Fact A (standalone)", "Fact B (standalone)"]
 
-    chunk "Fact A":
+    shard "Fact A":
       concurrently:
         _classify_and_tag()           → ("science", ["tag_a"])
         _generate_title_and_summary() → ("Title A", "Summary A")
@@ -360,7 +376,7 @@ Agent → library_ingest(content="<article covering facts A and B>")
         tome_repo.find_near_duplicates(tome_a) → []
         tome_repo.insert(tome_a) → uuid_a
 
-    chunk "Fact B":
+    shard "Fact B":
       concurrently:
         _classify_and_tag()           → ("science", ["tag_b"])
         _generate_title_and_summary() → ("Title B", "Summary B")
@@ -384,14 +400,14 @@ ______________________________________________________________________
 ### Journey D — Ingest (duplicate → reshard)
 
 A single-fact input overlaps with an existing Tome. The combined content is
-re-chunked and re-ingested; the old Tome is deleted.
+re-sharded and re-ingested; the old Tome is deleted.
 
 ```
 Agent → library_ingest(content="updated fact about X with new detail")
   Ingestor.ingest(blob):
-    _chunk(blob) → ["updated fact about X with new detail"]  ← single chunk
+    _reshard(blob) → ["updated fact about X with new detail"]  ← single shard
 
-    chunk "updated fact about X with new detail":
+    shard "updated fact about X with new detail":
       concurrently:
         _classify_and_tag()           → ("science", ["tag_a"])
         _generate_title_and_summary() → ("Title A v2", "Summary A v2")
@@ -405,8 +421,8 @@ Agent → library_ingest(content="updated fact about X with new detail")
 
         reshard:
           combined = "original fact about X\n\nupdated fact about X with new detail"
-          _chunk(combined) → ["Resharded fact A", "Resharded fact B"]
-          for each resharded chunk → full pipeline (classify, summarize, embed,
+          _reshard(combined) → ["Resharded fact A", "Resharded fact B"]
+          for each resharded shard → full pipeline (classify, summarize, embed,
                                      validate, verify, dedup-or-insert)
             → Tome_ra → uuid_ra
             → Tome_rb → uuid_rb

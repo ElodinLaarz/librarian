@@ -115,7 +115,7 @@ When finished:
 From the repo root:
 
 ```bash
-LIBRARIAN_CONFIG="$PWD/librarian.config.yaml" uv run python -c "from src.server import config; print('OK:', config.database.uri)"
+LIBRARIAN_CONFIG="$PWD/librarian.config.yaml" uv run python -c "from src.server import load_config; print('OK:', load_config().database.uri)"
 ```
 
 You should see `OK:` and your database URI. If this fails, fix config/uv before debugging Cursor.
