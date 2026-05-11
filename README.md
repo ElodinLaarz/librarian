@@ -198,4 +198,10 @@ ruff check . && ruff format .
 mypy src
 ```
 
-Tests use in-memory stubs for all services — no MongoDB or embedding model needed for the unit test suite. Integration tests in `tests/test_mongo_repository.py` require a running MongoDB instance.
+Tests use in-memory stubs for all services — no MongoDB or embedding model needed for the unit test suite. Integration tests in `tests/test_mongo_repository.py` require a running MongoDB instance; when one is not reachable those tests skip automatically (a fast ping with `serverSelectionTimeoutMS=500` decides).
+
+### Test environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LIBRARIAN_TEST_MONGO_URI` | `mongodb://localhost:27017/?directConnection=true` | Mongo URI used by `tests/test_mongo_repository.py`. Set to point at a non-default instance, or leave unset and the live-Mongo tests will skip cleanly when no Mongo is running. |
