@@ -187,15 +187,26 @@ Then point the client at the SSE endpoint:
 
 ## Development
 
+Install dev tools (pytest, pytest-asyncio, ruff, mypy, mdformat, pre-commit):
+
+```bash
+uv sync --extra dev
+```
+
+Then:
+
 ```bash
 # Run tests (no external deps required)
-pytest
+uv run pytest
 
 # Lint + format
-ruff check . && ruff format .
+uv run ruff check . && uv run ruff format .
 
 # Type check
-mypy src
+uv run mypy src
+
+# Markdown formatting check
+git ls-files -z '*.md' | xargs -0 -r uv run mdformat --check
 ```
 
 Tests use in-memory stubs for all services — no MongoDB or embedding model needed for the unit test suite. Integration tests in `tests/test_mongo_repository.py` require a running MongoDB instance.
