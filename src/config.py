@@ -126,7 +126,16 @@ class IngestSettings(BaseSettings):
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
+    # NOTE: ``use_llm_chunking`` is a misnomer kept for backward compatibility.
+    # The flag toggles ``Ingestor._extract_facts_llm`` (LLM fact extraction),
+    # which **rewrites** the source into atomic factual statements rather than
+    # splitting it. It also truncates input at ``llm_extraction_max_chars``.
+    # See README and lld.md for the full semantic caveat. Default is False.
     use_llm_chunking: bool = False
+    # Max characters of source forwarded to the LLM fact-extraction prompt.
+    # Anything beyond this is silently dropped; large documents will lose
+    # tail content unless they also fall back to the recursive splitter.
+    llm_extraction_max_chars: int = Field(default=constants.MAX_LLM_INPUT_CHARS, ge=1)
     use_llm_summary: bool = True
     use_llm_classification: bool = True
     taxonomy: list[str] = Field(
