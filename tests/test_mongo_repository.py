@@ -11,6 +11,7 @@ from pymongo.errors import OperationFailure
 from src.config import DatabaseSettings
 from src.models.enums import SourceType
 from src.models.tome import Tome
+from src.storage.errors import StorageError
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from tests.stubs import StubEmbeddingService
 
@@ -215,10 +216,13 @@ async def test_ensure_indexes_propagates_operation_failure(
 
     with (
         caplog.at_level(logging.ERROR, logger="src.storage.mongo.mongo_tome_repository"),
-        pytest.raises(OperationFailure),
+        pytest.raises(StorageError) as ei,
     ):
         await repo.ensure_indexes()
 
+    # The original driver error is preserved as the StorageError's cause so
+    # operators retain the underlying details when debugging.
+    assert isinstance(ei.value.__cause__, OperationFailure)
     assert any(
         record.levelno >= logging.ERROR and "search index" in record.getMessage().lower()
         for record in caplog.records
@@ -261,5 +265,6 @@ async def test_ensure_indexes_propagates_create_search_index_failure() -> None:
         ),
     )
 
-    with pytest.raises(OperationFailure):
+    with pytest.raises(StorageError) as ei:
         await repo.ensure_indexes()
+    assert isinstance(ei.value.__cause__, OperationFailure)
