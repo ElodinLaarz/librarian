@@ -1,12 +1,14 @@
 import asyncio
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
-from pymongo.errors import OperationFailure
+from pymongo import MongoClient
+from pymongo.errors import OperationFailure, PyMongoError
 
 from src.config import DatabaseSettings
 from src.models.enums import SourceType
@@ -14,11 +16,43 @@ from src.models.tome import Tome
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from tests.stubs import StubEmbeddingService
 
+DEFAULT_TEST_MONGO_URI = "mongodb://localhost:27017/?directConnection=true"
+TEST_MONGO_URI = os.environ.get("LIBRARIAN_TEST_MONGO_URI", DEFAULT_TEST_MONGO_URI)
+
+
+def _mongo_available(uri: str) -> bool:
+    """Ping the configured Mongo URI with a short timeout.
+
+    Returns True iff a `ping` command succeeds. Any pymongo / network failure
+    is interpreted as "no live Mongo" and triggers a clean skip of the tests
+    decorated with `requires_live_mongo`.
+    """
+    client: MongoClient | None = None
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=500)
+        client.admin.command("ping")
+        return True
+    except (PyMongoError, OSError):
+        return False
+    finally:
+        if client is not None:
+            client.close()
+
+
+requires_live_mongo = pytest.mark.skipif(
+    not _mongo_available(TEST_MONGO_URI),
+    reason=(
+        f"No live MongoDB reachable at {TEST_MONGO_URI!r}. "
+        "Set LIBRARIAN_TEST_MONGO_URI to point at a running instance to enable "
+        "the live-Mongo tests in tests/test_mongo_repository.py."
+    ),
+)
+
 
 @pytest.fixture
 async def mongo_repo() -> AsyncIterator[MongoTomeRepository]:
     settings = DatabaseSettings(
-        uri="mongodb://localhost:27017/?directConnection=true",
+        uri=TEST_MONGO_URI,
         tls=False,
         tls_cert_path="/dev/null",
         database="test_library",
@@ -51,6 +85,7 @@ async def mongo_repo() -> AsyncIterator[MongoTomeRepository]:
     repo.close()
 
 
+@requires_live_mongo
 @pytest.mark.asyncio
 async def test_insert_and_get(mongo_repo: MongoTomeRepository) -> None:
     tome = Tome(
@@ -73,6 +108,7 @@ async def test_insert_and_get(mongo_repo: MongoTomeRepository) -> None:
     assert retrieved.title == tome.title
 
 
+@requires_live_mongo
 @pytest.mark.asyncio
 async def test_find_near_duplicates(mongo_repo: MongoTomeRepository) -> None:
     random_embedding = np.random.rand(768).astype(np.float32)
@@ -110,6 +146,7 @@ async def test_find_near_duplicates(mongo_repo: MongoTomeRepository) -> None:
     assert duplicates[0].id == tome2.id
 
 
+@requires_live_mongo
 @pytest.mark.asyncio
 async def test_search(mongo_repo: MongoTomeRepository) -> None:
     tome = Tome(
@@ -154,7 +191,7 @@ def _build_repo_with_mocked_collection(
     Avoids any network round trip so the test can run without a live mongod.
     """
     settings = DatabaseSettings(
-        uri="mongodb://localhost:27017/?directConnection=true",
+        uri=TEST_MONGO_URI,
         tls=False,
         tls_cert_path="/dev/null",
         database="test_library",
