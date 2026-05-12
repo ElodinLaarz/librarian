@@ -10,7 +10,7 @@ An MCP server that gives AI agents a persistent, searchable knowledge base. The 
 | `library.ingest` | Implemented | Splits content into shards, generates embeddings, deduplicates, and stores tomes; optional `skip_verify`, `category`, `tags`, `source_url` |
 | `library.research` | Implemented | Plans queries (Ollama optional), searches the web, fetches pages, ingests findings; `async: true` returns a `job_id` for polling |
 | `library.tidy` | Implemented | Scan the library for near-duplicate tomes and consolidate them; tunable `limit`, `threshold`, and `skip_verify` |
-| `library.delete` | Implemented | Permanently remove a tome by UUID hex `tome_id`; returns `deleted=False` with `error="invalid_id"` or `"not_found"` instead of raising |
+| `library.delete` | Implemented | Permanently remove a tome by its UUID (hex or hyphenated) `tome_id`; returns `deleted=False` with `error="invalid_id"` or `"not_found"` instead of raising |
 
 ### Usage pattern
 
