@@ -104,12 +104,13 @@ class MongoTomeRepository(TomeRepository):
         ``close()`` for backwards compatibility with the previous API and
         with tests that construct repos directly.
         """
-        if client is None:
-            self._client: AsyncIOMotorClient[Mapping[str, Any]] = build_motor_client(settings)
-            self._owns_client = True if owns_client is None else owns_client
-        else:
-            self._client = client
-            self._owns_client = False if owns_client is None else owns_client
+        self._client: AsyncIOMotorClient[Mapping[str, Any]] = (
+            client if client is not None else build_motor_client(settings)
+        )
+        # Default ownership tracks whether the caller supplied the client: a
+        # repo that built its own client closes it; one handed a shared client
+        # does not. ``owns_client`` lets callers override this for tests.
+        self._owns_client = owns_client if owns_client is not None else (client is None)
 
         self._embedding_service = embedding_service
         self._tidy_settings = tidy_settings or TidySettings()

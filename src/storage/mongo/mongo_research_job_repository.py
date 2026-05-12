@@ -39,12 +39,11 @@ class MongoResearchJobRepository(ResearchJobRepository):
         semantics. The lifespan-owned shared client is passed in via ``client``
         so all Mongo repos share a single connection pool (issue #25).
         """
-        if client is None:
-            self._client: AsyncIOMotorClient[Mapping[str, Any]] = build_motor_client(settings)
-            self._owns_client = True if owns_client is None else owns_client
-        else:
-            self._client = client
-            self._owns_client = False if owns_client is None else owns_client
+        self._client: AsyncIOMotorClient[Mapping[str, Any]] = (
+            client if client is not None else build_motor_client(settings)
+        )
+        # See ``MongoTomeRepository.__init__`` for ownership semantics.
+        self._owns_client = owns_client if owns_client is not None else (client is None)
 
         db = self._client.get_database(settings.database)
         self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.jobs_collection]
