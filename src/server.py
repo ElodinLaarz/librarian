@@ -75,9 +75,24 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[: max_chars - len(_TRUNCATION_ELLIPSIS)] + _TRUNCATION_ELLIPSIS
 
 
-def _extract_snippet(content: str, query: str, window: int) -> str:
-    """Return a ``window``-char excerpt of ``content`` centred on the first
-    case-insensitive match of any token in ``query``.
+def _compile_query_pattern(query: str) -> re.Pattern[str] | None:
+    """Compile a case-insensitive regex matching any lexical token in ``query``.
+
+    Returns ``None`` when the query yields no tokens. Tokenising once per
+    `library_search` invocation (rather than once per hit) avoids redundant
+    work, and using a single regex with ``re.IGNORECASE`` lets snippet
+    extraction skip an expensive ``content.lower()`` copy on each hit — a
+    real concern given that stored content can run to hundreds of KB.
+    """
+    terms = _QUERY_TERM_RE.findall(query)
+    if not terms:
+        return None
+    return re.compile("|".join(re.escape(t) for t in terms), re.IGNORECASE)
+
+
+def _extract_snippet(content: str, pattern: re.Pattern[str] | None, window: int) -> str:
+    """Return a ``window``-char excerpt of ``content`` centred on the earliest
+    case-insensitive match of ``pattern``.
 
     Falls back to the leading ``window`` characters when no term matches.
     Adds leading/trailing ellipses when the excerpt does not touch the
@@ -88,16 +103,13 @@ def _extract_snippet(content: str, query: str, window: int) -> str:
     if len(content) <= window:
         return content
 
-    terms = [t for t in _QUERY_TERM_RE.findall(query.lower()) if t]
-    lower = content.lower()
     match_idx = -1
     match_len = 0
-    for term in terms:
-        idx = lower.find(term)
-        if idx != -1:
-            match_idx = idx
-            match_len = len(term)
-            break
+    if pattern is not None:
+        match = pattern.search(content)
+        if match is not None:
+            match_idx = match.start()
+            match_len = match.end() - match.start()
 
     if match_idx == -1:
         # Leading window with trailing ellipsis (we know content is longer than window).
@@ -409,6 +421,11 @@ class LibrarianServer:
             scores = [s for _, s in results]
             search_cfg = self.config.search
 
+            # Compile the query pattern once for all snippet extractions —
+            # tokenising per-hit would re-run the same regex setup ``top_k``
+            # times for no gain.
+            query_pattern = _compile_query_pattern(params.query)
+
             # Resolve effective payload knobs: per-call overrides win, with
             # the server config defaults filling in when callers do not opt in.
             effective_max_chars = (
@@ -434,7 +451,7 @@ class LibrarianServer:
                     new_content = ""
                     modified = True
                 elif effective_snippet_chars and effective_snippet_chars > 0:
-                    snippet = _extract_snippet(t.content, params.query, effective_snippet_chars)
+                    snippet = _extract_snippet(t.content, query_pattern, effective_snippet_chars)
                     # Treat the hit as snippet-ised whenever we ran extraction
                     # against content longer than the requested window.
                     modified = len(t.content) > effective_snippet_chars
