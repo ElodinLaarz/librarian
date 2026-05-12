@@ -86,7 +86,11 @@ class GetInput(BaseModel):
     tome_id: str = Field(
         ...,
         max_length=200,
-        description="UUID hex string identifying the Tome to retrieve.",
+        description=(
+            "UUID string identifying the Tome to retrieve. Accepts the "
+            "canonical hyphenated form (e.g. as returned by library_search) "
+            "as well as bare hex."
+        ),
     )
 
 

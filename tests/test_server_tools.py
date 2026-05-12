@@ -137,6 +137,30 @@ async def test_library_get_returns_tome_when_present() -> None:
     assert result.error is None
 
 
+async def test_library_get_accepts_canonical_hyphenated_uuid() -> None:
+    """library_get must accept the canonical hyphenated UUID form (the default
+    str(uuid) representation also used by Tome.id serialisation)."""
+    from src.models.tool_schemas import GetInput
+    from src.server import LibrarianServer
+
+    server = LibrarianServer(make_test_config())
+    repo = StubTomeRepository()
+    tome = _make_tome()
+    await repo.insert(tome)
+    server.tome_repo = repo
+
+    library_get = next(
+        t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_get"
+    )
+
+    canonical = str(tome.id)
+    assert "-" in canonical  # sanity: confirm we're exercising the hyphenated path
+    result = await library_get(GetInput(tome_id=canonical))
+    assert result.status == "found"
+    assert result.tome is not None
+    assert result.tome.id == tome.id
+
+
 async def test_library_get_returns_not_found_for_unknown_id() -> None:
     """library_get returns a not_found status for an unknown but valid UUID."""
     from src.models.tool_schemas import GetInput

@@ -334,12 +334,14 @@ class LibrarianServer:
 
             raw_id = params.tome_id.strip()
             try:
-                tome_uuid = UUID(hex=raw_id)
+                # Use the default UUID constructor so we accept both hyphenated
+                # canonical form (as serialised by Tome.id) and bare-hex form.
+                tome_uuid = UUID(raw_id)
             except ValueError:
                 return GetOutput(
                     tome=None,
                     status="invalid_tome_id",
-                    error="tome_id must be a UUID hex string",
+                    error="tome_id must be a valid UUID string",
                 )
 
             tome = await tome_repo.get_by_id(tome_uuid)
