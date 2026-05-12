@@ -146,12 +146,15 @@ class FsTomeRepository(TomeRepository):
         category: str | None,
         min_confidence: float,
         research_job_id: UUID | None,
+        thread_id: UUID | None,
     ) -> bool:
         if category is not None and tome.category != category:
             return False
         if tome.confidence < min_confidence:
             return False
-        return not (research_job_id is not None and tome.research_job_id != research_job_id)
+        if research_job_id is not None and tome.research_job_id != research_job_id:
+            return False
+        return thread_id is None or tome.thread_id == thread_id
 
     async def list_all(
         self,
@@ -161,8 +164,12 @@ class FsTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> list[Tome]:
         """Return a filtered + paginated page of Tomes, newest first.
+
+        When thread_id is set, return tomes in that thread sorted by thread_position
+        ascending (conversational order). Otherwise, sort by created_at descending.
 
         Scans every JSON file under the tomes directory and filters in
         memory — acknowledged to be O(n) per call; acceptable for the
@@ -183,9 +190,14 @@ class FsTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
+                thread_id=thread_id,
             )
         ]
-        filtered.sort(key=lambda x: x.created_at, reverse=True)
+        # If thread_id is set, sort by thread_position ascending; otherwise by created_at descending
+        if thread_id is not None:
+            filtered.sort(key=lambda x: x.thread_position if x.thread_position is not None else 0)
+        else:
+            filtered.sort(key=lambda x: x.created_at, reverse=True)
         return filtered[offset : offset + limit]
 
     async def count(
@@ -194,6 +206,7 @@ class FsTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> int:
         """Count Tomes matching the same filter predicates as :meth:`list_all`."""
         try:
@@ -208,6 +221,7 @@ class FsTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
+                thread_id=thread_id,
             )
         )
 

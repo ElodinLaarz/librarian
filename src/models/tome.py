@@ -54,6 +54,8 @@ class Tome(BaseModel):
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
     research_job_id: UUID | None = None
+    thread_id: UUID | None = None
+    thread_position: int | None = None
     # ``None`` for tomes ingested before this field existed (loaded as-is from
     # the FS/Mongo backends — see issue #41 migration notes) or for tomes whose
     # ingest path did not run the verifier at all.

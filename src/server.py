@@ -354,11 +354,20 @@ class LibrarianServer:
         async def library_ingest(params: IngestInput) -> IngestOutput:
             """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
             ingestor = self._require(self.ingestor, "ingestor")
+
+            thread_uuid: UUID | None = None
+            if params.thread_id is not None:
+                try:
+                    thread_uuid = UUID(hex=params.thread_id.strip())
+                except ValueError as exc:
+                    raise ValueError("thread_id must be a UUID hex string") from exc
+
             opts = IngestCallOptions(
                 skip_verify=params.skip_verify,
                 category_hint=params.category,
                 tags_hint=params.tags,
                 source_url=params.source_url,
+                thread_id=thread_uuid,
                 force_format=params.force_format,
             )
             return await ingestor.ingest(params.content, opts)
@@ -490,6 +499,13 @@ class LibrarianServer:
                 except ValueError as exc:
                     raise ValueError("research_job_id must be a UUID hex string") from exc
 
+            thread_uuid: UUID | None = None
+            if params.thread_id is not None:
+                try:
+                    thread_uuid = UUID(hex=params.thread_id.strip())
+                except ValueError as exc:
+                    raise ValueError("thread_id must be a UUID hex string") from exc
+
             page, total = await asyncio.gather(
                 tome_repo.list_all(
                     limit=params.limit,
@@ -497,11 +513,13 @@ class LibrarianServer:
                     category=params.category,
                     min_confidence=params.min_confidence,
                     research_job_id=research_job_uuid,
+                    thread_id=thread_uuid,
                 ),
                 tome_repo.count(
                     category=params.category,
                     min_confidence=params.min_confidence,
                     research_job_id=research_job_uuid,
+                    thread_id=thread_uuid,
                 ),
             )
 

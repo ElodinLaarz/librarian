@@ -123,12 +123,17 @@ class StubTomeRepository(TomeRepository):
         category: str | None,
         min_confidence: float,
         research_job_id: UUID | None,
+        thread_id: UUID | None,
     ) -> bool:
         if category is not None and tome.category != category:
             return False
         if tome.confidence < min_confidence:
             return False
-        return not (research_job_id is not None and tome.research_job_id != research_job_id)
+        if research_job_id is not None and tome.research_job_id != research_job_id:
+            return False
+        if thread_id is not None and tome.thread_id != thread_id:
+            return False
+        return True
 
     async def list_all(
         self,
@@ -138,6 +143,7 @@ class StubTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> list[Tome]:
         filtered = [
             t
@@ -147,9 +153,14 @@ class StubTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
+                thread_id=thread_id,
             )
         ]
-        filtered.sort(key=lambda x: x.created_at, reverse=True)
+        # If thread_id is set, sort by thread_position ascending; otherwise by created_at descending
+        if thread_id is not None:
+            filtered.sort(key=lambda x: x.thread_position if x.thread_position is not None else 0)
+        else:
+            filtered.sort(key=lambda x: x.created_at, reverse=True)
         return filtered[offset : offset + limit]
 
     async def count(
@@ -158,6 +169,7 @@ class StubTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> int:
         return sum(
             1
@@ -167,6 +179,7 @@ class StubTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
+                thread_id=thread_id,
             )
         )
 

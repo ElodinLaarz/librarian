@@ -1444,3 +1444,70 @@ class TestLlmFactExtractionRename:
         assert any("use_llm_chunking" in r.getMessage() for r in warning_records), (
             "Expected a startup WARNING mentioning use_llm_chunking"
         )
+
+
+# ── thread grouping / conversational memory (issue #49) ──────────────────────────
+
+
+async def test_ingest_with_thread_grouping(
+    config: LibrarianConfig, repo: StubTomeRepository
+) -> None:
+    """Ingest 5 tomes with thread_id set; verify sequential thread_position.
+
+    Users group related facts into conversations/threads via thread_id.
+    Each tome in a thread gets a sequential position (0, 1, 2, 3, 4).
+    library_list(thread_id=<uuid>) returns all tomes in order.
+    """
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    thread_id = str(uuid.uuid4())
+
+    # Ingest 5 separate chunks, each with the same thread_id
+    contents = [
+        "First turn: what is photosynthesis?",
+        "Second turn: plants need sunlight.",
+        "Third turn: chlorophyll absorbs light.",
+        "Fourth turn: glucose is produced.",
+        "Fifth turn: oxygen is released.",
+    ]
+
+    for content in contents:
+        opts = IngestCallOptions(
+            skip_verify=False,
+            source_type=SourceType.AGENT_INPUT,
+        )
+        # Simulate thread_id being passed through opts
+        # (Once the model is updated, thread_id will be a field on opts)
+        opts.thread_id = uuid.UUID(hex=thread_id)
+        await ingestor.ingest(content, opts)
+
+    # Verify 5 tomes were created
+    all_tomes = repo.all_tomes()
+    assert len(all_tomes) == 5, f"Expected 5 tomes, got {len(all_tomes)}"
+
+    # Verify each has the thread_id set
+    for tome in all_tomes:
+        assert tome.thread_id == uuid.UUID(hex=thread_id), (
+            f"Expected thread_id={thread_id}, got {tome.thread_id}"
+        )
+
+    # Verify sequential thread_position (0, 1, 2, 3, 4)
+    positions = sorted([t.thread_position for t in all_tomes])
+    assert positions == [0, 1, 2, 3, 4], (
+        f"Expected thread_position [0,1,2,3,4], got {positions}"
+    )
+
+    # Call library_list with thread_id filter, expect all 5 in order
+    filtered = await repo.list_all(thread_id=uuid.UUID(hex=thread_id))
+    assert len(filtered) == 5, f"Expected 5 filtered tomes, got {len(filtered)}"
+
+    # Verify order: should be sorted by thread_position ascending
+    filtered_positions = [t.thread_position for t in filtered]
+    assert filtered_positions == [0, 1, 2, 3, 4], (
+        f"Expected filtered tomes in order [0,1,2,3,4], got {filtered_positions}"
+    )
