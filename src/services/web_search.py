@@ -156,9 +156,8 @@ async def _fetch_url_main_text_inner(url: str, *, timeout: float) -> str:
     if html is None:
         return ""
     # ``trafilatura.extract`` is CPU-bound and can be slow on large HTML;
-    # offload it to the default executor so we don't block the event loop.
-    loop = asyncio.get_running_loop()
-    extracted = await loop.run_in_executor(None, trafilatura.extract, html)
+    # offload it to a worker thread so we don't block the event loop.
+    extracted = await asyncio.to_thread(trafilatura.extract, html)
     return extracted or ""
 
 

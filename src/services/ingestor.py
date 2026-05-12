@@ -545,7 +545,13 @@ class Ingestor:
         return message
 
     async def _split_structured(self, blob: str, fmt: DetectedFormat) -> list[str]:
-        """Format-aware splitting for code / markdown / yaml / json."""
+        """Format-aware splitting for code / markdown / yaml / json.
+
+        ``RecursiveCharacterTextSplitter.split_text`` is CPU-bound (synchronous
+        Python with potentially heavy regex work on large blobs). Every call to
+        it is offloaded via ``asyncio.to_thread`` so the event loop stays
+        responsive — see issue #24.
+        """
         chunk_size = self._config.ingest.shard_size
         chunk_overlap = self._config.ingest.shard_overlap
 
@@ -555,7 +561,7 @@ class Ingestor:
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
-            return splitter.split_text(blob)
+            return await asyncio.to_thread(splitter.split_text, blob)
 
         if fmt == "markdown":
             splitter = RecursiveCharacterTextSplitter.from_language(
@@ -563,19 +569,19 @@ class Ingestor:
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
-            shards = splitter.split_text(blob)
+            shards = await asyncio.to_thread(splitter.split_text, blob)
             return [_balance_markdown_fences(s) for s in shards]
 
         if fmt == "yaml":
-            return self._split_yaml(blob)
+            return await self._split_yaml(blob)
 
         if fmt == "json":
-            return self._split_json(blob)
+            return await self._split_json(blob)
 
         # Unreachable given DetectedFormat literal — defensive fallback.
         return await self._split_text_recursive(blob)
 
-    def _split_yaml(self, blob: str) -> list[str]:
+    async def _split_yaml(self, blob: str) -> list[str]:
         """Split YAML at top-level keys; coalesce small keys to fill ``shard_size``.
 
         We collect each top-level key (and its indented body) as a "section",
@@ -583,6 +589,10 @@ class Ingestor:
         ``shard_size``. Oversized single sections are handed to the recursive
         splitter. This avoids excessive fragmentation on configs with many
         small keys (per Gemini code-review feedback on PR #62).
+
+        Oversized sections route through ``RecursiveCharacterTextSplitter``,
+        which is offloaded via ``asyncio.to_thread`` to keep the event loop
+        responsive (issue #24).
         """
         # Group top-level keys (lines starting at column 0 with `key:`).
         lines = blob.splitlines(keepends=True)
@@ -623,7 +633,7 @@ class Ingestor:
                 if buf:
                     out.append("\n".join(buf))
                     buf, buf_len = [], 0
-                out.extend(splitter.split_text(section))
+                out.extend(await asyncio.to_thread(splitter.split_text, section))
                 continue
             # +1 accounts for the joining newline once a section is appended.
             projected = buf_len + len(section) + (1 if buf else 0)
@@ -637,7 +647,7 @@ class Ingestor:
             out.append("\n".join(buf))
         return out
 
-    def _split_json(self, blob: str) -> list[str]:
+    async def _split_json(self, blob: str) -> list[str]:
         """Split a JSON document at its top-level structural elements.
 
         For arrays we *greedily pack* multiple elements into a single JSON-array
@@ -647,9 +657,14 @@ class Ingestor:
         For objects we keep the dictionary intact (so each shard retains its
         surrounding-key context) and only fall through to the recursive
         splitter if the serialized form exceeds ``shard_size``.
+
+        Oversized chunks route through ``RecursiveCharacterTextSplitter``,
+        which is offloaded via ``asyncio.to_thread`` to keep the event loop
+        responsive (issue #24). ``json.loads`` is also offloaded because
+        parsing very large blobs is CPU-bound (Gemini review on this PR).
         """
         try:
-            parsed = json.loads(blob)
+            parsed = await asyncio.to_thread(json.loads, blob)
         except (json.JSONDecodeError, ValueError):
             parsed = None
 
@@ -678,7 +693,7 @@ class Ingestor:
             if len(chunk) <= shard_size:
                 out.append(chunk)
             else:
-                out.extend(splitter.split_text(chunk))
+                out.extend(await asyncio.to_thread(splitter.split_text, chunk))
         return [c for c in out if c.strip()]
 
     @staticmethod
