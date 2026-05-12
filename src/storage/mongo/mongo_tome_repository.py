@@ -136,6 +136,49 @@ class MongoTomeRepository(TomeRepository):
             raise _wrap_mongo(exc, "delete") from exc
         return result.deleted_count > 0
 
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update mutable fields of a Tome. Returns updated Tome or None if not found."""
+        update_dict: dict[str, object] = {}
+
+        if content is not None:
+            embedding = await self._embedding_service.embed(content)
+            update_dict["content"] = content
+            update_dict["embedding"] = Binary.from_uuid(embedding, subtype=BinaryVectorDtype.VECTOR)
+
+        if category is not None:
+            update_dict["category"] = category
+        if tags is not None:
+            update_dict["tags"] = tags
+        if source_url is not None:
+            update_dict["source_url"] = source_url
+        if confidence is not None:
+            update_dict["confidence"] = confidence
+
+        if not update_dict:
+            return await self.get_by_id(tome_id)
+
+        try:
+            result = await self._collection.update_one(
+                {"_id": tome_id},
+                {"$set": update_dict}
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "update") from exc
+
+        if result.matched_count == 0:
+            return None
+
+        return await self.get_by_id(tome_id)
+
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Retrieve a single Tome by its ID."""
         try:

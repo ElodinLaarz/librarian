@@ -30,6 +30,8 @@ from src.models.tool_schemas import (
     SearchOutput,
     TidyInput,
     TidyOutput,
+    UpdateInput,
+    UpdateOutput,
 )
 from src.services.embedding import (
     EmbeddingService,
@@ -603,6 +605,40 @@ class LibrarianServer:
             if not deleted:
                 return DeleteOutput(deleted=False, error="not_found")
             return DeleteOutput(deleted=True)
+
+        @self.mcp.tool()
+        async def library_update(params: UpdateInput) -> UpdateOutput:
+            """Update mutable fields of a tome (content, category, tags, source_url, confidence).
+
+            Immutable fields (source_type, summary, research_job_id) are rejected.
+            When content is updated, embeddings are recomputed.
+            Accepts either the 32-char hex form or the standard hyphenated UUID form.
+            Returns the updated tome on success. If the id is malformed the response
+            carries ``status="invalid_id"``; if no tome matches the id it carries
+            ``status="not_found"``. Validation problems are reported in the output
+            rather than raised so MCP clients can recover.
+            """
+            tome_repo = self._require(self.tome_repo, "tome_repo")
+            try:
+                tid = UUID(params.tome_id)
+            except (ValueError, AttributeError, TypeError):
+                return UpdateOutput(tome=None, status="invalid_id", error="invalid_id")
+
+            updated = await tome_repo.update(
+                tid,
+                content=params.content,
+                category=params.category,
+                tags=params.tags,
+                source_url=params.source_url,
+                confidence=params.confidence,
+            )
+            if updated is None:
+                return UpdateOutput(tome=None, status="not_found", error="not_found")
+
+            return UpdateOutput(
+                tome=updated.model_copy(update={"embedding": None}),
+                status="updated",
+            )
 
         @self.mcp.tool()
         async def library_list(params: ListInput) -> ListOutput:

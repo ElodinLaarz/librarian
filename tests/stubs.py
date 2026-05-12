@@ -85,6 +85,39 @@ class StubTomeRepository(TomeRepository):
         self._duplicate_groups = filtered_groups
         return True
 
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        tome = self._tomes.get(tome_id)
+        if tome is None:
+            return None
+
+        update_dict: dict[str, object] = {}
+        if content is not None:
+            update_dict["content"] = content
+        if category is not None:
+            update_dict["category"] = category
+        if tags is not None:
+            update_dict["tags"] = tags
+        if source_url is not None:
+            update_dict["source_url"] = source_url
+        if confidence is not None:
+            update_dict["confidence"] = confidence
+
+        if not update_dict:
+            return tome
+
+        updated = tome.model_copy(update=update_dict)
+        self._tomes[tome_id] = updated
+        return updated
+
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         return self._tomes.get(tome_id)
 
