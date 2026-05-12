@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -148,8 +149,18 @@ async def _teardown(server: LibrarianServer) -> None:
 
 
 @pytest.fixture
-def server(tmp_path: Path) -> LibrarianServer:
-    return _build_server(tmp_path)
+async def server(tmp_path: Path) -> AsyncIterator[LibrarianServer]:
+    """Wire up a server and guarantee teardown even when a test assertion fails.
+
+    Using a yield-style async fixture removes the repetitive ``try/finally``
+    blocks in each test and prevents resource leaks (background tasks, the
+    ingestor's persistent ``httpx`` client) when an assertion raises.
+    """
+    server = _build_server(tmp_path)
+    try:
+        yield server
+    finally:
+        await _teardown(server)
 
 
 # ── main E2E walk ───────────────────────────────────────────────────────────
@@ -167,77 +178,74 @@ async def test_e2e_ingest_search_research_pipeline(server: LibrarianServer) -> N
     library_search = _tool(server, "library_search")
     library_research = _tool(server, "library_research")
 
-    try:
-        # ── Step 1: ingest ────────────────────────────────────────────────
-        ingest_input = IngestInput(
-            content=(
-                "The mitochondrion is the powerhouse of the cell. "
-                "It produces ATP via oxidative phosphorylation."
-            ),
-            skip_verify=True,
-            category="science",
-            tags=["biology", "cell"],
-        )
-        ingest_out = await library_ingest(ingest_input)
-        assert ingest_out.tomes, f"ingest produced no tomes: {ingest_out!r}"
-        ingested_ids = {t.id for t in ingest_out.tomes}
+    # ── Step 1: ingest ────────────────────────────────────────────────
+    ingest_input = IngestInput(
+        content=(
+            "The mitochondrion is the powerhouse of the cell. "
+            "It produces ATP via oxidative phosphorylation."
+        ),
+        skip_verify=True,
+        category="science",
+        tags=["biology", "cell"],
+    )
+    ingest_out = await library_ingest(ingest_input)
+    assert ingest_out.tomes, f"ingest produced no tomes: {ingest_out!r}"
+    ingested_ids = {t.id for t in ingest_out.tomes}
 
-        # ── Step 2: search ───────────────────────────────────────────────
-        search_out = await library_search(SearchInput(query="cell biology", min_confidence=0.0))
-        # The ingested tome should appear in the search result set.
-        returned_ids = {t.id for t in search_out.tomes}
-        assert ingested_ids & returned_ids, (
-            f"none of the ingested ids {ingested_ids} appear in search results {returned_ids}"
-        )
-        assert len(search_out.scores) == len(search_out.tomes)
+    # ── Step 2: search ───────────────────────────────────────────────
+    search_out = await library_search(SearchInput(query="cell biology", min_confidence=0.0))
+    # The ingested tome should appear in the search result set.
+    returned_ids = {t.id for t in search_out.tomes}
+    assert ingested_ids & returned_ids, (
+        f"none of the ingested ids {ingested_ids} appear in search results {returned_ids}"
+    )
+    assert len(search_out.scores) == len(search_out.tomes)
 
-        # ── Step 3: research (async) + polling cycle ─────────────────────
-        kickoff = await library_research(ResearchInput(topic="Photosynthesis basics", async_=True))
-        assert kickoff.job_id, "research kickoff returned no job_id"
-        # First status is pending or running depending on scheduling — either
-        # is acceptable, both are non-terminal.
-        assert kickoff.status in {"pending", "running"}, (
-            f"unexpected initial status: {kickoff.status!r}"
-        )
+    # ── Step 3: research (async) + polling cycle ─────────────────────
+    kickoff = await library_research(ResearchInput(topic="Photosynthesis basics", async_=True))
+    assert kickoff.job_id, "research kickoff returned no job_id"
+    # First status is pending or running depending on scheduling — either
+    # is acceptable, both are non-terminal.
+    assert kickoff.status in {"pending", "running"}, (
+        f"unexpected initial status: {kickoff.status!r}"
+    )
 
-        # Poll until terminal. ~5s wall-clock budget should be plenty.
-        terminal_states = {"completed", "failed", "not_found", "invalid_job_id"}
-        deadline = asyncio.get_running_loop().time() + 5.0
-        polls = 0
-        while True:
-            status = await library_research(ResearchInput(job_id=kickoff.job_id))
-            polls += 1
-            if status.status in terminal_states:
-                break
-            if asyncio.get_running_loop().time() > deadline:
-                pytest.fail(
-                    f"research job did not finish within budget; "
-                    f"last status={status.status!r} after {polls} polls"
-                )
-            await asyncio.sleep(0.05)
+    # Poll until terminal. ~5s wall-clock budget should be plenty.
+    terminal_states = {"completed", "failed", "not_found", "invalid_job_id"}
+    deadline = asyncio.get_running_loop().time() + 5.0
+    polls = 0
+    while True:
+        status = await library_research(ResearchInput(job_id=kickoff.job_id))
+        polls += 1
+        if status.status in terminal_states:
+            break
+        if asyncio.get_running_loop().time() > deadline:
+            pytest.fail(
+                f"research job did not finish within budget; "
+                f"last status={status.status!r} after {polls} polls"
+            )
+        await asyncio.sleep(0.05)
 
-        # The job must have completed — failure here likely indicates a real
-        # regression in the pipeline (web stub returned, ingest disabled LLM,
-        # FS storage is local).
-        assert status.status == "completed", (
-            f"research job ended in {status.status!r}; error={status.error!r}"
-        )
-        assert status.tome_ids, "completed job stored no tomes"
-        assert status.tomes, "completed job did not return tome payloads"
-        assert status.sources, "completed job recorded no sources"
+    # The job must have completed — failure here likely indicates a real
+    # regression in the pipeline (web stub returned, ingest disabled LLM,
+    # FS storage is local).
+    assert status.status == "completed", (
+        f"research job ended in {status.status!r}; error={status.error!r}"
+    )
+    assert status.tome_ids, "completed job stored no tomes"
+    assert status.tomes, "completed job did not return tome payloads"
+    assert status.sources, "completed job recorded no sources"
 
-        # ── Step 3b: research tomes are searchable ───────────────────────
-        research_search = await library_search(
-            SearchInput(query="photosynthesis", min_confidence=0.0, top_k=20)
-        )
-        research_search_ids = {t.id for t in research_search.tomes}
-        job_tome_ids = {uuid.UUID(t) for t in status.tome_ids}
-        assert research_search_ids & job_tome_ids, (
-            "research-produced tomes are not retrievable via library_search: "
-            f"job_ids={job_tome_ids} search_ids={research_search_ids}"
-        )
-    finally:
-        await _teardown(server)
+    # ── Step 3b: research tomes are searchable ───────────────────────
+    research_search = await library_search(
+        SearchInput(query="photosynthesis", min_confidence=0.0, top_k=20)
+    )
+    research_search_ids = {t.id for t in research_search.tomes}
+    job_tome_ids = {uuid.UUID(t) for t in status.tome_ids}
+    assert research_search_ids & job_tome_ids, (
+        "research-produced tomes are not retrievable via library_search: "
+        f"job_ids={job_tome_ids} search_ids={research_search_ids}"
+    )
 
 
 # ── Auxiliary checks — exercise narrower slices of the same pipeline ────────
@@ -248,11 +256,8 @@ async def test_e2e_research_unknown_job_id_returns_not_found(
 ) -> None:
     """Polling an unknown UUID surfaces the documented sentinel status."""
     library_research = _tool(server, "library_research")
-    try:
-        result = await library_research(ResearchInput(job_id=uuid.uuid4().hex))
-        assert result.status == "not_found"
-    finally:
-        await _teardown(server)
+    result = await library_research(ResearchInput(job_id=uuid.uuid4().hex))
+    assert result.status == "not_found"
 
 
 async def test_e2e_research_invalid_job_id_is_rejected(
@@ -260,11 +265,8 @@ async def test_e2e_research_invalid_job_id_is_rejected(
 ) -> None:
     """Malformed job_id is surfaced as ``invalid_job_id`` rather than a crash."""
     library_research = _tool(server, "library_research")
-    try:
-        result = await library_research(ResearchInput(job_id="not-a-uuid"))
-        assert result.status == "invalid_job_id"
-    finally:
-        await _teardown(server)
+    result = await library_research(ResearchInput(job_id="not-a-uuid"))
+    assert result.status == "invalid_job_id"
 
 
 async def test_e2e_search_uses_real_embedding_dimensions(
@@ -277,4 +279,3 @@ async def test_e2e_search_uses_real_embedding_dimensions(
     # Matches the test config we constructed in ``_make_e2e_config``.
     assert vec.shape == (8,)
     assert vec.dtype == np.float32
-    await _teardown(server)
