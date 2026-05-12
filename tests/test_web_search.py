@@ -377,15 +377,13 @@ async def test_fetch_url_rejects_dns_rebind_via_transport_hijack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Ensure _PinnedDNSTransport pins the validated IP in request headers/extensions.
+    Verify _PinnedDNSTransport pins the validated IP in request headers/extensions.
 
-    Root cause of #64: httpx creates a new AsyncHTTPTransport on each instantiation,
-    which re-resolves DNS at socket.connect(). This test verifies that our custom
-    _PinnedDNSTransport overrides handle_async_request to pin the validated IP.
-
-    Strategy: Mock DNS to return different IPs on first vs. subsequent calls, then
-    verify that _PinnedDNSTransport.handle_async_request correctly sets the Host
-    header and SNI extension to the pinned (first) IP, not allowing re-resolution.
+    Root cause of #64: httpx re-resolves DNS at each connect(), allowing TOCTOU.
+    Solution: Custom transport pins the validated IP in handle_async_request by:
+    - Setting Host header to original hostname (for virtual hosting)
+    - Setting SNI extension to original hostname (for HTTPS certificate validation)
+    - Using pinned IP as the actual connection target
     """
     import httpx
 
@@ -394,13 +392,13 @@ async def test_fetch_url_rejects_dns_rebind_via_transport_hijack(
     validated_ip = "93.184.216.34"
     hostname = "example.com"
 
-    # Create a transport with the validated IP pinned.
+    # Create transport with pinned IP.
     transport = _PinnedDNSTransport(pinned_ip=validated_ip, hostname=hostname)
 
-    # Create a request with a URL pointing to the hostname.
+    # Create a request with the hostname.
     request = httpx.Request("GET", f"https://{hostname}/test")
 
-    # Mock the parent class's handle_async_request to capture the modified request.
+    # Capture the request after the transport modifies it.
     captured_request = None
 
     async def mock_parent_handle_async_request(
@@ -408,7 +406,6 @@ async def test_fetch_url_rejects_dns_rebind_via_transport_hijack(
     ) -> httpx.Response:
         nonlocal captured_request
         captured_request = req
-        # Return a dummy response.
         return httpx.Response(200)
 
     monkeypatch.setattr(
@@ -419,18 +416,21 @@ async def test_fetch_url_rejects_dns_rebind_via_transport_hijack(
     # Call the transport's handle_async_request.
     await transport.handle_async_request(request)
 
-    # Verify that the request was modified correctly:
-    # 1. URL host should be the pinned IP (not the original hostname).
-    assert (
-        str(captured_request.url.host) == validated_ip
-    ), f"Expected URL host {validated_ip}, got {captured_request.url.host}"
+    # Verify request modifications:
+    # 1. URL host should be the pinned IP (prevents DNS re-resolution at socket).
+    assert str(captured_request.url.host) == validated_ip, (
+        f"URL host should be pinned IP {validated_ip}, "
+        f"got {captured_request.url.host}"
+    )
 
     # 2. Host header should be the original hostname (for virtual hosting).
-    assert (
-        captured_request.headers.get("host") == hostname
-    ), f"Expected Host header {hostname}, got {captured_request.headers.get('host')}"
+    assert captured_request.headers.get("host") == hostname, (
+        f"Host header should be {hostname}, "
+        f"got {captured_request.headers.get('host')}"
+    )
 
-    # 3. SNI hostname should be the original hostname (for HTTPS).
-    assert (
-        captured_request.extensions.get("sni_hostname") == hostname
-    ), f"Expected SNI hostname {hostname}, got {captured_request.extensions.get('sni_hostname')}"
+    # 3. SNI hostname should be the original hostname (for HTTPS cert validation).
+    assert captured_request.extensions.get("sni_hostname") == hostname, (
+        f"SNI hostname should be {hostname}, "
+        f"got {captured_request.extensions.get('sni_hostname')}"
+    )
