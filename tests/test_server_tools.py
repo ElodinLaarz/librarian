@@ -699,11 +699,7 @@ async def test_library_update_basic() -> None:
     library_update = _get_tool(server, "library_update")
 
     result = await library_update(
-        UpdateInput(
-            tome_id=tome_id,
-            content="updated content",
-            tags=["new"]
-        )
+        UpdateInput(tome_id=tome_id, content="updated content", tags=["new"])
     )
 
     assert result.status == "updated"
@@ -724,12 +720,7 @@ async def test_library_update_partial() -> None:
     server = _build_server_with_repo(repo)
     library_update = _get_tool(server, "library_update")
 
-    result = await library_update(
-        UpdateInput(
-            tome_id=tome_id,
-            tags=["new_tag"]
-        )
-    )
+    result = await library_update(UpdateInput(tome_id=tome_id, tags=["new_tag"]))
 
     assert result.status == "updated"
     assert result.tome is not None
@@ -745,12 +736,7 @@ async def test_library_update_invalid_tome_id() -> None:
     server = _build_server_with_repo(StubTomeRepository())
     library_update = _get_tool(server, "library_update")
 
-    result = await library_update(
-        UpdateInput(
-            tome_id="not-a-uuid",
-            content="new content"
-        )
-    )
+    result = await library_update(UpdateInput(tome_id="not-a-uuid", content="new content"))
 
     assert result.status == "invalid_id"
     assert result.tome is None
@@ -763,12 +749,7 @@ async def test_library_update_not_found() -> None:
     server = _build_server_with_repo(StubTomeRepository())
     library_update = _get_tool(server, "library_update")
 
-    result = await library_update(
-        UpdateInput(
-            tome_id=str(uuid.uuid4()),
-            content="new content"
-        )
-    )
+    result = await library_update(UpdateInput(tome_id=str(uuid.uuid4()), content="new content"))
 
     assert result.status == "not_found"
     assert result.tome is None
@@ -789,11 +770,7 @@ async def test_library_update_persists_via_get() -> None:
 
     # Update the tome
     update_result = await library_update(
-        UpdateInput(
-            tome_id=tome_id,
-            content="updated content",
-            category="physics"
-        )
+        UpdateInput(tome_id=tome_id, content="updated content", category="physics")
     )
     assert update_result.status == "updated"
 

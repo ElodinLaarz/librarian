@@ -200,9 +200,7 @@ class MongoTomeRepository(TomeRepository):
         )
         sort_field = "thread_position" if thread_id is not None else "created_at"
         sort_dir = 1 if thread_id is not None else -1
-        cursor = (
-            self._collection.find(query).sort(sort_field, sort_dir).skip(offset).limit(limit)
-        )
+        cursor = self._collection.find(query).sort(sort_field, sort_dir).skip(offset).limit(limit)
         results = []
         try:
             async for doc in cursor:
@@ -289,9 +287,7 @@ class MongoTomeRepository(TomeRepository):
 
         try:
             lexical_results, vector_results = await asyncio.gather(
-                self._lexical_search(
-                    query, top_k, min_confidence, category, include_superseded
-                ),
+                self._lexical_search(query, top_k, min_confidence, category, include_superseded),
                 self._vector_search(
                     query_vector, top_k, min_confidence, category, include_superseded
                 ),
