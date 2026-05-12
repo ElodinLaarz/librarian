@@ -17,7 +17,7 @@ from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 from src import constants
 from src.config import LibrarianConfig
 from src.models.enums import IngestStatus, SourceType
-from src.models.tome import Tome
+from src.models.tome import Tome, VerificationSummary
 from src.models.tool_schemas import IngestOutput
 from src.services.embedding import EmbeddingService
 from src.services.verifier import Verifier
@@ -224,13 +224,19 @@ class Ingestor:
         Returns None if verification rejects the text.  Does NOT persist anything.
         """
         should_verify = self._config.verification.enabled and not opts.skip_verify
+        verification_summary: VerificationSummary | None
         if should_verify:
             verification_result = await self._verifier.verify(text)
             if verification_result.confidence < self._config.verification.reject_threshold:
                 return None
             confidence = verification_result.confidence
+            verification_summary = verification_result.to_summary()
         else:
             confidence = self._config.ingest.unverified_confidence
+            # Surface "skipped because the caller asked us to / verification is
+            # disabled" so search consumers can distinguish it from a real run
+            # with zero claims (e.g. offline verifier).
+            verification_summary = VerificationSummary(skipped=True)
 
         (category, tags), (title, summary), embedding = await asyncio.gather(
             self._classify_and_tag(text, opts.category_hint, opts.tags_hint),
@@ -250,6 +256,7 @@ class Ingestor:
             source_type=opts.source_type,
             confidence=confidence,
             research_job_id=opts.research_job_id,
+            verification=verification_summary,
             created_at=datetime.now(UTC),
         )
         try:

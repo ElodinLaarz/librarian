@@ -87,6 +87,115 @@ async def test_confidence_from_verifier_stored_on_tome(
     assert output.tomes[0].confidence == pytest.approx(0.92)
 
 
+# ── verification summary persistence (issue #41) ──────────────────────────────
+
+
+async def test_verification_summary_persisted_on_tome(
+    config: LibrarianConfig, repo: StubTomeRepository
+) -> None:
+    """A verified ingest stores a VerificationSummary on the resulting Tome.
+
+    The StubVerifier always returns one SUPPORTED claim; the persisted summary
+    must reflect that count exactly, not be ``None``.
+    """
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.92, repo=repo)
+    output = await ingestor.ingest("Water boils at 100 C at sea level.")
+
+    tome = output.tomes[0]
+    assert tome.verification is not None
+    assert tome.verification.skipped is False
+    assert tome.verification.claim_count == 1
+    assert tome.verification.supported == 1
+    assert tome.verification.contradicted == 0
+    assert tome.verification.unverifiable == 0
+    # The stub's evidence is the literal "stub evidence" — not a URL — so
+    # nothing should be captured.
+    assert tome.verification.evidence_urls == []
+
+
+async def test_verification_summary_marks_skipped_when_verification_disabled() -> None:
+    """With verification.enabled=False, the persisted summary records skipped=True."""
+    config = make_test_config(verification=VerificationSettings(enabled=False))
+    repo = StubTomeRepository()
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.5, repo=repo)
+
+    output = await ingestor.ingest("Unverified fact.")
+
+    tome = output.tomes[0]
+    assert tome.verification is not None
+    assert tome.verification.skipped is True
+    assert tome.verification.claim_count == 0
+
+
+async def test_verification_summary_marks_skipped_when_skip_verify_flag_set(
+    config: LibrarianConfig,
+) -> None:
+    """A per-request skip_verify=True flag still produces a summary with skipped=True."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.01),
+        repo,
+    )
+    output = await ingestor.ingest(
+        "Skip-verify content.",
+        IngestCallOptions(skip_verify=True),
+    )
+
+    tome = output.tomes[0]
+    assert tome.verification is not None
+    assert tome.verification.skipped is True
+    assert tome.verification.claim_count == 0
+
+
+async def test_verification_summary_survives_search(
+    config: LibrarianConfig, repo: StubTomeRepository
+) -> None:
+    """Persist a tome via ingest, then read it back via the repo.search path
+    and confirm the verification summary survives the round trip.
+
+    This is the search-surface half of acceptance for issue #41: agents need
+    the summary to be visible from ``library_search`` output, not just from
+    the in-memory Tome returned by ingest.
+    """
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.92, repo=repo)
+    await ingestor.ingest("Water boils at 100 C at sea level.")
+
+    hits = await repo.search(query="boil", top_k=5, min_confidence=0.0)
+    assert hits, "Expected at least one search hit"
+    found = hits[0][0]
+    assert found.verification is not None
+    assert found.verification.skipped is False
+    assert found.verification.claim_count == 1
+    assert found.verification.supported == 1
+
+
+async def test_tome_without_verification_field_loads_as_none() -> None:
+    """Existing serialized tomes without the ``verification`` key must round-trip.
+
+    Backward-compat for the migration case called out in issue #41: tomes
+    written before this field existed should load with ``verification=None``,
+    not raise a validation error.
+    """
+    legacy_json = (
+        '{"id": "00000000-0000-4000-8000-000000000001",'
+        '"title": "Legacy",'
+        '"content": "Old fact.",'
+        '"summary": "Old.",'
+        '"category": "general",'
+        '"tags": [],'
+        '"source_url": null,'
+        '"source_type": "agent_input",'
+        '"confidence": 0.8,'
+        '"research_job_id": null,'
+        '"embedding": null,'
+        '"created_at": "2024-01-01T00:00:00Z"}'
+    )
+    legacy = Tome.model_validate_json(legacy_json)
+    assert legacy.verification is None
+
+
 # ── multi-chunk splitting ────────────────────────────────────────────────────
 
 

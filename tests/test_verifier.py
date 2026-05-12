@@ -327,3 +327,82 @@ async def test_noop_verifier_always_skips() -> None:
     r = await Verifier.noop(config).verify("anything")
     assert r.skipped is True
     assert r.confidence == pytest.approx(config.verification.noop_confidence)
+
+
+# ── VerificationResult.to_summary (issue #41) ────────────────────────────────
+
+
+def test_to_summary_counts_each_verdict_kind() -> None:
+    """Summary counts SUPPORTED / CONTRADICTED / UNVERIFIABLE separately."""
+    from src.services.verifier import VerificationResult
+
+    result = VerificationResult(
+        confidence=0.7,
+        claims=[
+            ClaimResult(
+                claim="c1",
+                verdict=VerificationVerdict.SUPPORTED,
+                evidence="https://example.com/a",
+            ),
+            ClaimResult(
+                claim="c2",
+                verdict=VerificationVerdict.SUPPORTED,
+                evidence="https://example.com/b",
+            ),
+            ClaimResult(
+                claim="c3",
+                verdict=VerificationVerdict.CONTRADICTED,
+                evidence="https://example.com/c",
+            ),
+            ClaimResult(
+                claim="c4",
+                verdict=VerificationVerdict.UNVERIFIABLE,
+                evidence="no_results",
+            ),
+        ],
+        skipped=False,
+    )
+
+    summary = result.to_summary()
+    assert summary.skipped is False
+    assert summary.claim_count == 4
+    assert summary.supported == 2
+    assert summary.contradicted == 1
+    assert summary.unverifiable == 1
+    # Only http(s) evidence makes it into evidence_urls; sentinels are skipped.
+    assert summary.evidence_urls == [
+        "https://example.com/a",
+        "https://example.com/b",
+        "https://example.com/c",
+    ]
+
+
+def test_to_summary_caps_evidence_urls_at_limit() -> None:
+    """Evidence URL list must not exceed VERIFICATION_EVIDENCE_URL_LIMIT."""
+    from src.models.tome import VERIFICATION_EVIDENCE_URL_LIMIT
+    from src.services.verifier import VerificationResult
+
+    claims = [
+        ClaimResult(
+            claim=f"c{i}",
+            verdict=VerificationVerdict.SUPPORTED,
+            evidence=f"https://example.com/{i}",
+        )
+        for i in range(VERIFICATION_EVIDENCE_URL_LIMIT + 5)
+    ]
+    summary = VerificationResult(confidence=0.5, claims=claims, skipped=False).to_summary()
+
+    assert len(summary.evidence_urls) == VERIFICATION_EVIDENCE_URL_LIMIT
+
+
+def test_to_summary_marks_skipped_with_no_claims() -> None:
+    """``skipped=True`` propagates and claim counts are zero."""
+    from src.services.verifier import VerificationResult
+
+    summary = VerificationResult(confidence=0.5, claims=[], skipped=True).to_summary()
+    assert summary.skipped is True
+    assert summary.claim_count == 0
+    assert summary.supported == 0
+    assert summary.contradicted == 0
+    assert summary.unverifiable == 0
+    assert summary.evidence_urls == []
