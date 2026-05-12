@@ -1,24 +1,61 @@
 import asyncio
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
-from pymongo.errors import OperationFailure
+from pymongo import MongoClient
+from pymongo.errors import OperationFailure, PyMongoError
 
 from src.config import DatabaseSettings
 from src.models.enums import SourceType
 from src.models.tome import Tome
+from src.storage.errors import StorageError
+from src.storage.mongo.client import build_motor_client
+from src.storage.mongo.mongo_research_job_repository import MongoResearchJobRepository
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from tests.stubs import StubEmbeddingService
+
+DEFAULT_TEST_MONGO_URI = "mongodb://localhost:27017/?directConnection=true"
+TEST_MONGO_URI = os.environ.get("LIBRARIAN_TEST_MONGO_URI", DEFAULT_TEST_MONGO_URI)
+
+
+def _mongo_available(uri: str) -> bool:
+    """Ping the configured Mongo URI with a short timeout.
+
+    Returns True iff a `ping` command succeeds. Any pymongo / network failure
+    is interpreted as "no live Mongo" and triggers a clean skip of the tests
+    decorated with `requires_live_mongo`.
+    """
+    client: MongoClient | None = None
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=500)
+        client.admin.command("ping")
+        return True
+    except (PyMongoError, OSError):
+        return False
+    finally:
+        if client is not None:
+            client.close()
+
+
+requires_live_mongo = pytest.mark.skipif(
+    not _mongo_available(TEST_MONGO_URI),
+    reason=(
+        f"No live MongoDB reachable at {TEST_MONGO_URI!r}. "
+        "Set LIBRARIAN_TEST_MONGO_URI to point at a running instance to enable "
+        "the live-Mongo tests in tests/test_mongo_repository.py."
+    ),
+)
 
 
 @pytest.fixture
 async def mongo_repo() -> AsyncIterator[MongoTomeRepository]:
     settings = DatabaseSettings(
-        uri="mongodb://localhost:27017/?directConnection=true",
+        uri=TEST_MONGO_URI,
         tls=False,
         tls_cert_path="/dev/null",
         database="test_library",
@@ -51,6 +88,7 @@ async def mongo_repo() -> AsyncIterator[MongoTomeRepository]:
     repo.close()
 
 
+@requires_live_mongo
 @pytest.mark.asyncio
 async def test_insert_and_get(mongo_repo: MongoTomeRepository) -> None:
     tome = Tome(
@@ -73,6 +111,7 @@ async def test_insert_and_get(mongo_repo: MongoTomeRepository) -> None:
     assert retrieved.title == tome.title
 
 
+@requires_live_mongo
 @pytest.mark.asyncio
 async def test_find_near_duplicates(mongo_repo: MongoTomeRepository) -> None:
     random_embedding = np.random.rand(768).astype(np.float32)
@@ -110,6 +149,7 @@ async def test_find_near_duplicates(mongo_repo: MongoTomeRepository) -> None:
     assert duplicates[0].id == tome2.id
 
 
+@requires_live_mongo
 @pytest.mark.asyncio
 async def test_search(mongo_repo: MongoTomeRepository) -> None:
     tome = Tome(
@@ -154,7 +194,7 @@ def _build_repo_with_mocked_collection(
     Avoids any network round trip so the test can run without a live mongod.
     """
     settings = DatabaseSettings(
-        uri="mongodb://localhost:27017/?directConnection=true",
+        uri=TEST_MONGO_URI,
         tls=False,
         tls_cert_path="/dev/null",
         database="test_library",
@@ -166,6 +206,7 @@ def _build_repo_with_mocked_collection(
     collection.name = "tomes"
     collection.database = MagicMock()
     collection.database.create_collection = AsyncMock(return_value=None)
+    collection.create_index = AsyncMock(return_value=None)
     collection.create_search_index = AsyncMock(return_value=None)
     if create_search_index_side_effect is not None:
         collection.create_search_index.side_effect = create_search_index_side_effect
@@ -215,10 +256,13 @@ async def test_ensure_indexes_propagates_operation_failure(
 
     with (
         caplog.at_level(logging.ERROR, logger="src.storage.mongo.mongo_tome_repository"),
-        pytest.raises(OperationFailure),
+        pytest.raises(StorageError) as ei,
     ):
         await repo.ensure_indexes()
 
+    # The original driver error is preserved as the StorageError's cause so
+    # operators retain the underlying details when debugging.
+    assert isinstance(ei.value.__cause__, OperationFailure)
     assert any(
         record.levelno >= logging.ERROR and "search index" in record.getMessage().lower()
         for record in caplog.records
@@ -249,6 +293,100 @@ async def test_ensure_indexes_skips_when_atlas_search_unsupported(
     assert repo._collection.create_search_index.await_count == 0
 
 
+# ---------------------------------------------------------------------------
+# Shared Motor client across Mongo repositories (issue #25)
+# ---------------------------------------------------------------------------
+
+
+def test_repos_share_injected_motor_client() -> None:
+    """A single Motor client passed into both repos must be reused, not duplicated.
+
+    Network-free: we never call any method on the client, just check identity
+    against ``_client``. This is the regression guard for issue #25 — before
+    the refactor each repo built its own ``AsyncIOMotorClient`` in ``__init__``.
+    """
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=False,
+        tls_cert_path="/dev/null",
+        database="test_library",
+    )
+    embedding_service = StubEmbeddingService()
+    shared_client = build_motor_client(settings)
+    try:
+        tome_repo = MongoTomeRepository(settings, embedding_service, client=shared_client)
+        job_repo = MongoResearchJobRepository(settings, client=shared_client)
+        assert tome_repo._client is shared_client
+        assert job_repo._client is shared_client
+        assert tome_repo._client is job_repo._client
+        assert tome_repo._owns_client is False
+        assert job_repo._owns_client is False
+    finally:
+        shared_client.close()
+
+
+def test_repo_close_is_noop_for_injected_client() -> None:
+    """Closing a repo built with an injected client must NOT close that client."""
+    embedding_service = StubEmbeddingService()
+    shared_client = MagicMock()
+    tome_repo = MongoTomeRepository.__new__(MongoTomeRepository)
+    tome_repo._client = shared_client  # type: ignore[attr-defined]
+    tome_repo._owns_client = False  # type: ignore[attr-defined]
+    tome_repo._embedding_service = embedding_service  # type: ignore[attr-defined]
+    tome_repo._collection = MagicMock()  # type: ignore[attr-defined]
+    tome_repo.close()
+    assert shared_client.close.call_count == 0
+
+    owned_client = MagicMock()
+    tome_repo_owned = MongoTomeRepository.__new__(MongoTomeRepository)
+    tome_repo_owned._client = owned_client  # type: ignore[attr-defined]
+    tome_repo_owned._owns_client = True  # type: ignore[attr-defined]
+    tome_repo_owned._embedding_service = embedding_service  # type: ignore[attr-defined]
+    tome_repo_owned._collection = MagicMock()  # type: ignore[attr-defined]
+    tome_repo_owned.close()
+    assert owned_client.close.call_count == 1
+
+
+def test_build_motor_client_sets_timeout_defaults() -> None:
+    """The shared factory must apply the project's connection-timeout defaults."""
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=False,
+        tls_cert_path="/dev/null",
+        database="test_library",
+    )
+    client = build_motor_client(settings)
+    try:
+        opts = client.options
+        assert opts.server_selection_timeout == pytest.approx(5.0)
+        assert opts.pool_options.connect_timeout == pytest.approx(5.0)
+        assert opts.pool_options.socket_timeout == pytest.approx(30.0)
+    finally:
+        client.close()
+
+
+def test_build_list_filter_empty_when_no_args() -> None:
+    """Default ``list_all`` call must produce a no-op Mongo filter."""
+    assert (
+        MongoTomeRepository._build_list_filter(
+            category=None, min_confidence=0.0, research_job_id=None
+        )
+        == {}
+    )
+
+
+def test_build_list_filter_applies_all_clauses() -> None:
+    job_id = uuid.uuid4()
+    out = MongoTomeRepository._build_list_filter(
+        category="science", min_confidence=0.5, research_job_id=job_id
+    )
+    assert out == {
+        "category": "science",
+        "confidence": {"$gte": 0.5},
+        "research_job_id": job_id,
+    }
+
+
 @pytest.mark.asyncio
 async def test_ensure_indexes_propagates_create_search_index_failure() -> None:
     """A failure inside create_search_index must surface up to the lifespan."""
@@ -261,5 +399,6 @@ async def test_ensure_indexes_propagates_create_search_index_failure() -> None:
         ),
     )
 
-    with pytest.raises(OperationFailure):
+    with pytest.raises(StorageError) as ei:
         await repo.ensure_indexes()
+    assert isinstance(ei.value.__cause__, OperationFailure)

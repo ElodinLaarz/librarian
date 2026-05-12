@@ -67,7 +67,6 @@ async def _get_repo_and_ingestor():
             from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 
             repo: TomeRepository = MongoTomeRepository(config.database, embedding_service)
-            await repo.ensure_indexes()  # type: ignore[attr-defined]
         else:
             from src.storage.filesystem.fs_tome_repository import FsTomeRepository
 
@@ -168,7 +167,7 @@ def handle_gemini_cli(data: dict, event: str) -> None:
                 fact = tool_input.get("fact")
                 if fact:
                     asyncio.run(_ingest(fact))
-            elif tool_name == "mcp_librarian_library_ingest":
+            elif tool_name in ("library_ingest", "mcp_librarian_library_ingest"):
                 # Already handled by the tool itself, but could log or post-process here.
                 pass
 

@@ -14,15 +14,19 @@ def _load_dotenv() -> None:
     """Merge ``.env`` into the process env (does not override existing keys).
 
     Searches for ``.env`` in the current working directory, then upwards from
-    the location of this file. See ``.env.example``.
+    the location of this file up to ``constants.DOTENV_SEARCH_DEPTH`` levels.
+    See ``.env.example``.
     """
+    if os.environ.get("LIBRARIAN_SKIP_DOTENV"):
+        return
+
     # 1. Try CWD
     path = Path.cwd() / ".env"
 
     # 2. Try upwards from this file's directory
     if not path.is_file():
         current = Path(__file__).resolve().parent
-        for _ in range(5):  # Look up to 5 levels up
+        for _ in range(constants.DOTENV_SEARCH_DEPTH):
             candidate = current / ".env"
             if candidate.is_file():
                 path = candidate
@@ -72,8 +76,8 @@ class DatabaseSettings(BaseSettings):
 
 class EmbeddingSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_EMBEDDING_")
-    model_name: str = "all-MiniLM-L6-v2"
-    dimensions: int = 384
+    model_name: str = "nomic-embed-text"
+    dimensions: int = 768
     cache_size: int = 10_000
     provider: str = "auto"  # "auto", "sentence-transformers", "ollama", or "dummy"
     ollama_url: str = "http://localhost:11434"
@@ -85,6 +89,21 @@ class SearchSettings(BaseSettings):
     max_top_k: int = 20
     min_confidence: float = 0.5
     use_keyword_prefilter: bool = True
+    # Default per-tome content cap applied by ``library_search`` when the caller
+    # does not pass an explicit ``content_max_chars``. ``None`` (the default)
+    # preserves backward-compatible behaviour: full content returned. Setting
+    # this (e.g. 2000) protects agent context windows from large payloads;
+    # callers can still fetch the full content via a dedicated retrieval tool
+    # by referencing the returned ``tome_ids``.
+    default_content_max_chars: int | None = Field(default=None, ge=1)
+    # Default snippet window applied by ``library_search`` when the caller does
+    # not pass an explicit ``snippet_chars``. ``0`` disables snippet extraction.
+    default_snippet_chars: int = Field(default=0, ge=0)
+    # Recency weighting in search ranking: blend RRF with age-based exponential decay.
+    # [0, 1]: 0 = no recency boost (backward compatible), 1 = pure age-based ranking.
+    recency_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Half-life in days for recency exponential decay: days until score = 50%.
+    recency_half_life_days: float = Field(default=90.0, gt=0.0)
 
 
 class WebSearchSettings(BaseSettings):
@@ -105,7 +124,7 @@ class VerificationSettings(BaseSettings):
     mock_confidence: float = constants.DEFAULT_MOCK_CONFIDENCE
     noop_confidence: float = constants.DEFAULT_NOOP_CONFIDENCE
     ollama_base_url: str = "http://localhost:11434"
-    claim_model: str = "gemma4:e2b"
+    claim_model: str = "gemma2:2b"
     use_llm_claims: bool = True
     use_llm_verdict: bool = True
     verdict_model: str = ""
@@ -117,12 +136,24 @@ class IngestSettings(BaseSettings):
     shard_overlap: int = constants.DEFAULT_SHARD_OVERLAP
     min_shard_chars: int = constants.DEFAULT_MIN_SHARD_CHARS
     min_shard_words: int = constants.DEFAULT_MIN_SHARD_WORDS
+    build_concurrency: int = Field(default=8, ge=1)
+    write_batch_size: int = Field(default=32, ge=1)
     summary_length: int = constants.DEFAULT_SUMMARY_LENGTH
     title_length: int = constants.TITLE_MAX_LENGTH
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
-    use_llm_chunking: bool = True
+    # NOTE: ``use_llm_chunking`` is a misnomer kept for backward compatibility.
+    # The flag toggles ``Ingestor._extract_facts_llm`` (LLM fact extraction),
+    # which **rewrites** the source into atomic factual statements rather than
+    # splitting it. It also truncates input at ``llm_extraction_max_chars``.
+    # See README and lld.md for the full semantic caveat. Default is False.
+    use_llm_chunking: bool = False
+    # Max characters of source forwarded to the LLM fact-extraction prompt.
+    # Anything beyond this is silently dropped; large documents will lose
+    # tail content unless they also fall back to the recursive splitter.
+    llm_extraction_max_chars: int = Field(default=constants.MAX_LLM_INPUT_CHARS, ge=1)
+    use_llm_summary: bool = True
     use_llm_classification: bool = True
     taxonomy: list[str] = Field(
         default_factory=lambda: [
@@ -133,7 +164,7 @@ class IngestSettings(BaseSettings):
             "Uncategorized",
         ]
     )
-    extraction_model: str = "gemma4:e2b"
+    extraction_model: str = "gemma2:2b"
     ollama_base_url: str = "http://localhost:11434"
 
 
@@ -146,6 +177,23 @@ class ResearcherSettings(BaseSettings):
     shallow_urls_per_query: int = 2
     standard_urls_per_query: int = 3
     deep_urls_per_query: int = 4
+
+
+class TidySettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIBRARIAN_TIDY_")
+    enabled: bool = True
+    interval_seconds: int = Field(default=3600, ge=1)  # Default 1 hour
+    limit_per_run: int = Field(default=1000, ge=1)
+    threshold: float = Field(default=0.95, ge=0.0, le=1.0)
+    skip_verify: bool = True
+    group_concurrency: int = Field(default=4, ge=1)
+    scan_batch_size: int = Field(default=1000, ge=1)
+    max_fact_frequency: int = Field(default=32, ge=2)
+    min_shared_facts: int = Field(default=2, ge=1)
+    min_fact_overlap: float = Field(default=0.8, ge=0.0, le=1.0)
+    semantic_planes: int = Field(default=30, ge=1)
+    semantic_band_size: int = Field(default=6, ge=1)
+    semantic_max_bucket_size: int = Field(default=256, ge=2)
 
 
 class ServerSettings(BaseSettings):
@@ -167,6 +215,7 @@ class LibrarianConfig(BaseSettings):
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     researcher: ResearcherSettings = Field(default_factory=ResearcherSettings)
+    tidy: TidySettings = Field(default_factory=TidySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
 
     @classmethod
@@ -185,14 +234,36 @@ class LibrarianConfig(BaseSettings):
             # Basic env var interpolation: ${VAR} or ${VAR:-default}
             import re
 
+            missing_env_vars: set[str] = set()
+            pattern = re.compile(r"\${([^}:-]+)(?::-(.*?))?}")
+
             def _replace_env(match: re.Match[str]) -> str:
                 var = match.group(1)
-                default = match.group(2) if match.group(2) else ""
-                return os.environ.get(var, default)
+                default = match.group(2)
+                if var in os.environ:
+                    return os.environ[var]
+                if default is not None:
+                    return default
+                missing_env_vars.add(var)
+                return ""
 
             # Match ${VAR} or ${VAR:-default}
-            content = re.sub(r"\${([^}:-]+)(?::-(.*?))?}", _replace_env, content)
-            raw = yaml.safe_load(content)
+            content = pattern.sub(_replace_env, content)
+
+            if missing_env_vars:
+                missing = ", ".join(sorted(missing_env_vars))
+                raise ValueError(
+                    f"Configuration interpolation failed for {path}: "
+                    f"missing environment variables without defaults: {missing}"
+                )
+
+            try:
+                raw = yaml.safe_load(content)
+            except yaml.YAMLError as exc:
+                raise ValueError(
+                    f"Invalid YAML in {path} after environment interpolation: {exc}"
+                ) from exc
+
             if raw is None:
                 raw = {}
             if not isinstance(raw, dict):

@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from uuid import UUID
 
 from src.models.tome import Tome
+
+
+@dataclass(slots=True)
+class DuplicateScanResult:
+    groups: list[list[Tome]]
+    scanned: int
+    exact_content_groups: int = 0
+    fact_overlap_groups: int = 0
+    semantic_groups: int = 0
+    ignored_high_frequency_facts: int = 0
 
 
 class TomeRepository(ABC):
@@ -34,13 +45,86 @@ class TomeRepository(ABC):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
-        """Perform search. Returns (Tome, score) pairs sorted by relevance."""
+        """Perform search. Returns (Tome, score) pairs sorted by relevance.
+
+        When include_superseded is False (default), filters out tomes marked as superseded.
+        """
         ...
 
     @abstractmethod
-    async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id.
+
+        Soft-deletes: the tome remains in storage but is filtered from search results
+        by default. Returns True if successful, False if tome_id not found.
+        """
+        ...
+
+    @abstractmethod
+    async def find_near_duplicates(self, tome: Tome, threshold: float | None = None) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold."""
+        ...
+
+    @abstractmethod
+    async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:
+        """Find all duplicate groups in the library for tidy-time consolidation.
+
+        Implementations should return groups with consistent semantics across
+        exact content, fact overlap, and semantic similarity detection.
+        """
+        ...
+
+    @abstractmethod
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
+    ) -> list[Tome]:
+        """Return a page of Tomes matching the given filters.
+
+        Results are sorted by ``created_at`` descending (newest first) for
+        consistent pagination across calls. Filters compose with AND.
+        Embeddings should be included so the caller can decide whether to
+        strip them — keeps this method usable from non-MCP code paths.
+        """
+        ...
+
+    @abstractmethod
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
+    ) -> int:
+        """Return the total number of Tomes matching the given filters.
+
+        Companion to :meth:`list_all` for pagination — implementations must
+        apply the same filter predicates so callers can compute ``has_more``
+        from ``offset + len(page) < total``.
+        """
+        ...
+
+    @abstractmethod
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update mutable fields on a Tome. Returns the updated Tome or None if not found."""
         ...
 
     @abstractmethod

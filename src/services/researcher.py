@@ -12,6 +12,7 @@ from src.config import LibrarianConfig
 from src.models.enums import ResearchDepth, ResearchJobStatus, SourceType
 from src.services.ingestor import IngestCallOptions, Ingestor
 from src.services.web_search import WebSearchClient
+from src.storage.errors import StorageError
 from src.storage.research_job_repository import ResearchJobRepository
 
 
@@ -103,14 +104,20 @@ class Researcher:
                 await self._jobs.update(job)
                 return
 
-            tags = [t for t in (job.topic[:60],) if t]
+            # Preserve the topic as an additional tag (so users can still
+            # filter tomes by research job topic) but let the ingestor's
+            # classifier derive content-based tags per chunk. Issue #42 —
+            # previously this was passed as ``tags_hint``, which pinned the
+            # final tag list to ``[topic]`` and blocked classifier output.
+            topic_tag = job.topic.strip()[:60]
+            extra_tags = [topic_tag] if topic_tag else []
             opts = IngestCallOptions(
                 skip_verify=False,
                 source_type=SourceType.RESEARCHER,
                 source_url=sources[0] if sources else None,
                 research_job_id=job.id,
                 category_hint=job.category,
-                tags_hint=tags,
+                extra_tags=extra_tags,
             )
             out = await self._ingestor.ingest(combined, opts)
 
@@ -128,11 +135,19 @@ class Researcher:
             await self._jobs.update(job)
 
         except Exception as exc:
-            logging.exception("Research job %s failed", job_id)
+            is_storage = isinstance(exc, StorageError)
+            logging.exception(
+                "Research job %s failed%s",
+                job_id,
+                ": storage error" if is_storage else "",
+            )
             job.status = ResearchJobStatus.FAILED
-            job.error = str(exc)
+            job.error = f"Storage error: {exc}" if is_storage else str(exc)
             job.finished_at = datetime.now(UTC)
-            await self._jobs.update(job)
+            try:
+                await self._jobs.update(job)
+            except StorageError:
+                logging.exception("Research job %s failure write also failed (storage)", job_id)
 
 
 async def plan_search_queries(

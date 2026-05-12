@@ -163,12 +163,15 @@ class OllamaEmbeddingService(EmbeddingService):
         # Probe the model with a tiny prompt so we discover its real embedding size.
         try:
             probe = await self._client.post(
-                "/api/embeddings",
-                json={"model": self._settings.model_name, "prompt": "x"},
+                "/api/embed",
+                json={"model": self._settings.model_name, "input": "x"},
             )
             probe.raise_for_status()
-            vector = probe.json()["embedding"]
-            measured = len(vector)
+            payload = probe.json()
+            embeddings = payload.get("embeddings")
+            if not isinstance(embeddings, list) or not embeddings:
+                raise ValueError("Response missing 'embeddings' array")
+            measured = len(embeddings[0])
         except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
             raise RuntimeError(
                 f"Cannot probe Ollama model {self._settings.model_name} "
@@ -187,11 +190,21 @@ class OllamaEmbeddingService(EmbeddingService):
                 return self._cache[key]
 
         response = await self._client.post(
-            "/api/embeddings",
-            json={"model": self._settings.model_name, "prompt": text},
+            "/api/embed",
+            json={"model": self._settings.model_name, "input": text},
         )
         response.raise_for_status()
-        vector = np.array(response.json()["embedding"], dtype=np.float32)
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Ollama /api/embed response was not a JSON object")
+
+        embeddings = payload.get("embeddings")
+        if not isinstance(embeddings, list) or not embeddings:
+            raise RuntimeError(
+                "Ollama /api/embed response did not include a non-empty 'embeddings' array"
+            )
+
+        vector = np.array(embeddings[0], dtype=np.float32)
 
         async with self._lock:
             if key in self._cache:
@@ -239,6 +252,7 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
                 dim = value
 
         if dim is None:
+            assert self._model is not None
             probe = await asyncio.to_thread(self._model.encode, "x", convert_to_numpy=True)
             probe_arr = np.atleast_1d(np.squeeze(np.asarray(probe, dtype=np.float32)))
             dim = int(probe_arr.shape[0])

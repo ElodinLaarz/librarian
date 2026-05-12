@@ -5,8 +5,9 @@ from __future__ import annotations
 from uuid import UUID
 
 import numpy as np
+from numpy.typing import NDArray
 
-from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
+from src.config import EmbeddingSettings, LibrarianConfig
 from src.models.enums import VerificationVerdict
 from src.models.research_job import ResearchJob
 from src.models.tome import Tome
@@ -15,7 +16,7 @@ from src.services.ingestor import IngestCallOptions, Ingestor
 from src.services.verifier import ClaimResult, VerificationResult, Verifier
 from src.services.web_search import WebSearchClient, WebSearchResult
 from src.storage.research_job_repository import ResearchJobRepository
-from src.storage.tome_repository import TomeRepository
+from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 
 class StubTomeRepository(TomeRepository):
@@ -35,6 +36,7 @@ class StubTomeRepository(TomeRepository):
     ) -> None:
         self._tomes: dict[UUID, Tome] = {}
         self._near_duplicates: list[Tome] = []
+        self._duplicate_groups: list[list[Tome]] = []
         self._fail_deletes = fail_deletes
         self._fail_inserts_after = fail_inserts_after
         self._insert_count = 0
@@ -44,6 +46,16 @@ class StubTomeRepository(TomeRepository):
         for t in tomes:
             self._tomes[t.id] = t
         self._near_duplicates = list(tomes)
+        self._duplicate_groups = [list(tomes)]
+
+    def seed_duplicate_groups(self, groups: list[list[Tome]]) -> None:
+        self._duplicate_groups = []
+        for group in groups:
+            hydrated_group: list[Tome] = []
+            for tome in group:
+                self._tomes[tome.id] = tome
+                hydrated_group.append(tome)
+            self._duplicate_groups.append(hydrated_group)
 
     def all_tomes(self) -> list[Tome]:
         return list(self._tomes.values())
@@ -65,7 +77,46 @@ class StubTomeRepository(TomeRepository):
             return False
         del self._tomes[tome_id]
         self._near_duplicates = [t for t in self._near_duplicates if t.id != tome_id]
+        filtered_groups: list[list[Tome]] = []
+        for group in self._duplicate_groups:
+            kept = [tome for tome in group if tome.id != tome_id]
+            if len(kept) > 1:
+                filtered_groups.append(kept)
+        self._duplicate_groups = filtered_groups
         return True
+
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        tome = self._tomes.get(tome_id)
+        if tome is None:
+            return None
+
+        update_dict: dict[str, object] = {}
+        if content is not None:
+            update_dict["content"] = content
+        if category is not None:
+            update_dict["category"] = category
+        if tags is not None:
+            update_dict["tags"] = tags
+        if source_url is not None:
+            update_dict["source_url"] = source_url
+        if confidence is not None:
+            update_dict["confidence"] = confidence
+
+        if not update_dict:
+            return tome
+
+        updated = tome.model_copy(update=update_dict)
+        self._tomes[tome_id] = updated
+        return updated
 
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         return self._tomes.get(tome_id)
@@ -76,20 +127,109 @@ class StubTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
         results = [
             (t, 1.0)
             for t in self._tomes.values()
-            if t.confidence >= min_confidence and (category is None or t.category == category)
+            if t.confidence >= min_confidence
+            and (category is None or t.category == category)
+            and (include_superseded or t.superseded_by is None)
         ]
         return results[:top_k]
+
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id."""
+        if tome_id not in self._tomes:
+            return False
+        tome = self._tomes[tome_id]
+        tome.superseded_by = by_tome_id
+        self._tomes[tome_id] = tome
+        return True
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         return list(self._near_duplicates)
 
+    async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:
+        scanned = len(self._tomes)
+        if self._duplicate_groups:
+            return DuplicateScanResult(
+                groups=[list(group) for group in self._duplicate_groups],
+                scanned=scanned,
+            )
+        if self._near_duplicates:
+            return DuplicateScanResult(groups=[list(self._near_duplicates)], scanned=scanned)
+        return DuplicateScanResult(groups=[], scanned=scanned)
+
+    def _matches_filters(
+        self,
+        tome: Tome,
+        *,
+        category: str | None,
+        min_confidence: float,
+        research_job_id: UUID | None,
+        thread_id: UUID | None,
+    ) -> bool:
+        if category is not None and tome.category != category:
+            return False
+        if tome.confidence < min_confidence:
+            return False
+        if research_job_id is not None and tome.research_job_id != research_job_id:
+            return False
+        return thread_id is None or tome.thread_id == thread_id
+
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
+    ) -> list[Tome]:
+        filtered = [
+            t
+            for t in self._tomes.values()
+            if self._matches_filters(
+                t,
+                category=category,
+                min_confidence=min_confidence,
+                research_job_id=research_job_id,
+                thread_id=thread_id,
+            )
+        ]
+        # If thread_id is set, sort by thread_position ascending; otherwise by created_at descending
+        if thread_id is not None:
+            filtered.sort(key=lambda x: x.thread_position if x.thread_position is not None else 0)
+        else:
+            filtered.sort(key=lambda x: x.created_at, reverse=True)
+        return filtered[offset : offset + limit]
+
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
+    ) -> int:
+        return sum(
+            1
+            for t in self._tomes.values()
+            if self._matches_filters(
+                t,
+                category=category,
+                min_confidence=min_confidence,
+                research_job_id=research_job_id,
+                thread_id=thread_id,
+            )
+        )
+
     def close(self) -> None:
         self._tomes.clear()
         self._near_duplicates.clear()
+        self._duplicate_groups.clear()
 
 
 class StubEmbeddingService(EmbeddingService):
@@ -101,7 +241,7 @@ class StubEmbeddingService(EmbeddingService):
     async def initialize(self) -> None:
         pass
 
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str) -> NDArray[np.float32]:
         return np.zeros(self._settings.dimensions, dtype=np.float32)
 
 
@@ -193,10 +333,14 @@ def make_stub_ingestor(
     repo: StubTomeRepository | None = None,
     dimensions: int | None = None,
 ) -> tuple[StubIngestor, StubTomeRepository, StubVerifier]:
-    """Convenience factory — returns (ingestor, repo, verifier) wired together."""
-    config = config or LibrarianConfig(
-        database=DatabaseSettings(uri="mongodb://localhost:27017"),
-    )
+    """Convenience factory — returns (ingestor, repo, verifier) wired together.
+
+    Tests use min_shard_chars=0 to allow arbitrary content lengths without
+    enforcing the 400-char production minimum.
+    """
+    from tests.conftest import make_test_config
+
+    config = config or make_test_config()
     repo = repo or StubTomeRepository()
     verifier = StubVerifier(confidence=confidence)
     if dimensions is None:

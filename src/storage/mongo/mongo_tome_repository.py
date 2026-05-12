@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -10,14 +9,28 @@ from uuid import UUID
 import numpy as np
 from bson.binary import Binary, BinaryVectorDtype
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
-from pymongo.errors import CollectionInvalid, OperationFailure
+from pymongo.errors import (
+    CollectionInvalid,
+    ConnectionFailure,
+    DuplicateKeyError,
+    OperationFailure,
+    PyMongoError,
+    ServerSelectionTimeoutError,
+)
 from pymongo.operations import SearchIndexModel
 
-from src.config import DatabaseSettings
+from src.config import DatabaseSettings, TidySettings
 from src.models.tome import Tome
+from src.services.duplicate_detection import build_duplicate_groups
 from src.services.embedding import EmbeddingService
+from src.storage.errors import (
+    BackendUnavailableError,
+    DuplicateError,
+    StorageError,
+)
+from src.storage.mongo.client import build_motor_client
 from src.storage.mongo.mongo_tome import MongoTome
-from src.storage.tome_repository import TomeRepository
+from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +67,18 @@ def _is_atlas_search_unsupported(exc: OperationFailure) -> bool:
     )
 
 
+def _wrap_mongo(exc: PyMongoError, context: str) -> StorageError:
+    """Translate a generic PyMongoError into the right StorageError subclass.
+
+    Used for read paths where DuplicateKeyError is not a concern. Connectivity
+    failures map to ``BackendUnavailableError``; everything else falls through
+    to a bare ``StorageError`` so the original cause is preserved via ``from``.
+    """
+    if isinstance(exc, ServerSelectionTimeoutError | ConnectionFailure):
+        return BackendUnavailableError(f"Mongo backend unavailable during {context}")
+    return StorageError(f"Mongo {context} failed: {exc.__class__.__name__}")
+
+
 class MongoTomeRepository(TomeRepository):
     """MongoDB implementation of the TomeRepository using Atlas Search.
 
@@ -61,39 +86,188 @@ class MongoTomeRepository(TomeRepository):
     configured to support both vector and lexical search.
     """
 
-    def __init__(self, settings: DatabaseSettings, embedding_service: EmbeddingService) -> None:
-        kwargs: dict[str, Any] = {"uuidRepresentation": "standard"}
-        if settings.tls:
-            kwargs["tls"] = True
-            kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
-        else:
-            kwargs["tls"] = False
+    def __init__(
+        self,
+        settings: DatabaseSettings,
+        embedding_service: EmbeddingService,
+        tidy_settings: TidySettings | None = None,
+        *,
+        client: AsyncIOMotorClient[Mapping[str, Any]] | None = None,
+        owns_client: bool | None = None,
+    ) -> None:
+        """Create a tome repo against the given Mongo database.
 
-        self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
-            settings.uri, **kwargs
+        When ``client`` is provided the repository uses the shared client and
+        does NOT close it on ``close()`` — ownership stays with the caller
+        (typically :class:`LibrarianServer` lifespan). When ``client`` is
+        omitted a private client is built from ``settings`` and closed on
+        ``close()`` for backwards compatibility with the previous API and
+        with tests that construct repos directly.
+        """
+        self._client: AsyncIOMotorClient[Mapping[str, Any]] = (
+            client if client is not None else build_motor_client(settings)
         )
+        # Default ownership tracks whether the caller supplied the client: a
+        # repo that built its own client closes it; one handed a shared client
+        # does not. ``owns_client`` lets callers override this for tests.
+        self._owns_client = owns_client if owns_client is not None else (client is None)
 
         self._embedding_service = embedding_service
+        self._tidy_settings = tidy_settings or TidySettings()
         db = self._client.get_database(settings.database)
         self._collection: AsyncIOMotorCollection[Mapping[str, Any]] = db[settings.tomes_collection]
 
     async def insert(self, tome: Tome) -> UUID:
         """Insert a new Tome into MongoDB."""
         mongo_tome = MongoTome.from_tome(tome)
-        await self._collection.insert_one(mongo_tome.model_dump(by_alias=True))
+        try:
+            await self._collection.insert_one(mongo_tome.model_dump(by_alias=True))
+        except DuplicateKeyError as exc:
+            raise DuplicateError(f"Tome {tome.id} already exists") from exc
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "insert") from exc
         return tome.id
 
     async def delete(self, tome_id: UUID) -> bool:
         """Permanently remove a Tome by ID."""
-        result = await self._collection.delete_one({"_id": tome_id})
+        try:
+            result = await self._collection.delete_one({"_id": tome_id})
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "delete") from exc
         return result.deleted_count > 0
 
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Retrieve a single Tome by its ID."""
-        doc = await self._collection.find_one({"_id": tome_id})
+        try:
+            doc = await self._collection.find_one({"_id": tome_id})
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "get_by_id") from exc
         if not doc:
             return None
         return MongoTome.model_validate(doc).to_tome()
+
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id."""
+        try:
+            result = await self._collection.update_one(
+                {"_id": tome_id},
+                {"$set": {"superseded_by": by_tome_id}},
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "mark_superseded") from exc
+        return result.modified_count > 0
+
+    @staticmethod
+    def _build_list_filter(
+        *,
+        category: str | None,
+        min_confidence: float,
+        research_job_id: UUID | None,
+        thread_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Translate the public filter args into a Mongo ``find`` predicate.
+
+        Only adds clauses for set filters so the default ``list_all()`` call
+        is a full collection scan (matches the abstract contract).
+        """
+        query: dict[str, Any] = {}
+        if category is not None:
+            query["category"] = category
+        if min_confidence > 0.0:
+            query["confidence"] = {"$gte": min_confidence}
+        if research_job_id is not None:
+            query["research_job_id"] = research_job_id
+        if thread_id is not None:
+            query["thread_id"] = thread_id
+        return query
+
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
+    ) -> list[Tome]:
+        """Return a filtered + paginated page of Tomes, newest first."""
+        query = self._build_list_filter(
+            category=category,
+            min_confidence=min_confidence,
+            research_job_id=research_job_id,
+            thread_id=thread_id,
+        )
+        sort_field = "thread_position" if thread_id is not None else "created_at"
+        sort_dir = 1 if thread_id is not None else -1
+        cursor = (
+            self._collection.find(query).sort(sort_field, sort_dir).skip(offset).limit(limit)
+        )
+        results = []
+        try:
+            async for doc in cursor:
+                results.append(MongoTome.model_validate(doc).to_tome())
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "list_all") from exc
+        return results
+
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
+    ) -> int:
+        """Count Tomes matching the same filter predicates as :meth:`list_all`."""
+        query = self._build_list_filter(
+            category=category,
+            min_confidence=min_confidence,
+            research_job_id=research_job_id,
+            thread_id=thread_id,
+        )
+        try:
+            return int(await self._collection.count_documents(query))
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "count") from exc
+
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update mutable fields on a Tome. Returns the updated Tome or None if not found."""
+        patch: dict[str, Any] = {}
+        if content is not None:
+            patch["content"] = content
+        if category is not None:
+            patch["category"] = category
+        if tags is not None:
+            patch["tags"] = tags
+        if source_url is not None:
+            patch["source_url"] = source_url
+        if confidence is not None:
+            patch["confidence"] = confidence
+
+        if not patch:
+            return await self.get_by_id(tome_id)
+
+        try:
+            result = await self._collection.find_one_and_update(
+                {"_id": tome_id},
+                {"$set": patch},
+                return_document=True,
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "update") from exc
+        if result is None:
+            return None
+        return MongoTome.model_validate(result).to_tome()
 
     async def search(
         self,
@@ -101,31 +275,47 @@ class MongoTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
         Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
+        When include_superseded is False (default), filters out tomes marked as superseded.
         """
         query_embedding = await self._embedding_service.embed(query)
         query_vector = Binary.from_vector(
             np.array(query_embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
 
-        lexical_results, vector_results = await asyncio.gather(
-            self._lexical_search(query, top_k, min_confidence, category),
-            self._vector_search(query_vector, top_k, min_confidence, category),
-        )
+        try:
+            lexical_results, vector_results = await asyncio.gather(
+                self._lexical_search(
+                    query, top_k, min_confidence, category, include_superseded
+                ),
+                self._vector_search(
+                    query_vector, top_k, min_confidence, category, include_superseded
+                ),
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "search") from exc
 
         return self._merge_results(lexical_results, vector_results, top_k)
 
     async def _lexical_search(
-        self, query: str, top_k: int, min_confidence: float, category: str | None
+        self,
+        query: str,
+        top_k: int,
+        min_confidence: float,
+        category: str | None,
+        include_superseded: bool = False,
     ) -> list[Tome]:
         filters: list[Mapping[str, Any]] = [
             {"range": {"path": "confidence", "gte": min_confidence}},
         ]
         if category is not None:
             filters.append({"equals": {"path": "category", "value": category}})
+        if not include_superseded:
+            filters.append({"equals": {"path": "superseded_by", "value": None}})
 
         pipeline: list[Mapping[str, Any]] = [
             {
@@ -154,11 +344,18 @@ class MongoTomeRepository(TomeRepository):
         return results
 
     async def _vector_search(
-        self, query_vector: Binary, top_k: int, min_confidence: float, category: str | None
+        self,
+        query_vector: Binary,
+        top_k: int,
+        min_confidence: float,
+        category: str | None,
+        include_superseded: bool = False,
     ) -> list[Tome]:
         vector_filter: dict[str, Any] = {"confidence": {"$gte": min_confidence}}
         if category is not None:
             vector_filter["category"] = category
+        if not include_superseded:
+            vector_filter["superseded_by"] = None
 
         pipeline: list[Mapping[str, Any]] = [
             {
@@ -211,11 +408,12 @@ class MongoTomeRepository(TomeRepository):
         combined.sort(key=lambda x: x[1], reverse=True)
         return combined[:top_k]
 
-    async def find_near_duplicates(self, tome: Tome, threshold: float = 0.95) -> list[Tome]:
+    async def find_near_duplicates(self, tome: Tome, threshold: float | None = None) -> list[Tome]:
         """Find existing Tomes with cosine similarity above the threshold using $vectorSearch."""
         if tome.embedding is None:
             return []
 
+        effective_threshold = threshold if threshold is not None else self._tidy_settings.threshold
         query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
@@ -231,14 +429,53 @@ class MongoTomeRepository(TomeRepository):
                 }
             },
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
-            {"$match": {"score": {"$gte": threshold}, "document._id": {"$ne": tome.id}}},
+            {
+                "$match": {
+                    "score": {"$gte": effective_threshold},
+                    "document._id": {"$ne": tome.id},
+                }
+            },
         ]
 
         duplicates = []
-        async for doc in self._collection.aggregate(pipeline):
-            duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
+        try:
+            async for doc in self._collection.aggregate(pipeline):
+                duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "find_near_duplicates") from exc
 
         return duplicates
+
+    async def find_all_near_duplicates(self, threshold: float = 0.95) -> DuplicateScanResult:
+        """Find duplicate groups for tidy-time consolidation."""
+        projection = {
+            "_id": 1,
+            "title": 1,
+            "content": 1,
+            "summary": 1,
+            "category": 1,
+            "tags": 1,
+            "source_url": 1,
+            "source_type": 1,
+            "confidence": 1,
+            "research_job_id": 1,
+            "embedding": 1,
+            "created_at": 1,
+        }
+        cursor = self._collection.find({}, projection=projection).batch_size(
+            self._tidy_settings.scan_batch_size
+        )
+        all_tomes: list[Tome] = []
+        try:
+            async for doc in cursor:
+                all_tomes.append(MongoTome.model_validate(doc).to_tome())
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "find_all_near_duplicates") from exc
+
+        return build_duplicate_groups(
+            all_tomes,
+            self._tidy_settings.model_copy(update={"threshold": threshold}),
+        )
 
     async def ensure_indexes(self) -> None:
         """Create search and vector indexes programmatically.
@@ -263,7 +500,22 @@ class MongoTomeRepository(TomeRepository):
                 logger.debug("Collection already exists, skipping creation.")
             else:
                 logger.error("Failed to create collection", exc_info=True)
-                raise
+                raise StorageError("Failed to create Mongo collection") from exc
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "ensure_indexes") from exc
+
+        # Standard secondary indexes for non-Atlas-Search queries — chiefly
+        # ``list_all`` which sorts by ``created_at`` descending and may filter
+        # by ``category`` or ``research_job_id``. Without these the server has
+        # to do an in-memory sort, which Mongo caps at 32 MB and aborts on
+        # large libraries. ``create_index`` is idempotent so we can call it
+        # unconditionally on every startup.
+        try:
+            await self._collection.create_index([("created_at", -1)])
+            await self._collection.create_index("category")
+            await self._collection.create_index("research_job_id")
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "ensure_indexes (standard indexes)") from exc
 
         existing_search_indexes: list[str] = []
 
@@ -280,7 +532,9 @@ class MongoTomeRepository(TomeRepository):
                 "Failed to enumerate Atlas search indexes; aborting startup",
                 exc_info=True,
             )
-            raise
+            raise StorageError("Failed to enumerate Atlas search indexes") from exc
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "ensure_indexes (list search indexes)") from exc
 
         # 2. Define Vector Search Index
         if "vectors" not in existing_search_indexes:
@@ -302,12 +556,14 @@ class MongoTomeRepository(TomeRepository):
             )
             try:
                 await self._collection.create_search_index(model=vector_model)
-            except OperationFailure:
+            except OperationFailure as exc:
                 logger.error(
                     "Failed to create Atlas vector search index 'vectors'",
                     exc_info=True,
                 )
-                raise
+                raise StorageError("Failed to create Atlas vector search index 'vectors'") from exc
+            except PyMongoError as exc:
+                raise _wrap_mongo(exc, "create_search_index (vectors)") from exc
 
         # 3. Define Lexical Search Index
         if "default" not in existing_search_indexes:
@@ -316,13 +572,21 @@ class MongoTomeRepository(TomeRepository):
             )
             try:
                 await self._collection.create_search_index(model=lexical_model)
-            except OperationFailure:
+            except OperationFailure as exc:
                 logger.error(
                     "Failed to create Atlas lexical search index 'default'",
                     exc_info=True,
                 )
-                raise
+                raise StorageError("Failed to create Atlas lexical search index 'default'") from exc
+            except PyMongoError as exc:
+                raise _wrap_mongo(exc, "create_search_index (default)") from exc
 
     def close(self) -> None:
-        """Close the MongoDB client connection."""
-        self._client.close()
+        """Close the MongoDB client connection if this repo owns it.
+
+        When the client was injected by the caller (e.g. the lifespan-owned
+        shared client) ownership stays with the caller and ``close()`` is a
+        no-op, so a sibling repo using the same client can keep working.
+        """
+        if self._owns_client:
+            self._client.close()

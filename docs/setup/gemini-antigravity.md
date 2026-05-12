@@ -96,6 +96,23 @@ This appends a **Librarian Knowledge Base** section to `~/.gemini/GEMINI.md` tha
 
 ______________________________________________________________________
 
+## Agent hooks (automatic knowledge ingestion)
+
+Gemini CLI supports hooks that run after agent responses or tool invocations. Librarian provides hooks to automatically ingest new knowledge.
+
+### Install hooks
+
+```bash
+./scripts/hooks-config-gemini.sh
+```
+
+This updates your `~/.gemini/settings.json` to include:
+
+- **`AfterAgent`**: Automatically ingests informative agent responses.
+- **`AfterTool`**: Automatically ingests facts from `save_memory`, `library_ingest`, or `mcp_librarian_library_ingest` tool calls.
+
+______________________________________________________________________
+
 ## Troubleshooting
 
 | Symptom | Fix |

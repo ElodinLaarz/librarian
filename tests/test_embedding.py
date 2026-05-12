@@ -272,10 +272,10 @@ async def test_ollama_initialize_probes_model_for_dimensions(
 
     async def fake_post(self: httpx.AsyncClient, url: str, *args, **kwargs):  # type: ignore[no-untyped-def]
         captured_calls.append(("POST", url))
-        # Return a 768-dim embedding
+        # Return a 768-dim embedding in the new format
         return httpx.Response(
             200,
-            json={"embedding": [0.1] * 768},
+            json={"embeddings": [[0.1] * 768]},
             request=httpx.Request("POST", url),
         )
 
@@ -285,7 +285,7 @@ async def test_ollama_initialize_probes_model_for_dimensions(
     await service.initialize()
 
     assert service.dimensions == 768
-    assert any(call[0] == "POST" and "/api/embeddings" in call[1] for call in captured_calls)
+    assert any(call[0] == "POST" and "/api/embed" in call[1] for call in captured_calls)
     await service.aclose()
 
 
@@ -306,3 +306,33 @@ async def test_ollama_embed_real_scores(
     assert sim_related > 0.0
     assert sim_unrelated > 0.0
     assert sim_related > sim_unrelated
+
+
+@pytest.mark.asyncio
+async def test_ollama_embed_raises_on_missing_embeddings_key() -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, object]:
+            return {}
+
+    settings = EmbeddingSettings(
+        provider="ollama",
+        model_name="nomic-embed-text",
+        dimensions=3,
+        cache_size=10,
+    )
+    service = OllamaEmbeddingService(settings)
+
+    async def fake_post(url: str, json: dict[str, object]) -> FakeResponse:
+        assert url == "/api/embed"
+        assert json["input"] == "hello"
+        return FakeResponse()
+
+    service._client.post = fake_post  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="did not include a non-empty 'embeddings' array"):
+        await service.embed("hello")
+
+    await service.aclose()

@@ -24,11 +24,13 @@ dependencies = [
 [project.optional-dependencies]
 # Heavy ML deps (pulls torch ~870MB) — install separately when needed
 sentence-transformers = ["sentence-transformers"]
+# Dev tools — install with `uv sync --extra dev`. This is the single
+# canonical location for dev dependencies; CI and contributors both use it.
 dev = [
     "pytest",
     "pytest-asyncio",
     "ruff",
-    "mypy",
+    "mypy>=1.19.1",
     "mdformat",
     "pre-commit",
 ]
@@ -78,8 +80,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[dependency-groups]
-dev = [
-    "mypy>=1.19.1",
+markers = [
+    "performance: long-running performance or benchmark-oriented tests",
 ]

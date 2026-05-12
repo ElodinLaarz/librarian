@@ -87,6 +87,115 @@ async def test_confidence_from_verifier_stored_on_tome(
     assert output.tomes[0].confidence == pytest.approx(0.92)
 
 
+# ── verification summary persistence (issue #41) ──────────────────────────────
+
+
+async def test_verification_summary_persisted_on_tome(
+    config: LibrarianConfig, repo: StubTomeRepository
+) -> None:
+    """A verified ingest stores a VerificationSummary on the resulting Tome.
+
+    The StubVerifier always returns one SUPPORTED claim; the persisted summary
+    must reflect that count exactly, not be ``None``.
+    """
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.92, repo=repo)
+    output = await ingestor.ingest("Water boils at 100 C at sea level.")
+
+    tome = output.tomes[0]
+    assert tome.verification is not None
+    assert tome.verification.skipped is False
+    assert tome.verification.claim_count == 1
+    assert tome.verification.supported == 1
+    assert tome.verification.contradicted == 0
+    assert tome.verification.unverifiable == 0
+    # The stub's evidence is the literal "stub evidence" — not a URL — so
+    # nothing should be captured.
+    assert tome.verification.evidence_urls == []
+
+
+async def test_verification_summary_marks_skipped_when_verification_disabled() -> None:
+    """With verification.enabled=False, the persisted summary records skipped=True."""
+    config = make_test_config(verification=VerificationSettings(enabled=False))
+    repo = StubTomeRepository()
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.5, repo=repo)
+
+    output = await ingestor.ingest("Unverified fact.")
+
+    tome = output.tomes[0]
+    assert tome.verification is not None
+    assert tome.verification.skipped is True
+    assert tome.verification.claim_count == 0
+
+
+async def test_verification_summary_marks_skipped_when_skip_verify_flag_set(
+    config: LibrarianConfig,
+) -> None:
+    """A per-request skip_verify=True flag still produces a summary with skipped=True."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.01),
+        repo,
+    )
+    output = await ingestor.ingest(
+        "Skip-verify content.",
+        IngestCallOptions(skip_verify=True),
+    )
+
+    tome = output.tomes[0]
+    assert tome.verification is not None
+    assert tome.verification.skipped is True
+    assert tome.verification.claim_count == 0
+
+
+async def test_verification_summary_survives_search(
+    config: LibrarianConfig, repo: StubTomeRepository
+) -> None:
+    """Persist a tome via ingest, then read it back via the repo.search path
+    and confirm the verification summary survives the round trip.
+
+    This is the search-surface half of acceptance for issue #41: agents need
+    the summary to be visible from ``library_search`` output, not just from
+    the in-memory Tome returned by ingest.
+    """
+    ingestor, _, _ = make_stub_ingestor(config=config, confidence=0.92, repo=repo)
+    await ingestor.ingest("Water boils at 100 C at sea level.")
+
+    hits = await repo.search(query="boil", top_k=5, min_confidence=0.0)
+    assert hits, "Expected at least one search hit"
+    found = hits[0][0]
+    assert found.verification is not None
+    assert found.verification.skipped is False
+    assert found.verification.claim_count == 1
+    assert found.verification.supported == 1
+
+
+async def test_tome_without_verification_field_loads_as_none() -> None:
+    """Existing serialized tomes without the ``verification`` key must round-trip.
+
+    Backward-compat for the migration case called out in issue #41: tomes
+    written before this field existed should load with ``verification=None``,
+    not raise a validation error.
+    """
+    legacy_json = (
+        '{"id": "00000000-0000-4000-8000-000000000001",'
+        '"title": "Legacy",'
+        '"content": "Old fact.",'
+        '"summary": "Old.",'
+        '"category": "general",'
+        '"tags": [],'
+        '"source_url": null,'
+        '"source_type": "agent_input",'
+        '"confidence": 0.8,'
+        '"research_job_id": null,'
+        '"embedding": null,'
+        '"created_at": "2024-01-01T00:00:00Z"}'
+    )
+    legacy = Tome.model_validate_json(legacy_json)
+    assert legacy.verification is None
+
+
 # ── multi-chunk splitting ────────────────────────────────────────────────────
 
 
@@ -458,10 +567,10 @@ async def test_http_client_lazy_until_first_use(config: LibrarianConfig) -> None
     await ingestor.aclose()  # safe no-op when never created
 
 
-async def test_reshard_llm_reuses_single_http_client(
+async def test_extract_facts_llm_reuses_single_http_client(
     monkeypatch: pytest.MonkeyPatch, config: LibrarianConfig
 ) -> None:
-    """Multiple `_reshard_llm` calls share one `httpx.AsyncClient` instance."""
+    """Multiple `_extract_facts_llm` calls share one `httpx.AsyncClient` instance."""
     from unittest.mock import MagicMock
 
     import httpx as _httpx
@@ -489,9 +598,9 @@ async def test_reshard_llm_reuses_single_http_client(
         repo,
     )
     try:
-        first = await ingestor._reshard_llm("Some text to shard.")
+        first = await ingestor._extract_facts_llm("Some text to shard.")
         client_after_first = ingestor._http_client
-        second = await ingestor._reshard_llm("More text to shard.")
+        second = await ingestor._extract_facts_llm("More text to shard.")
         client_after_second = ingestor._http_client
 
         assert first == ["fact one.", "fact two."]
@@ -530,7 +639,7 @@ async def test_aclose_closes_and_resets_http_client(
         StubVerifier(confidence=0.9),
         repo,
     )
-    await ingestor._reshard_llm("Text.")
+    await ingestor._extract_facts_llm("Text.")
     client = ingestor._http_client
     assert client is not None
     assert not client.is_closed
@@ -753,6 +862,155 @@ async def test_legitimate_short_blob_passes_through(config: LibrarianConfig) -> 
     assert output.tomes[0].content.strip() == short_blob
 
 
+# ── LLM-based title and summary generation (issue #36) ───────────────────────
+
+
+def _make_summary_ingestor(
+    config: LibrarianConfig, repo: StubTomeRepository | None = None
+) -> tuple[Ingestor, StubTomeRepository]:
+    """Build a *real* Ingestor (no _generate_title_and_summary override).
+
+    Only verifier/embedder/repo are stubbed — _generate_title_and_summary and
+    _reshard run their real implementations.
+    """
+    repo = repo or StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+    return ingestor, repo
+
+
+def _ollama_chat_response(content: str) -> httpx.Response:
+    """Build a fake Ollama-compatible chat completion response."""
+    body = {"choices": [{"message": {"content": content}}]}
+    return httpx.Response(200, json=body, request=httpx.Request("POST", "http://x/y"))
+
+
+async def test_summary_is_not_content_prefix_when_llm_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When use_llm_summary=True, summary must come from the LLM, not truncation."""
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, repo = _make_summary_ingestor(config)
+
+    llm_payload = json.dumps(
+        {
+            "title": "Photosynthesis basics",
+            "summary": "Plants convert sunlight to glucose via photosynthesis.",
+        }
+    )
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        return _ollama_chat_response(llm_payload)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "X" * config.ingest.summary_length + " then a long tail of additional content " * 5
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    assert len(output.tomes) == 1
+    tome = output.tomes[0]
+    assert tome.summary != tome.content[: config.ingest.summary_length]
+    assert tome.summary == "Plants convert sunlight to glucose via photosynthesis."
+    assert tome.title == "Photosynthesis basics"
+
+
+async def test_summary_falls_back_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A network error causes fallback to truncation behaviour."""
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, _ = _make_summary_ingestor(config)
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        raise httpx.ConnectError("nope")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "Z" * (config.ingest.summary_length + 50)
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.summary == tome.content[: config.ingest.summary_length]
+
+
+async def test_summary_falls_back_on_bad_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-JSON LLM output causes fallback to truncation behaviour."""
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=True,
+        use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, _ = _make_summary_ingestor(config)
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        return _ollama_chat_response("not json at all")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "Q" * (config.ingest.summary_length + 50)
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.summary == tome.content[: config.ingest.summary_length]
+
+
+async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When use_llm_summary=False, the summary LLM endpoint must not be called."""
+    # Disable classification too — it's an unrelated LLM path that would also
+    # post to the same endpoint and false-positive this assertion.
+    ingest_settings = IngestSettings(
+        use_llm_chunking=False,
+        use_llm_summary=False,
+        use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
+    )
+    config = make_test_config(
+        verification=VerificationSettings(enabled=False),
+        ingest=ingest_settings,
+    )
+    ingestor, _ = _make_summary_ingestor(config)
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        raise AssertionError("LLM endpoint must not be called when use_llm_summary=False")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    blob = "M" * (config.ingest.summary_length + 50)
+    output = await ingestor.ingest(blob)
+
+    assert output.status == IngestStatus.STORED
+    tome = output.tomes[0]
+    assert tome.summary == tome.content[: config.ingest.summary_length]
+
+
 # ── syntax-aware chunking (issue #47) ────────────────────────────────────────
 
 
@@ -951,7 +1209,7 @@ async def test_force_format_override_routes_to_correct_splitter() -> None:
 
 
 async def test_use_llm_chunking_skipped_for_detected_code() -> None:
-    """When detected format is code, _reshard_llm must NOT be awaited."""
+    """When detected format is code, _extract_facts_llm must NOT be awaited."""
     blob = (
         "import os\n"
         "import sys\n"
@@ -966,11 +1224,11 @@ async def test_use_llm_chunking_skipped_for_detected_code() -> None:
     )
     ingestor = _make_real_ingestor(shard_size=200, shard_overlap=0, use_llm_chunking=True)
 
-    with patch.object(Ingestor, "_reshard_llm", autospec=True, return_value=None) as llm_spy:
+    with patch.object(Ingestor, "_extract_facts_llm", autospec=True, return_value=None) as llm_spy:
         shards = await ingestor._reshard(blob, IngestCallOptions())
 
     assert shards, "Expected at least one shard"
-    assert not llm_spy.called, "_reshard_llm must NOT be invoked for detected code"
+    assert not llm_spy.called, "_extract_facts_llm must NOT be invoked for detected code"
 
 
 # ── LLM classification & tagging (issue #37) ─────────────────────────────────
@@ -1139,7 +1397,9 @@ async def test_use_llm_classification_flag_off_skips_llm(
     """When the flag is disabled, no HTTP call is made and defaults are used."""
     from src.config import IngestSettings
 
-    config = make_test_config(ingest=IngestSettings(use_llm_classification=False))
+    config = make_test_config(
+        ingest=IngestSettings(use_llm_classification=False, min_shard_chars=0)
+    )
     ingestor, _ = _make_llm_classify_ingestor(config)
 
     counter = _patch_httpx_post(
@@ -1232,7 +1492,7 @@ class TestPromptEscapes:
             repo,
         )
 
-        result = await ingestor._reshard_llm(sample)
+        result = await ingestor._extract_facts_llm(sample)
 
         assert result == ["a fact"]
         content = captured["payload"]["messages"][0]["content"]
@@ -1257,7 +1517,7 @@ class TestPromptEscapes:
         monkeypatch: pytest.MonkeyPatch,
         fenced: str,
     ) -> None:
-        """``_reshard_llm`` must strip ``\\n``/space whitespace inside JSON code fences."""
+        """``_extract_facts_llm`` must strip ``\\n``/space whitespace inside JSON code fences."""
 
         class _FakeResponse:
             def raise_for_status(self) -> None:
@@ -1281,6 +1541,168 @@ class TestPromptEscapes:
         # With the correct ``\s`` regex, the fence is stripped cleanly and the
         # JSON parses to ["one", "two"]. With the buggy ``\\s`` literal-backslash
         # regex, the fence is left in place, ``json.loads`` raises, and
-        # ``_reshard_llm`` silently returns None.
-        result = await ingestor._reshard_llm("any text")
+        # ``_extract_facts_llm`` silently returns None.
+        result = await ingestor._extract_facts_llm("any text")
         assert result == ["one", "two"]
+
+
+# ── issue #32: LLM fact-extraction semantics ─────────────────────────────────
+
+
+class TestLlmFactExtractionRename:
+    """Regression tests for issue #32: rename + configurable cap + safe defaults."""
+
+    def test_extract_facts_llm_method_exists(self) -> None:
+        """``_reshard_llm`` is renamed to ``_extract_facts_llm`` to reflect that
+        the LLM rewrites content into atomic facts (it does not split the source).
+        """
+        assert hasattr(Ingestor, "_extract_facts_llm"), (
+            "Ingestor must expose _extract_facts_llm (renamed from _reshard_llm)"
+        )
+        assert not hasattr(Ingestor, "_reshard_llm"), (
+            "Old name _reshard_llm must be removed after the rename"
+        )
+
+    def test_use_llm_chunking_defaults_to_false(self) -> None:
+        """LLM fact extraction rewrites content semantically, so it must be opt-in."""
+        assert IngestSettings().use_llm_chunking is False
+        assert make_test_config().ingest.use_llm_chunking is False
+
+    def test_llm_extraction_max_chars_is_configurable(self) -> None:
+        """The previously-hardcoded 8000-char truncation must be a configurable field."""
+        settings = IngestSettings()
+        assert hasattr(settings, "llm_extraction_max_chars"), (
+            "IngestSettings must expose llm_extraction_max_chars"
+        )
+        assert settings.llm_extraction_max_chars == 8000
+
+    async def test_llm_extraction_uses_configured_max_chars(
+        self,
+        repo: StubTomeRepository,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The configured ``llm_extraction_max_chars`` value must drive truncation,
+        not the legacy hard-coded 8000 constant.
+        """
+        captured: dict[str, Any] = {}
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {"choices": [{"message": {"content": '{"facts": ["a fact"]}'}}]}
+
+        async def _fake_post(self: httpx.AsyncClient, url: str, **kwargs: Any) -> _FakeResponse:
+            captured["payload"] = kwargs.get("json")
+            return _FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+        ingest_settings = IngestSettings(llm_extraction_max_chars=42)
+        config = make_test_config(ingest=ingest_settings)
+        ingestor = Ingestor(
+            config,
+            StubEmbeddingService(dimensions=config.embedding.dimensions),
+            StubVerifier(confidence=0.9),
+            repo,
+        )
+
+        blob = "X" * 200
+        await ingestor._extract_facts_llm(blob)
+
+        content = captured["payload"]["messages"][0]["content"]
+        # The prompt body must contain only the first 42 chars of the source.
+        assert content.endswith("TEXT:\n" + blob[:42])
+        # The full 200-char blob must NOT have been forwarded.
+        assert blob not in content
+
+    def test_enabling_llm_chunking_emits_startup_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Constructing an Ingestor with ``use_llm_chunking=True`` must log a
+        WARNING that the feature rewrites content semantics.
+        """
+        import logging as _logging
+
+        config = make_test_config(ingest=IngestSettings(use_llm_chunking=True))
+        with caplog.at_level(_logging.WARNING, logger="src.services.ingestor"):
+            Ingestor(
+                config,
+                StubEmbeddingService(dimensions=config.embedding.dimensions),
+                StubVerifier(confidence=0.9),
+                StubTomeRepository(),
+            )
+
+        warning_records = [r for r in caplog.records if r.levelno >= _logging.WARNING]
+        assert any("use_llm_chunking" in r.getMessage() for r in warning_records), (
+            "Expected a startup WARNING mentioning use_llm_chunking"
+        )
+
+
+# ── thread grouping / conversational memory (issue #49) ──────────────────────────
+
+
+async def test_ingest_with_thread_grouping(
+    config: LibrarianConfig, repo: StubTomeRepository
+) -> None:
+    """Ingest 5 tomes with thread_id set; verify sequential thread_position.
+
+    Users group related facts into conversations/threads via thread_id.
+    Each tome in a thread gets a sequential position (0, 1, 2, 3, 4).
+    library_list(thread_id=<uuid>) returns all tomes in order.
+    """
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.9),
+        repo,
+    )
+
+    thread_id = str(uuid.uuid4())
+
+    # Ingest 5 separate chunks, each with the same thread_id
+    contents = [
+        "First turn: what is photosynthesis?",
+        "Second turn: plants need sunlight.",
+        "Third turn: chlorophyll absorbs light.",
+        "Fourth turn: glucose is produced.",
+        "Fifth turn: oxygen is released.",
+    ]
+
+    for content in contents:
+        opts = IngestCallOptions(
+            skip_verify=False,
+            source_type=SourceType.AGENT_INPUT,
+        )
+        # Simulate thread_id being passed through opts
+        # (Once the model is updated, thread_id will be a field on opts)
+        opts.thread_id = uuid.UUID(hex=thread_id)
+        await ingestor.ingest(content, opts)
+
+    # Verify 5 tomes were created
+    all_tomes = repo.all_tomes()
+    assert len(all_tomes) == 5, f"Expected 5 tomes, got {len(all_tomes)}"
+
+    # Verify each has the thread_id set
+    for tome in all_tomes:
+        assert tome.thread_id == uuid.UUID(hex=thread_id), (
+            f"Expected thread_id={thread_id}, got {tome.thread_id}"
+        )
+
+    # Verify sequential thread_position (0, 1, 2, 3, 4)
+    positions = sorted([t.thread_position for t in all_tomes])
+    assert positions == [0, 1, 2, 3, 4], (
+        f"Expected thread_position [0,1,2,3,4], got {positions}"
+    )
+
+    # Call library_list with thread_id filter, expect all 5 in order
+    filtered = await repo.list_all(thread_id=uuid.UUID(hex=thread_id))
+    assert len(filtered) == 5, f"Expected 5 filtered tomes, got {len(filtered)}"
+
+    # Verify order: should be sorted by thread_position ascending
+    filtered_positions = [t.thread_position for t in filtered]
+    assert filtered_positions == [0, 1, 2, 3, 4], (
+        f"Expected filtered tomes in order [0,1,2,3,4], got {filtered_positions}"
+    )

@@ -1,0 +1,152 @@
+# Librarian configuration example.
+#
+# Copy this file to `librarian.config.yaml` (the default location the server
+# looks for) and edit values as needed:
+#
+#     cp librarian.config.example.yaml librarian.config.yaml
+#
+# Alternatively, point at any path via the `LIBRARIAN_CONFIG` env var:
+#
+#     LIBRARIAN_CONFIG=/path/to/my-config.yaml python -m src
+#
+# Any field can be overridden by an environment variable of the form
+# `LIBRARIAN_<SECTION>_<FIELD>` (e.g. `LIBRARIAN_DATABASE_URI`). Env vars
+# override YAML values. `${VAR}` and `${VAR:-default}` interpolation is
+# supported inside YAML values.
+
+database:
+  # MongoDB connection string. Required. The filesystem backend is selected
+  # automatically when this starts with `file://` (e.g. `file:///~/.librarian_mcp`).
+  uri: mongodb://localhost:27017
+  # Database name to use within the MongoDB cluster.
+  database: library
+  # Collection that stores Tomes (knowledge documents).
+  tomes_collection: tomes
+  # Collection that stores async research jobs.
+  jobs_collection: research_jobs
+  # Enable TLS for the MongoDB connection.
+  tls: false
+  # Path to the TLS CA cert (required when `tls: true`).
+  tls_cert_path: ""
+
+embedding:
+  # Embedding model name. Default is `nomic-embed-text` via Ollama (768 dims).
+  model_name: nomic-embed-text
+  # Vector dimensionality (must match the model).
+  dimensions: 768
+  # LRU cache size for computed embeddings.
+  cache_size: 10000
+  # `auto`, `sentence-transformers`, `ollama`, or `dummy` (testing only).
+  provider: auto
+  # Base URL of the Ollama server when `provider: ollama`.
+  ollama_url: http://localhost:11434
+
+search:
+  # Default and max `top_k` returned by `library_search`.
+  default_top_k: 5
+  max_top_k: 20
+  # Minimum confidence applied when callers do not pass one.
+  min_confidence: 0.5
+  # Run a keyword prefilter before vector search to narrow the candidate set.
+  use_keyword_prefilter: true
+  # Default per-tome content cap applied when the caller does not pass
+  # `content_max_chars`. `null` (default) returns full content; set e.g.
+  # `2000` to protect agent context windows. See issue #48.
+  default_content_max_chars: null
+  # Default snippet window applied when the caller does not pass
+  # `snippet_chars`. `0` disables snippet extraction (default).
+  default_snippet_chars: 0
+
+web_search:
+  # Max results per web search request.
+  default_max_results: 10
+  # `brave`, `serper`, or `tavily`. Set via env var if you prefer to keep
+  # secrets out of the YAML file: `LIBRARIAN_WEB_SEARCH_API_KEY=...`.
+  provider: brave
+  api_key: null
+  brave_api_base: https://api.search.brave.com/res/v1/web/search
+  serper_api_base: https://google.serper.dev
+  tavily_api_base: https://api.tavily.com
+
+verification:
+  # Toggle the Verifier pipeline. When disabled, ingest stores raw content.
+  enabled: true
+  # Confidence < this is rejected, > store_threshold is stored without flag.
+  reject_threshold: 0.3
+  store_threshold: 0.7
+  # Synthetic confidence used when no live verification is available.
+  mock_confidence: 0.6
+  noop_confidence: 0.6
+  ollama_base_url: http://localhost:11434
+  # Ollama model used for claim extraction / verdicts.
+  claim_model: gemma4:e2b
+  use_llm_claims: true
+  use_llm_verdict: true
+  # Optional separate model for verdicts. Empty = reuse `claim_model`.
+  verdict_model: ""
+
+ingest:
+  # Sharding (chunking) parameters for newly-ingested content.
+  shard_size: 800
+  shard_overlap: 100
+  # Concurrency / batching for the ingest pipeline.
+  build_concurrency: 8
+  write_batch_size: 32
+  # Summary / title length budgets (characters).
+  summary_length: 240
+  title_length: 80
+  # Confidence assigned to content ingested with `skip_verify: true`.
+  unverified_confidence: 0.5
+  default_category: Uncategorized
+  default_tags: []
+  # Use the LLM for chunking / summarisation / classification (slower, smarter).
+  use_llm_chunking: false
+  use_llm_summary: true
+  use_llm_classification: true
+  # Allowed categories surfaced to the classifier.
+  taxonomy:
+    - Technology
+    - Science
+    - History
+    - Reference
+    - Uncategorized
+  extraction_model: gemma4:e2b
+  ollama_base_url: http://localhost:11434
+
+researcher:
+  # Synthesis cap and per-depth query / URL budgets for `library_research`.
+  max_synthesis_chars: 24000
+  shallow_queries: 3
+  standard_queries: 5
+  deep_queries: 8
+  shallow_urls_per_query: 2
+  standard_urls_per_query: 3
+  deep_urls_per_query: 4
+
+tidy:
+  # Background tidy (duplicate-consolidation) job. Disable by setting `enabled: false`.
+  enabled: true
+  interval_seconds: 3600
+  limit_per_run: 1000
+  # Similarity threshold above which two tomes are considered near-duplicates.
+  threshold: 0.95
+  skip_verify: true
+  group_concurrency: 4
+  scan_batch_size: 1000
+  # Frequency-based fact filtering (drop ubiquitous "facts" before grouping).
+  max_fact_frequency: 32
+  min_shared_facts: 2
+  min_fact_overlap: 0.8
+  # Random-projection LSH parameters for cheap candidate grouping.
+  semantic_planes: 30
+  semantic_band_size: 6
+  semantic_max_bucket_size: 256
+
+server:
+  # Bind address / port for the MCP HTTP transports.
+  host: 0.0.0.0
+  port: 8000
+  # `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`.
+  log_level: INFO
+  # `stdio` (Claude / Cursor), `sse`, or `streamable-http`.
+  transport: stdio
