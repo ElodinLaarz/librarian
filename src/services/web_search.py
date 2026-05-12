@@ -92,24 +92,28 @@ async def _resolve_host_ips(host: str) -> list[str]:
     return list({str(info[4][0]) for info in infos})
 
 
-async def _validate_url(url: str) -> bool:
-    """Validate `url` for SSRF safety.
+async def _validate_url(url: str) -> tuple[bool, str | None]:
+    """Validate `url` for SSRF safety, returning (is_safe, pinned_ip).
 
     Checks: scheme allowlist, hostname blocklist, and that *every* DNS
     resolution result is a public, routable IP. Fails closed on any error.
+
+    Returns (False, None) if validation fails.
+    Returns (True, pinned_ip) if validation succeeds; pinned_ip is the first
+    safe IP from DNS resolution (or the literal IP if host is already an IP).
     """
     try:
         parsed = urllib.parse.urlsplit(url)
     except ValueError:
-        return False
+        return False, None
     if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
-        return False
+        return False, None
     host = parsed.hostname
     if not host:
-        return False
+        return False, None
     host_lower = host.lower()
     if host_lower in _BLOCKED_HOSTNAMES:
-        return False
+        return False, None
     # If host is itself a literal IP, validate it directly (no DNS needed).
     try:
         ipaddress.ip_address(host)
@@ -118,41 +122,121 @@ async def _validate_url(url: str) -> bool:
     else:
         ips = [host]
     if not ips:
-        return False
-    return all(_is_safe_ip(ip) for ip in ips)
+        return False, None
+    if not all(_is_safe_ip(ip) for ip in ips):
+        return False, None
+    # Return the first safe IP as the pinned IP.
+    return True, ips[0]
+
+
+class _PinnedDNSTransport(httpx.AsyncHTTPTransport):
+    """Custom AsyncHTTPTransport that pins a validated IP.
+
+    Prevents DNS rebinding TOCTOU: we resolve + validate DNS once during the
+    validation phase, then use a custom transport that always connects to that
+    pinned IP, even if DNS re-resolves to a different (malicious) address.
+    """
+
+    def __init__(self, pinned_ip: str, hostname: str) -> None:
+        """
+        Args:
+            pinned_ip: The validated IP address to pin for all connections.
+            hostname: The original hostname (preserved for SNI + Host header).
+        """
+        super().__init__()
+        self._pinned_ip = pinned_ip
+        self._hostname = hostname
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Override to replace hostname with pinned IP in the request URL.
+
+        Sets the Host header and SNI hostname extension to preserve HTTPS
+        certificate validation and virtual hosting support.
+        """
+        # Preserve the original hostname for HTTPS/SNI validation.
+        headers = request.headers.copy()
+        headers["host"] = self._hostname
+
+        # Set SNI hostname in extensions for TLS handshake.
+        extensions = dict(request.extensions)
+        extensions["sni_hostname"] = self._hostname
+
+        # Create a new URL with the pinned IP as the host.
+        pinned_url = request.url.copy_with(host=self._pinned_ip)
+
+        # httpx.Request is immutable, so create a new one with the modified URL.
+        request = httpx.Request(
+            method=request.method,
+            url=pinned_url,
+            content=request.content,
+            headers=headers,
+            extensions=extensions,
+        )
+
+        return await super().handle_async_request(request)
 
 
 async def _fetch_url_main_text_inner(url: str, *, timeout: float) -> str:
     """Inner fetch loop. ``timeout`` is the per-HTTP-request budget;
     the caller wraps the whole call in ``asyncio.wait_for`` so the
     *overall* deadline (including DNS resolution) is bounded too.
+
+    Uses a custom httpx transport that pins the validated IP to prevent
+    DNS rebinding TOCTOU attacks.
     """
     headers = {"User-Agent": "LibrarianBot/1.0 (+https://github.com/librarian)"}
     current_url = url
+    client = None
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            html: str | None = None
-            for _ in range(_MAX_REDIRECTS + 1):
-                if not await _validate_url(current_url):
-                    logging.debug("fetch_url_main_text refused unsafe URL: %s", current_url)
-                    return ""
-                response = await client.get(current_url, headers=headers)
-                if 300 <= response.status_code < 400:
-                    location = response.headers.get("location")
-                    if not location:
-                        return ""
-                    current_url = urllib.parse.urljoin(current_url, location)
-                    continue
-                response.raise_for_status()
-                html = response.text
-                break
-            else:
-                # Exceeded redirect budget.
-                logging.debug("fetch_url_main_text exceeded redirect limit for %s", url)
+        html: str | None = None
+        for _ in range(_MAX_REDIRECTS + 1):
+            # Validate the URL and get the pinned IP.
+            is_safe, pinned_ip = await _validate_url(current_url)
+            if not is_safe or pinned_ip is None:
+                logging.debug("fetch_url_main_text refused unsafe URL: %s", current_url)
                 return ""
+
+            # Extract hostname for transport creation.
+            try:
+                parsed = urllib.parse.urlsplit(current_url)
+                hostname = parsed.hostname or ""
+            except ValueError:
+                return ""
+
+            # Create a new client with pinned DNS transport for this URL.
+            if client is not None:
+                await client.aclose()
+            transport = _PinnedDNSTransport(
+                pinned_ip=pinned_ip,
+                hostname=hostname,
+            )
+            client = httpx.AsyncClient(
+                transport=transport,
+                timeout=timeout,
+                follow_redirects=False,
+            )
+
+            response = await client.get(current_url, headers=headers)
+            if 300 <= response.status_code < 400:
+                location = response.headers.get("location")
+                if not location:
+                    return ""
+                current_url = urllib.parse.urljoin(current_url, location)
+                continue
+            response.raise_for_status()
+            html = response.text
+            break
+        else:
+            # Exceeded redirect budget.
+            logging.debug("fetch_url_main_text exceeded redirect limit for %s", url)
+            return ""
     except (httpx.HTTPError, OSError) as exc:
         logging.debug("fetch_url_main_text failed for %s: %s", url, exc)
         return ""
+    finally:
+        if client is not None:
+            await client.aclose()
+
     if html is None:
         return ""
     # ``trafilatura.extract`` is CPU-bound and can be slow on large HTML;

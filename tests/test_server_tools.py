@@ -67,6 +67,7 @@ def test_expected_tools_are_registered() -> None:
     assert "library_research" in tool_names
     assert "library_get" in tool_names
     assert "library_delete" in tool_names
+    assert "library_update" in tool_names
 
 
 def test_no_unexpected_tools_registered() -> None:
@@ -81,6 +82,7 @@ def test_no_unexpected_tools_registered() -> None:
         "library_tidy",
         "library_get",
         "library_delete",
+        "library_update",
         "library_list",
     }
 
@@ -93,6 +95,7 @@ def _make_tome(
     category: str = "general",
     confidence: float = 0.8,
     research_job_id: uuid.UUID | None = None,
+    tags: list[str] | None = None,
 ) -> Tome:
     return Tome(
         id=tome_id or uuid.uuid4(),
@@ -100,7 +103,7 @@ def _make_tome(
         content=content if content is not None else f"Body of {title}",
         summary=f"Summary of {title}",
         category=category,
-        tags=["t"],
+        tags=tags or ["t"],
         source_url=None,
         source_type=SourceType.AGENT_INPUT,
         confidence=confidence,
@@ -676,3 +679,127 @@ async def test_library_search_output_exposes_tome_ids() -> None:
 
     out = await library_search(SearchInput(query="x", top_k=5))
     assert out.tome_ids == [str(t.id) for t in out.tomes]
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Tests for library_update (Issue #43)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_library_update_basic() -> None:
+    """Test basic update of content and tags."""
+    from src.models.tool_schemas import UpdateInput
+
+    repo = StubTomeRepository()
+    tome = _make_tome("original", tags=["old"])
+    await repo.insert(tome)
+    tome_id = str(tome.id)
+
+    server = _build_server_with_repo(repo)
+    library_update = _get_tool(server, "library_update")
+
+    result = await library_update(
+        UpdateInput(
+            tome_id=tome_id,
+            content="updated content",
+            tags=["new"]
+        )
+    )
+
+    assert result.status == "updated"
+    assert result.tome is not None
+    assert result.tome.content == "updated content"
+    assert result.tome.tags == ["new"]
+
+
+async def test_library_update_partial() -> None:
+    """Test that only specified fields update, others unchanged."""
+    from src.models.tool_schemas import UpdateInput
+
+    repo = StubTomeRepository()
+    tome = _make_tome("original", category="math", tags=["t1", "t2"])
+    await repo.insert(tome)
+    tome_id = str(tome.id)
+
+    server = _build_server_with_repo(repo)
+    library_update = _get_tool(server, "library_update")
+
+    result = await library_update(
+        UpdateInput(
+            tome_id=tome_id,
+            tags=["new_tag"]
+        )
+    )
+
+    assert result.status == "updated"
+    assert result.tome is not None
+    assert result.tome.category == "math"  # unchanged
+    assert result.tome.tags == ["new_tag"]  # updated
+    assert result.tome.content == "original"  # unchanged
+
+
+async def test_library_update_invalid_tome_id() -> None:
+    """Test invalid UUID format returns invalid_id status."""
+    from src.models.tool_schemas import UpdateInput
+
+    server = _build_server_with_repo(StubTomeRepository())
+    library_update = _get_tool(server, "library_update")
+
+    result = await library_update(
+        UpdateInput(
+            tome_id="not-a-uuid",
+            content="new content"
+        )
+    )
+
+    assert result.status == "invalid_id"
+    assert result.tome is None
+
+
+async def test_library_update_not_found() -> None:
+    """Test valid UUID but non-existent tome returns not_found status."""
+    from src.models.tool_schemas import UpdateInput
+
+    server = _build_server_with_repo(StubTomeRepository())
+    library_update = _get_tool(server, "library_update")
+
+    result = await library_update(
+        UpdateInput(
+            tome_id=str(uuid.uuid4()),
+            content="new content"
+        )
+    )
+
+    assert result.status == "not_found"
+    assert result.tome is None
+
+
+async def test_library_update_persists_via_get() -> None:
+    """Test that updated tome can be retrieved via library_get."""
+    from src.models.tool_schemas import UpdateInput, GetInput
+
+    repo = StubTomeRepository()
+    tome = _make_tome("original")
+    await repo.insert(tome)
+    tome_id = str(tome.id)
+
+    server = _build_server_with_repo(repo)
+    library_update = _get_tool(server, "library_update")
+    library_get = _get_tool(server, "library_get")
+
+    # Update the tome
+    update_result = await library_update(
+        UpdateInput(
+            tome_id=tome_id,
+            content="updated content",
+            category="physics"
+        )
+    )
+    assert update_result.status == "updated"
+
+    # Retrieve via library_get
+    get_result = await library_get(GetInput(tome_id=tome_id))
+    assert get_result.status == "found"
+    assert get_result.tome is not None
+    assert get_result.tome.content == "updated content"
+    assert get_result.tome.category == "physics"

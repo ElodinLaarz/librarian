@@ -34,6 +34,20 @@ class TomeRepository(ABC):
         ...
 
     @abstractmethod
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update mutable fields of a Tome. Returns updated Tome or None if not found."""
+        ...
+
+    @abstractmethod
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Retrieve a single Tome by its ID."""
         ...

@@ -138,6 +138,32 @@ class GetOutput(BaseModel):
     error: str | None = None
 
 
+# ── library.update ──────────────────────────────────────────────────
+
+
+class UpdateInput(BaseModel):
+    tome_id: str = Field(
+        ...,
+        max_length=200,
+        description=(
+            "UUID string identifying the Tome to update. Accepts the "
+            "canonical hyphenated form (e.g. as returned by library_search) "
+            "as well as bare hex."
+        ),
+    )
+    content: str | None = Field(default=None, max_length=500_000)
+    category: str | None = None
+    tags: list[str] | None = None
+    source_url: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class UpdateOutput(BaseModel):
+    tome: Tome | None = None
+    status: Literal["updated", "not_found", "invalid_id"]
+    error: str | None = None
+
+
 # ── library.tidy ──────────────────────────────────────────────────
 
 
