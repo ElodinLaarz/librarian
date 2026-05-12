@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -318,6 +320,26 @@ class FsTomeRepository(TomeRepository):
                 score = _cosine_similarity(query_vec, np.array(tome.embedding, dtype=np.float64))
 
             results.append((tome, score))
+
+        if recency_weight > 0.0:
+            now = datetime.now(UTC)
+            reranked: list[tuple[Tome, float]] = []
+            for tome, cosine in results:
+                created = tome.created_at
+                if created is not None:
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=UTC)
+                    age_days = max(0.0, (now - created).total_seconds() / 86400.0)
+                else:
+                    age_days = 0.0
+                recency = (
+                    2.0 ** (-age_days / recency_half_life_days)
+                    if recency_half_life_days > 0
+                    else 0.0
+                )
+                blended = cosine * (1.0 - recency_weight) + recency_weight * recency
+                reranked.append((tome, blended))
+            results = reranked
 
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]

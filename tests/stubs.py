@@ -131,6 +131,8 @@ class StubTomeRepository(TomeRepository):
         recency_weight: float = 0.0,
         recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
+        # recency_weight intentionally ignored: stub returns uniform scores for
+        # unit tests that verify correctness, not ranking order.
         results = [
             (t, 1.0)
             for t in self._tomes.values()

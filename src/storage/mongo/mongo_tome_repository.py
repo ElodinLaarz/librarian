@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -321,29 +322,28 @@ class MongoTomeRepository(TomeRepository):
         if category is not None:
             filters.append({"equals": {"path": "category", "value": category}})
 
-        pipeline: list[Mapping[str, Any]] = [
-            {
-                "$search": {
-                    "compound": {
-                        "filter": filters,
-                        "should": [
-                            {
-                                "text": {
-                                    "query": query,
-                                    "path": ["title", "content", "summary", "tags"],
-                                }
-                            }
-                        ],
+        compound: dict[str, Any] = {
+            "filter": filters,
+            "should": [
+                {
+                    "text": {
+                        "query": query,
+                        "path": ["title", "content", "summary", "tags"],
                     }
                 }
-            },
+            ],
+        }
+        # Atlas Search $equals doesn't support null; use mustNot+exists to exclude
+        # superseded docs before the $limit stage so the limit isn't wasted on them.
+        if not include_superseded:
+            compound["mustNot"] = [{"exists": {"path": "superseded_by"}}]
+
+        pipeline: list[Mapping[str, Any]] = [
+            {"$search": {"compound": compound}},
             {"$project": {"score": {"$meta": "searchScore"}, "document": "$$ROOT"}},
             {"$sort": {"score": -1}},
             {"$limit": top_k * 10},
         ]
-        # Atlas Search $equals does not support null; filter superseded docs via $match.
-        if not include_superseded:
-            pipeline.append({"$match": {"document.superseded_by": None}})
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
@@ -358,11 +358,12 @@ class MongoTomeRepository(TomeRepository):
         category: str | None,
         include_superseded: bool = False,
     ) -> list[Tome]:
-        # $vectorSearch filter only supports fields declared in the index definition.
-        # superseded_by is not indexed there, so filter it via $match after projection.
         vector_filter: dict[str, Any] = {"confidence": {"$gte": min_confidence}}
         if category is not None:
             vector_filter["category"] = category
+        if not include_superseded:
+            # superseded_by is declared as a filter field in the vectors index.
+            vector_filter["superseded_by"] = None
 
         pipeline: list[Mapping[str, Any]] = [
             {
@@ -378,8 +379,6 @@ class MongoTomeRepository(TomeRepository):
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
             {"$sort": {"score": -1}},
         ]
-        if not include_superseded:
-            pipeline.append({"$match": {"document.superseded_by": None}})
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
@@ -406,8 +405,6 @@ class MongoTomeRepository(TomeRepository):
           recency_score = exp(-ln(2) * age_days / half_life_days)
           final = rrf * (1 - recency_weight) + recency_weight * recency_score
         """
-        from datetime import UTC, datetime
-
         k = MongoTomeRepository.RRF_K
 
         tome_by_id: dict[UUID, Tome] = {}
@@ -435,7 +432,11 @@ class MongoTomeRepository(TomeRepository):
                     age_days = max(0.0, (now - created).total_seconds() / 86400.0)
                 else:
                     age_days = 0.0
-                recency = math.exp(-math.log(2) * age_days / recency_half_life_days)
+                recency = (
+                    2.0 ** (-age_days / recency_half_life_days)
+                    if recency_half_life_days > 0
+                    else 0.0
+                )
                 score = rrf * (1.0 - recency_weight) + recency_weight * recency
                 combined.append((tome, score))
 
@@ -583,6 +584,7 @@ class MongoTomeRepository(TomeRepository):
                         },
                         {"type": "filter", "path": "confidence"},
                         {"type": "filter", "path": "category"},
+                        {"type": "filter", "path": "superseded_by"},
                     ]
                 },
                 name="vectors",
