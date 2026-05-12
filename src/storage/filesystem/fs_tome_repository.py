@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -12,7 +10,6 @@ from numpy.typing import NDArray
 
 from src.config import DatabaseSettings, TidySettings
 from src.models.tome import Tome
-from src.models.tool_schemas import TaxonomySummary
 from src.services.duplicate_detection import build_duplicate_groups
 from src.services.embedding import EmbeddingService
 from src.storage.errors import (
@@ -63,7 +60,6 @@ class FsTomeRepository(TomeRepository):
         embedding_service: EmbeddingService,
         tidy_settings: TidySettings | None = None,
     ) -> None:
-        self._settings = settings
         self._embedding_service = embedding_service
         self._tidy_settings = tidy_settings or TidySettings()
         self._tomes_dir = resolve_base_path(settings.uri) / settings.tomes_collection
@@ -120,44 +116,6 @@ class FsTomeRepository(TomeRepository):
             raise _wrap_os(exc, "delete", path) from exc
         return True
 
-    async def update(
-        self,
-        tome_id: UUID,
-        *,
-        content: str | None = None,
-        category: str | None = None,
-        tags: list[str] | None = None,
-        source_url: str | None = None,
-        confidence: float | None = None,
-    ) -> Tome | None:
-        """Update a Tome's mutable fields. Returns updated Tome or None if not found."""
-        tome = await self.get_by_id(tome_id)
-        if tome is None:
-            return None
-
-        update_dict: dict[str, object] = {}
-        if content is not None:
-            update_dict["content"] = content
-        if category is not None:
-            update_dict["category"] = category
-        if tags is not None:
-            update_dict["tags"] = tags
-        if source_url is not None:
-            update_dict["source_url"] = source_url
-        if confidence is not None:
-            update_dict["confidence"] = confidence
-
-        if not update_dict:
-            return tome
-
-        updated = tome.model_copy(update=update_dict)
-        try:
-            path = self._get_path(tome_id)
-            await asyncio.to_thread(path.write_text, updated.model_dump_json(indent=2))
-        except OSError as exc:
-            raise _wrap_os(exc, "update", path) from exc
-        return updated
-
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Read a Tome from its JSON file."""
         path = self._get_path(tome_id)
@@ -181,6 +139,22 @@ class FsTomeRepository(TomeRepository):
             # absent" contract.
             return None
 
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id."""
+        path = self._get_path(tome_id)
+        try:
+            # Read the tome
+            tome = await self.get_by_id(tome_id)
+            if tome is None:
+                return False
+            # Mark as superseded
+            tome.superseded_by = by_tome_id
+            # Write back to file
+            await asyncio.to_thread(path.write_text, tome.model_dump_json())
+            return True
+        except OSError as exc:
+            raise _wrap_os(exc, "mark_superseded", path) from exc
+
     def _matches_filters(
         self,
         tome: Tome,
@@ -188,15 +162,12 @@ class FsTomeRepository(TomeRepository):
         category: str | None,
         min_confidence: float,
         research_job_id: UUID | None,
-        thread_id: UUID | None,
     ) -> bool:
         if category is not None and tome.category != category:
             return False
         if tome.confidence < min_confidence:
             return False
-        if research_job_id is not None and tome.research_job_id != research_job_id:
-            return False
-        return thread_id is None or tome.thread_id == thread_id
+        return not (research_job_id is not None and tome.research_job_id != research_job_id)
 
     async def list_all(
         self,
@@ -206,12 +177,8 @@ class FsTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
-        thread_id: UUID | None = None,
     ) -> list[Tome]:
         """Return a filtered + paginated page of Tomes, newest first.
-
-        When thread_id is set, return tomes in that thread sorted by thread_position
-        ascending (conversational order). Otherwise, sort by created_at descending.
 
         Scans every JSON file under the tomes directory and filters in
         memory — acknowledged to be O(n) per call; acceptable for the
@@ -232,14 +199,9 @@ class FsTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
-                thread_id=thread_id,
             )
         ]
-        # If thread_id is set, sort by thread_position ascending; otherwise by created_at descending
-        if thread_id is not None:
-            filtered.sort(key=lambda x: x.thread_position if x.thread_position is not None else 0)
-        else:
-            filtered.sort(key=lambda x: x.created_at, reverse=True)
+        filtered.sort(key=lambda x: x.created_at, reverse=True)
         return filtered[offset : offset + limit]
 
     async def count(
@@ -248,7 +210,6 @@ class FsTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
-        thread_id: UUID | None = None,
     ) -> int:
         """Count Tomes matching the same filter predicates as :meth:`list_all`."""
         try:
@@ -263,7 +224,6 @@ class FsTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
-                thread_id=thread_id,
             )
         )
 
@@ -273,16 +233,14 @@ class FsTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
-        recency_weight: float | None = None,
-        recency_half_life_days: float | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
         """Brute-force cosine-similarity scan over all stored Tomes.
 
         Embeds *query* with the injected :class:`EmbeddingService` and ranks
         results by cosine similarity to each Tome's stored embedding.
         Tomes without an embedding are still included but scored 0.0.
-
-        Optionally applies exponential decay recency weighting to blend with cosine scores.
+        When include_superseded is False (default), filters out tomes marked as superseded.
         """
         query_vec: NDArray[np.float64] | None = None
         try:
@@ -290,18 +248,6 @@ class FsTomeRepository(TomeRepository):
             query_vec = np.array(raw, dtype=np.float64)
         except Exception:
             pass
-
-        # Use provided recency params or fall back to config defaults
-        effective_weight = (
-            recency_weight
-            if recency_weight is not None
-            else self._settings.search.recency_weight
-        )
-        effective_half_life = (
-            recency_half_life_days
-            if recency_half_life_days is not None
-            else self._settings.search.recency_half_life_days
-        )
 
         results: list[tuple[Tome, float]] = []
         try:
@@ -314,32 +260,14 @@ class FsTomeRepository(TomeRepository):
                 continue
             if category is not None and tome.category != category:
                 continue
+            if not include_superseded and tome.superseded_by is not None:
+                continue
 
             score = 0.0
             if query_vec is not None and tome.embedding is not None:
                 score = _cosine_similarity(query_vec, np.array(tome.embedding, dtype=np.float64))
 
             results.append((tome, score))
-
-        # Normalize cosine scores to [0, 1] if recency weighting is enabled
-        if effective_weight > 0 and results:
-            max_score = max(s for _, s in results)
-            if max_score > 0:
-                normalized_results = [(t, s / max_score) for t, s in results]
-            else:
-                normalized_results = results
-
-            # Apply recency weighting
-            now_utc = datetime.now(UTC)
-            final_results = []
-            for tome, cosine_norm in normalized_results:
-                age_days = max(0, (now_utc - tome.created_at).days)
-                recency_score = math.exp(-math.log(2) * age_days / effective_half_life)
-                rrf_component = cosine_norm * (1 - effective_weight)
-                recency_component = recency_score * effective_weight
-                final_score = rrf_component + recency_component
-                final_results.append((tome, final_score))
-            results = final_results
 
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
@@ -375,27 +303,6 @@ class FsTomeRepository(TomeRepository):
             all_tomes,
             self._tidy_settings.model_copy(update={"threshold": threshold}),
         )
-
-    async def taxonomy(self) -> TaxonomySummary:
-        """Count categories and tags across all tomes."""
-        try:
-            all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
-        except OSError as exc:
-            raise _wrap_os(exc, "taxonomy", self._tomes_dir) from exc
-
-        categories: dict[str, int] = {}
-        tags: dict[str, int] = {}
-
-        for tome in all_tomes:
-            # Count categories
-            cat = tome.category
-            categories[cat] = categories.get(cat, 0) + 1
-
-            # Count tags
-            for tag in tome.tags:
-                tags[tag] = tags.get(tag, 0) + 1
-
-        return TaxonomySummary(categories=categories, tags=tags)
 
     def close(self) -> None:
         pass

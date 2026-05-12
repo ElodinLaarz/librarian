@@ -101,6 +101,7 @@ class IngestCallOptions:
     # job topic).
     extra_tags: list[str] | None = None
     force_format: DetectedFormat | None = None
+    supersedes_tome_ids: list[str] | None = None
 
 
 def _cap_tags(tags: list[str]) -> list[str]:
@@ -228,6 +229,25 @@ class Ingestor:
                 status=IngestStatus.REJECTED,
                 reject_reason=reason,
             )
+
+        # Mark superseded tomes (soft-delete) if specified
+        if opts.supersedes_tome_ids and stored:
+            # When there are multiple stored tomes (from resharding), mark all
+            # old tomes as superseded by each new tome. For simplicity, mark them
+            # as superseded by the first stored tome.
+            # In practice, when supersedes_tome_ids is set, there should be one stored tome.
+            new_tome_id = stored[0].id
+            for old_tome_id_str in opts.supersedes_tome_ids:
+                try:
+                    old_tome_id = UUID(old_tome_id_str)
+                    await self._tome_repo.mark_superseded(old_tome_id, new_tome_id)
+                except (ValueError, StorageError) as exc:
+                    logging.warning(
+                        "Failed to mark %s as superseded by %s: %s",
+                        old_tome_id_str,
+                        new_tome_id,
+                        exc,
+                    )
 
         status = IngestStatus.PARTIAL if any_rejected else IngestStatus.STORED
         final_reason = constants.JOIN_SEPARATOR.join(reject_reasons) if reject_reasons else None

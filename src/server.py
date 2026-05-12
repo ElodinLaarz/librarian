@@ -28,10 +28,6 @@ from src.models.tool_schemas import (
     ResearchOutput,
     SearchInput,
     SearchOutput,
-    UpdateInput,
-    UpdateOutput,
-    TaxonomyInput,
-    TaxonomyOutput,
     TidyInput,
     TidyOutput,
 )
@@ -420,8 +416,7 @@ class LibrarianServer:
                 top_k=params.top_k,
                 min_confidence=params.min_confidence,
                 category=params.category,
-                recency_weight=params.recency_weight,
-                recency_half_life_days=params.recency_half_life_days,
+                include_superseded=params.include_superseded,
             )
 
             scores = [s for _, s in results]
@@ -498,6 +493,7 @@ class LibrarianServer:
                 tags_hint=params.tags,
                 source_url=params.source_url,
                 force_format=params.force_format,
+                supersedes_tome_ids=params.supersedes_tome_ids,
             )
             return await ingestor.ingest(params.content, opts)
 
@@ -611,38 +607,6 @@ class LibrarianServer:
             return DeleteOutput(deleted=True)
 
         @self.mcp.tool()
-        async def library_update(params: UpdateInput) -> UpdateOutput:
-            """Update a tome's mutable fields: content, category, tags, source_url, confidence.
-
-            Accepts either the 32-char hex form or the standard hyphenated form
-            for the tome_id. Only the provided fields are updated. If content is
-            changed, the embedding is recomputed. Returns the updated Tome on success,
-            or an error status if the id is malformed or the tome is not found.
-            """
-            tome_repo = self._require(self.tome_repo, "tome_repo")
-            try:
-                tid = UUID(params.tome_id)
-            except (ValueError, AttributeError, TypeError):
-                return UpdateOutput(tome=None, status="invalid_id", error="invalid_id")
-
-            updated = await tome_repo.update(
-                tid,
-                content=params.content,
-                category=params.category,
-                tags=params.tags,
-                source_url=params.source_url,
-                confidence=params.confidence,
-            )
-            if updated is None:
-                return UpdateOutput(tome=None, status="not_found", error="not_found")
-
-            # Strip embedding before returning to clients
-            return UpdateOutput(
-                tome=updated.model_copy(update={"embedding": None}),
-                status="updated",
-            )
-
-        @self.mcp.tool()
         async def library_list(params: ListInput) -> ListOutput:
             """Browse / paginate the library.
 
@@ -685,15 +649,3 @@ class LibrarianServer:
                 total=total,
                 has_more=(params.offset + len(page)) < total,
             )
-
-        @self.mcp.tool()
-        async def library_taxonomy(params: TaxonomyInput) -> TaxonomyOutput:
-            """Enumerate categories and tags in the library.
-
-            Discovers all distinct category values and individual tags
-            across the collection, returning counts for each. Useful for
-            taxonomy-aware search interfaces and exploration.
-            """
-            tome_repo = self._require(self.tome_repo, "tome_repo")
-            summary = await tome_repo.taxonomy()
-            return TaxonomyOutput(summary=summary, status="ok")

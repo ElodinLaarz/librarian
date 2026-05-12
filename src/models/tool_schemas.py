@@ -44,23 +44,9 @@ class SearchInput(BaseModel):
             "``search.default_snippet_chars``."
         ),
     )
-    recency_weight: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Blend RRF scores with recency: [0, 1]. "
-            "0 = no recency boost (RRF only), 1 = pure age-based ranking. "
-            "None uses ``search.recency_weight`` from config."
-        ),
-    )
-    recency_half_life_days: float | None = Field(
-        default=None,
-        gt=0.0,
-        description=(
-            "Half-life in days for exponential decay: days until recency score = 50%. "
-            "None uses ``search.recency_half_life_days`` from config."
-        ),
+    include_superseded: bool = Field(
+        default=False,
+        description="When False (default), search results exclude tomes marked as superseded.",
     )
 
 
@@ -88,9 +74,13 @@ class IngestInput(BaseModel):
     category: str | None = None
     tags: list[str] | None = None
     source_url: str | None = None
-    thread_id: str | None = Field(
+    supersedes_tome_ids: list[str] | None = Field(
         default=None,
-        description="Thread UUID (hex string) for grouping related tomes in conversation.",
+        description=(
+            "When set, marks the specified tome IDs as superseded by the newly "
+            "ingested tome. Superseded tomes are soft-deleted (not removed from storage) "
+            "and filtered from search results by default."
+        ),
     )
     force_format: Literal["text", "code", "python", "yaml", "json", "markdown"] | None = Field(
         default=None,
@@ -160,32 +150,6 @@ class GetOutput(BaseModel):
     error: str | None = None
 
 
-# ── library.update ──────────────────────────────────────────────────
-
-
-class UpdateInput(BaseModel):
-    tome_id: str = Field(
-        ...,
-        max_length=200,
-        description=(
-            "UUID string identifying the Tome to update. Accepts the "
-            "canonical hyphenated form (e.g. as returned by library_search) "
-            "as well as bare hex."
-        ),
-    )
-    content: str | None = Field(default=None, max_length=500_000)
-    category: str | None = None
-    tags: list[str] | None = None
-    source_url: str | None = None
-    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-
-
-class UpdateOutput(BaseModel):
-    tome: Tome | None = None
-    status: Literal["updated", "not_found", "invalid_id"]
-    error: str | None = None
-
-
 # ── library.tidy ──────────────────────────────────────────────────
 
 
@@ -229,56 +193,16 @@ class DeleteOutput(BaseModel):
     error: str | None = None
 
 
-# ── library.update ──────────────────────────────────────────────────
-
-
-class UpdateInput(BaseModel):
-    tome_id: str = Field(
-        ...,
-        description="UUID hex or hyphenated string identifying the tome to update.",
-        max_length=64,
-    )
-    content: str | None = Field(
-        default=None,
-        max_length=500_000,
-        description="New content for the tome. If provided, embedding will be recomputed.",
-    )
-    category: str | None = Field(
-        default=None,
-        description="New category for the tome.",
-    )
-    tags: list[str] | None = Field(
-        default=None,
-        description="New tags for the tome.",
-    )
-    source_url: str | None = Field(
-        default=None,
-        description="New source URL for the tome.",
-    )
-    confidence: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-        description="New confidence score [0.0-1.0].",
-    )
-
-
-class UpdateOutput(BaseModel):
-    tome: Tome | None = None
-    status: Literal["updated", "not_found", "invalid_id"]
-    error: str | None = None
-
-
 # ── library.list ────────────────────────────────────────────────────
 
 
 class ListInput(BaseModel):
     """Filters + pagination for ``library_list``.
 
-    ``research_job_id`` and ``thread_id`` are strings for MCP-client convenience
-    (clients can pass the value they got back from ``library_research`` or
-    ``library_ingest`` without round-tripping through UUID parsing); invalid
-    values produce a clear error at the tool boundary.
+    ``research_job_id`` is a string for MCP-client convenience (clients can
+    pass the value they got back from ``library_research`` without round-
+    tripping through UUID parsing); invalid values produce a clear error
+    at the tool boundary.
     """
 
     category: str | None = None
@@ -286,10 +210,6 @@ class ListInput(BaseModel):
     research_job_id: str | None = Field(
         default=None,
         description="Filter by research job. Must be a UUID hex string.",
-    )
-    thread_id: str | None = Field(
-        default=None,
-        description="Filter by thread. Must be a UUID hex string.",
     )
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
@@ -307,31 +227,3 @@ class ListOutput(BaseModel):
     tomes: list[Tome]
     total: int
     has_more: bool
-
-
-# ── library.taxonomy ────────────────────────────────────────────────
-
-
-class TaxonomySummary(BaseModel):
-    """Count of categories and tags in the library."""
-
-    categories: dict[str, int]
-    tags: dict[str, int]
-
-
-class TaxonomyInput(BaseModel):
-    """Parameters for taxonomy discovery.
-
-    Currently accepts no filters, but structured for future extensibility
-    (e.g., min_count: int = 1 to exclude singleton categories).
-    """
-
-    pass
-
-
-class TaxonomyOutput(BaseModel):
-    """Taxonomy enumeration response."""
-
-    summary: TaxonomySummary
-    status: Literal["ok", "error"]
-    error: str | None = None

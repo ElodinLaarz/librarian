@@ -63,6 +63,8 @@ class Tome(BaseModel):
 
     embedding: Annotated[NDArray[np.float32] | None, SkipJsonSchema()] = Field(default=None)
 
+    superseded_by: UUID | None = None
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(microsecond=0))
 
     @field_validator("created_at", mode="before")
