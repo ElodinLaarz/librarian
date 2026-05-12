@@ -776,7 +776,7 @@ async def test_library_update_not_found() -> None:
 
 async def test_library_update_persists_via_get() -> None:
     """Test that updated tome can be retrieved via library_get."""
-    from src.models.tool_schemas import UpdateInput, GetInput
+    from src.models.tool_schemas import GetInput, UpdateInput
 
     repo = StubTomeRepository()
     tome = _make_tome("original")

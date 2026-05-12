@@ -163,6 +163,7 @@ class MongoTomeRepository(TomeRepository):
         category: str | None,
         min_confidence: float,
         research_job_id: UUID | None,
+        thread_id: UUID | None = None,
     ) -> dict[str, Any]:
         """Translate the public filter args into a Mongo ``find`` predicate.
 
@@ -176,6 +177,8 @@ class MongoTomeRepository(TomeRepository):
             query["confidence"] = {"$gte": min_confidence}
         if research_job_id is not None:
             query["research_job_id"] = research_job_id
+        if thread_id is not None:
+            query["thread_id"] = thread_id
         return query
 
     async def list_all(
@@ -186,14 +189,20 @@ class MongoTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> list[Tome]:
         """Return a filtered + paginated page of Tomes, newest first."""
         query = self._build_list_filter(
             category=category,
             min_confidence=min_confidence,
             research_job_id=research_job_id,
+            thread_id=thread_id,
         )
-        cursor = self._collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
+        sort_field = "thread_position" if thread_id is not None else "created_at"
+        sort_dir = 1 if thread_id is not None else -1
+        cursor = (
+            self._collection.find(query).sort(sort_field, sort_dir).skip(offset).limit(limit)
+        )
         results = []
         try:
             async for doc in cursor:
@@ -208,17 +217,57 @@ class MongoTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> int:
         """Count Tomes matching the same filter predicates as :meth:`list_all`."""
         query = self._build_list_filter(
             category=category,
             min_confidence=min_confidence,
             research_job_id=research_job_id,
+            thread_id=thread_id,
         )
         try:
             return int(await self._collection.count_documents(query))
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "count") from exc
+
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update mutable fields on a Tome. Returns the updated Tome or None if not found."""
+        patch: dict[str, Any] = {}
+        if content is not None:
+            patch["content"] = content
+        if category is not None:
+            patch["category"] = category
+        if tags is not None:
+            patch["tags"] = tags
+        if source_url is not None:
+            patch["source_url"] = source_url
+        if confidence is not None:
+            patch["confidence"] = confidence
+
+        if not patch:
+            return await self.get_by_id(tome_id)
+
+        try:
+            result = await self._collection.find_one_and_update(
+                {"_id": tome_id},
+                {"$set": patch},
+                return_document=True,
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "update") from exc
+        if result is None:
+            return None
+        return MongoTome.model_validate(result).to_tome()
 
     async def search(
         self,

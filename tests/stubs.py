@@ -7,7 +7,7 @@ from uuid import UUID
 import numpy as np
 from numpy.typing import NDArray
 
-from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
+from src.config import EmbeddingSettings, LibrarianConfig
 from src.models.enums import VerificationVerdict
 from src.models.research_job import ResearchJob
 from src.models.tome import Tome
@@ -176,9 +176,7 @@ class StubTomeRepository(TomeRepository):
             return False
         if research_job_id is not None and tome.research_job_id != research_job_id:
             return False
-        if thread_id is not None and tome.thread_id != thread_id:
-            return False
-        return True
+        return thread_id is None or tome.thread_id == thread_id
 
     async def list_all(
         self,

@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -103,7 +103,7 @@ async def test_newer_tome_ranks_higher_with_recency_weight(
 
     With recency_weight=0.5, recency_half_life_days=90, Tome A should rank first.
     """
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     two_days_ago = now_utc - timedelta(days=2)
     seven_hundred_days_ago = now_utc - timedelta(days=730)
 

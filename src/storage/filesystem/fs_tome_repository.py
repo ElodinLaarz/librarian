@@ -200,12 +200,15 @@ class FsTomeRepository(TomeRepository):
         category: str | None,
         min_confidence: float,
         research_job_id: UUID | None,
+        thread_id: UUID | None = None,
     ) -> bool:
         if category is not None and tome.category != category:
             return False
         if tome.confidence < min_confidence:
             return False
-        return not (research_job_id is not None and tome.research_job_id != research_job_id)
+        if research_job_id is not None and tome.research_job_id != research_job_id:
+            return False
+        return thread_id is None or tome.thread_id == thread_id
 
     async def list_all(
         self,
@@ -215,6 +218,7 @@ class FsTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> list[Tome]:
         """Return a filtered + paginated page of Tomes, newest first.
 
@@ -237,9 +241,13 @@ class FsTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
+                thread_id=thread_id,
             )
         ]
-        filtered.sort(key=lambda x: x.created_at, reverse=True)
+        if thread_id is not None:
+            filtered.sort(key=lambda x: x.thread_position if x.thread_position is not None else 0)
+        else:
+            filtered.sort(key=lambda x: x.created_at, reverse=True)
         return filtered[offset : offset + limit]
 
     async def count(
@@ -248,6 +256,7 @@ class FsTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> int:
         """Count Tomes matching the same filter predicates as :meth:`list_all`."""
         try:
@@ -262,6 +271,7 @@ class FsTomeRepository(TomeRepository):
                 category=category,
                 min_confidence=min_confidence,
                 research_job_id=research_job_id,
+                thread_id=thread_id,
             )
         )
 

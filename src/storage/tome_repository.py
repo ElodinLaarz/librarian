@@ -85,6 +85,7 @@ class TomeRepository(ABC):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> list[Tome]:
         """Return a page of Tomes matching the given filters.
 
@@ -102,6 +103,7 @@ class TomeRepository(ABC):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> int:
         """Return the total number of Tomes matching the given filters.
 
@@ -109,6 +111,20 @@ class TomeRepository(ABC):
         apply the same filter predicates so callers can compute ``has_more``
         from ``offset + len(page) < total``.
         """
+        ...
+
+    @abstractmethod
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update mutable fields on a Tome. Returns the updated Tome or None if not found."""
         ...
 
     @abstractmethod
