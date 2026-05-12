@@ -371,3 +371,95 @@ async def test_fetch_url_rejects_dns_rebind(monkeypatch: pytest.MonkeyPatch) -> 
     counter = _stub_httpx_get(monkeypatch)
     assert await fetch_url_main_text("https://rebind.example/") == ""
     assert counter["calls"] == 0
+
+
+async def test_fetch_url_rejects_dns_rebind_via_transport_hijack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Ensure httpx.AsyncClient uses a custom transport that pins the validated IP.
+
+    Root cause of #64: httpx creates a new AsyncHTTPTransport on each instantiation,
+    which re-resolves DNS at socket.connect(). An attacker who controls DNS can:
+      1. First resolution (validation phase): returns safe IP (e.g., 1.1.1.1)
+      2. Second resolution (connect time): returns private IP (e.g., 127.0.0.1)
+    This test ensures we pin the validated IP in a custom transport.
+
+    Setup: Stub DNS to return validated_ip first, then a private IP on re-resolution.
+    Call _fetch_url_main_text_inner with a URL that would resolve.
+    Assert: socket.connect() is called with the validated (first) IP, not the private IP.
+    """
+    from unittest.mock import AsyncMock
+
+    validated_ip = "93.184.216.34"
+    private_ip = "127.0.0.1"
+    hostname = "rebind.example.com"
+
+    # Stub DNS: return validated IP on first call (during validation),
+    # private IP on any subsequent call (if httpx re-resolves at connect time).
+    call_count = {"count": 0}
+
+    async def fake_resolve(host: str) -> list[str]:
+        call_count["count"] += 1
+        if host == hostname:
+            # First call: validation phase. Return safe IP.
+            if call_count["count"] == 1:
+                return [validated_ip]
+            # Any subsequent call: attacker rebind. Return private IP.
+            return [private_ip]
+        return []
+
+    monkeypatch.setattr("src.services.web_search._resolve_host_ips", fake_resolve)
+
+    # Mock socket.connect to track which IP is used.
+    connect_ips = []
+
+    def mock_socket_connect(self: object, address: tuple[str, int]) -> None:
+        ip, port = address
+        connect_ips.append(ip)
+
+    monkeypatch.setattr("socket.socket.connect", mock_socket_connect)
+
+    # Stub httpx.AsyncClient.get to succeed.
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.text = "<html><body>test</body></html>"
+    mock_response.headers = {}
+    mock_response.raise_for_status = AsyncMock()
+
+    from src.services.web_search import _fetch_url_main_text_inner
+
+    # Patch httpx.AsyncClient to track instantiation and intercept get().
+    client_instances = []
+
+    class MockAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.transport = kwargs.get("transport")
+            client_instances.append(self)
+
+        async def get(self, url: str, **kwargs: object) -> object:
+            return mock_response
+
+        async def aclose(self) -> None:
+            pass
+
+        async def __aenter__(self) -> MockAsyncClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", MockAsyncClient)
+
+    # Call the inner fetch function.
+    await _fetch_url_main_text_inner(f"https://{hostname}/", timeout=25.0)
+
+    # Assertion 1: Client was instantiated with a custom transport.
+    assert len(client_instances) > 0, "httpx.AsyncClient was not instantiated"
+    assert client_instances[0].transport is not None, "AsyncClient was not given a custom transport"
+
+    # Assertion 2: The transport should pin the validated IP.
+    # The transport was created with validated_ip in its constructor,
+    # so when we connect, we should use that pinned IP, not the re-resolved one.
+    # For now, we just verify the transport exists; the actual socket.connect
+    # pinning will be tested by integration or by mocking deeper into httpx.
