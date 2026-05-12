@@ -89,6 +89,16 @@ class SearchSettings(BaseSettings):
     max_top_k: int = 20
     min_confidence: float = 0.5
     use_keyword_prefilter: bool = True
+    # Default per-tome content cap applied by ``library_search`` when the caller
+    # does not pass an explicit ``content_max_chars``. ``None`` (the default)
+    # preserves backward-compatible behaviour: full content returned. Setting
+    # this (e.g. 2000) protects agent context windows from large payloads;
+    # callers can still fetch the full content via a dedicated retrieval tool
+    # by referencing the returned ``tome_ids``.
+    default_content_max_chars: int | None = Field(default=None, ge=1)
+    # Default snippet window applied by ``library_search`` when the caller does
+    # not pass an explicit ``snippet_chars``. ``0`` disables snippet extraction.
+    default_snippet_chars: int = Field(default=0, ge=0)
 
 
 class WebSearchSettings(BaseSettings):

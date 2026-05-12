@@ -49,6 +49,13 @@ search:
   min_confidence: 0.5
   # Run a keyword prefilter before vector search to narrow the candidate set.
   use_keyword_prefilter: true
+  # Default per-tome content cap applied when the caller does not pass
+  # `content_max_chars`. `null` (default) returns full content; set e.g.
+  # `2000` to protect agent context windows. See issue #48.
+  default_content_max_chars: null
+  # Default snippet window applied when the caller does not pass
+  # `snippet_chars`. `0` disables snippet extraction (default).
+  default_snippet_chars: 0
 
 web_search:
   # Max results per web search request.

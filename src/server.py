@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from src.config import LibrarianConfig
 from src.models.enums import ResearchJobStatus
 from src.models.research_job import ResearchJob
+from src.models.tome import Tome
 from src.models.tool_schemas import (
     DeleteInput,
     DeleteOutput,
@@ -51,6 +53,70 @@ _T = TypeVar("_T")
 
 DEFAULT_CONFIG_PATH = Path("librarian.config.yaml")
 EXAMPLE_CONFIG_FILENAME = "librarian.config.example.yaml"
+
+# Splits a search query into lexical terms used for snippet extraction.
+_QUERY_TERM_RE = re.compile(r"\w+", re.UNICODE)
+# Ellipsis appended when content is truncated. Kept as a constant so tests and
+# callers agree on the exact marker.
+_TRUNCATION_ELLIPSIS = "..."
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    """Truncate ``text`` to ``max_chars`` total characters, appending an ellipsis.
+
+    The returned string is guaranteed to be at most ``max_chars`` characters
+    long. When ``max_chars`` is smaller than the ellipsis itself, the text is
+    cut hard with no marker.
+    """
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= len(_TRUNCATION_ELLIPSIS):
+        return text[:max_chars]
+    return text[: max_chars - len(_TRUNCATION_ELLIPSIS)] + _TRUNCATION_ELLIPSIS
+
+
+def _extract_snippet(content: str, query: str, window: int) -> str:
+    """Return a ``window``-char excerpt of ``content`` centred on the first
+    case-insensitive match of any token in ``query``.
+
+    Falls back to the leading ``window`` characters when no term matches.
+    Adds leading/trailing ellipses when the excerpt does not touch the
+    respective edge of the source, so the agent knows the snippet is partial.
+    """
+    if window <= 0 or not content:
+        return ""
+    if len(content) <= window:
+        return content
+
+    terms = [t for t in _QUERY_TERM_RE.findall(query.lower()) if t]
+    lower = content.lower()
+    match_idx = -1
+    match_len = 0
+    for term in terms:
+        idx = lower.find(term)
+        if idx != -1:
+            match_idx = idx
+            match_len = len(term)
+            break
+
+    if match_idx == -1:
+        # Leading window with trailing ellipsis (we know content is longer than window).
+        return content[:window] + _TRUNCATION_ELLIPSIS
+
+    centre = match_idx + match_len // 2
+    half = window // 2
+    start = max(0, centre - half)
+    end = start + window
+    if end > len(content):
+        end = len(content)
+        start = max(0, end - window)
+
+    excerpt = content[start:end]
+    if start > 0:
+        excerpt = _TRUNCATION_ELLIPSIS + excerpt
+    if end < len(content):
+        excerpt = excerpt + _TRUNCATION_ELLIPSIS
+    return excerpt
 
 
 def load_config() -> LibrarianConfig:
@@ -325,7 +391,12 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_search(params: SearchInput) -> SearchOutput:
-            """Search the library for relevant Tomes using semantic vector search."""
+            """Search the library for relevant Tomes using semantic vector search.
+
+            The returned ``content`` may be capped or snippet-ised to keep
+            agent context windows under control (issue #48). The full content
+            of any hit can be retrieved later via its ``tome_id``.
+            """
             tome_repo = self._require(self.tome_repo, "tome_repo")
 
             results = await tome_repo.search(
@@ -336,18 +407,62 @@ class LibrarianServer:
             )
 
             scores = [s for _, s in results]
+            search_cfg = self.config.search
 
-            # Strip embeddings and optionally summaries before returning to clients.
-            update_data: dict[str, object] = {"embedding": None}
-            if not params.include_summary:
-                update_data["summary"] = ""
-            tomes = [t.model_copy(update=update_data) for t, _ in results]
+            # Resolve effective payload knobs: per-call overrides win, with
+            # the server config defaults filling in when callers do not opt in.
+            effective_max_chars = (
+                params.content_max_chars
+                if params.content_max_chars is not None
+                else search_cfg.default_content_max_chars
+            )
+            effective_snippet_chars = (
+                params.snippet_chars
+                if params.snippet_chars is not None
+                else search_cfg.default_snippet_chars
+            )
+
+            tomes: list[Tome] = []
+            is_snippet: list[bool] = []
+            tome_ids: list[str] = []
+            for t, _ in results:
+                tome_ids.append(str(t.id))
+                modified = False
+
+                # 1. Build the content payload according to caller preferences.
+                if not params.include_content:
+                    new_content = ""
+                    modified = True
+                elif effective_snippet_chars and effective_snippet_chars > 0:
+                    snippet = _extract_snippet(t.content, params.query, effective_snippet_chars)
+                    # Treat the hit as snippet-ised whenever we ran extraction
+                    # against content longer than the requested window.
+                    modified = len(t.content) > effective_snippet_chars
+                    new_content = snippet
+                else:
+                    new_content = t.content
+
+                # 2. Apply the absolute cap on top of whatever payload we have.
+                if effective_max_chars is not None and len(new_content) > effective_max_chars:
+                    new_content = _truncate(new_content, effective_max_chars)
+                    modified = True
+
+                update_data: dict[str, object] = {
+                    "embedding": None,
+                    "content": new_content,
+                }
+                if not params.include_summary:
+                    update_data["summary"] = ""
+                tomes.append(t.model_copy(update=update_data))
+                is_snippet.append(modified)
 
             return SearchOutput(
                 tomes=tomes,
                 scores=scores,
                 query_id=uuid4().hex,
                 from_cache=False,
+                tome_ids=tome_ids,
+                is_snippet=is_snippet,
             )
 
         @self.mcp.tool()

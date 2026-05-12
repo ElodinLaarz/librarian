@@ -86,6 +86,7 @@ def test_no_unexpected_tools_registered() -> None:
 
 
 def _make_tome(
+    content: str | None = None,
     *,
     tome_id: uuid.UUID | None = None,
     title: str = "Test Tome",
@@ -96,7 +97,7 @@ def _make_tome(
     return Tome(
         id=tome_id or uuid.uuid4(),
         title=title,
-        content=f"Body of {title}",
+        content=content if content is not None else f"Body of {title}",
         summary=f"Summary of {title}",
         category=category,
         tags=["t"],
@@ -473,3 +474,205 @@ async def test_library_delete_invalid_id_returns_invalid_id_error() -> None:
     result = await library_delete(DeleteInput(tome_id="not-a-uuid"))
     assert result.deleted is False
     assert result.error == "invalid_id"
+
+
+# ── library_search payload capping (issue #48) ──────────────────────
+
+
+def _get_library_search(server):
+    return next(t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_search")
+
+
+def _attach_repo(server, repo):
+    """Bypass the lifespan and bind a pre-seeded repository for handler-level tests."""
+    server.tome_repo = repo
+
+
+async def test_library_search_default_returns_full_content_backcompat() -> None:
+    """Default invocation preserves backward compatibility: full content returned."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    repo = StubTomeRepository()
+    long_content = "abcdefghij" * 600  # 6000 chars
+    await repo.insert(_make_tome(long_content))
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="anything"))
+    assert len(out.tomes) == 1
+    assert out.tomes[0].content == long_content
+    assert out.is_snippet == [False]
+    assert out.tome_ids == [str(out.tomes[0].id)]
+
+
+async def test_library_search_include_content_false_drops_content() -> None:
+    """include_content=False replaces content with empty string and flags the hit."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    repo = StubTomeRepository()
+    tome = _make_tome("a" * 5000)
+    await repo.insert(tome)
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="anything", include_content=False))
+    assert out.tomes[0].content == ""
+    assert out.is_snippet == [True]
+    assert out.tome_ids == [str(tome.id)]
+
+
+async def test_library_search_content_max_chars_truncates_with_ellipsis() -> None:
+    """content_max_chars caps content length and appends an ellipsis when cut."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome("x" * 5000))
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="x", content_max_chars=200))
+    body = out.tomes[0].content
+    assert body.endswith("...")
+    assert len(body) <= 200
+    assert body.startswith("x")
+    assert out.is_snippet == [True]
+
+
+async def test_library_search_content_max_chars_no_truncation_when_short() -> None:
+    """When content already fits the cap, leave it untouched and do not flag it."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome("short content"))
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="short", content_max_chars=500))
+    assert out.tomes[0].content == "short content"
+    assert out.is_snippet == [False]
+
+
+async def test_library_search_snippet_window_around_match() -> None:
+    """snippet_chars>0 returns a query-centred window around the first match."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    # Build a long blob with a unique marker buried deep inside.
+    prefix = "lorem ipsum " * 200  # ~2400 chars
+    marker = "UNIQUEMARKER"
+    suffix = " dolor sit amet" * 200
+    content = prefix + marker + suffix
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(content))
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="UNIQUEMARKER", snippet_chars=200))
+    body = out.tomes[0].content
+    assert marker in body
+    # snippet length is roughly the window + ellipsis padding
+    assert len(body) <= 200 + 10
+    assert out.is_snippet == [True]
+
+
+async def test_library_search_snippet_no_match_returns_leading_window() -> None:
+    """If no query term is found, snippet returns the leading window of the content."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    content = "abcdef" * 1000
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(content))
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="ZZZ_not_present", snippet_chars=120))
+    body = out.tomes[0].content
+    assert body.startswith("abcdef")
+    assert len(body) <= 120 + 10
+    assert out.is_snippet == [True]
+
+
+async def test_library_search_snippet_plus_max_chars_caps_snippet() -> None:
+    """When both snippet_chars and content_max_chars are set, the cap also applies."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    content = "Q" * 50 + "needle" + "Q" * 1000
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(content))
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="needle", snippet_chars=400, content_max_chars=80))
+    body = out.tomes[0].content
+    assert len(body) <= 80
+    assert out.is_snippet == [True]
+
+
+async def test_library_search_default_cap_from_config() -> None:
+    """search.default_content_max_chars in config applies when caller does not override."""
+    from src.config import SearchSettings
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome("p" * 4000))
+
+    cfg = make_test_config(search=SearchSettings(default_content_max_chars=300))
+    server = LibrarianServer(cfg)
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="anything"))
+    body = out.tomes[0].content
+    assert body.endswith("...")
+    assert len(body) <= 300
+    assert out.is_snippet == [True]
+
+
+async def test_library_search_output_exposes_tome_ids() -> None:
+    """tome_ids is always populated 1:1 with tomes so callers can fetch full content."""
+    from src.models.tool_schemas import SearchInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    repo = StubTomeRepository()
+    t1 = _make_tome("alpha", title="A")
+    t2 = _make_tome("beta", title="B")
+    await repo.insert(t1)
+    await repo.insert(t2)
+
+    server = LibrarianServer(make_test_config())
+    _attach_repo(server, repo)
+    library_search = _get_library_search(server)
+
+    out = await library_search(SearchInput(query="x", top_k=5))
+    assert out.tome_ids == [str(t.id) for t in out.tomes]
