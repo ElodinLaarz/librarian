@@ -14,6 +14,8 @@ from src.config import DatabaseSettings
 from src.models.enums import SourceType
 from src.models.tome import Tome
 from src.storage.errors import StorageError
+from src.storage.mongo.client import build_motor_client
+from src.storage.mongo.mongo_research_job_repository import MongoResearchJobRepository
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from tests.stubs import StubEmbeddingService
 
@@ -288,6 +290,91 @@ async def test_ensure_indexes_skips_when_atlas_search_unsupported(
     )
     # And create_search_index must not have been invoked.
     assert repo._collection.create_search_index.await_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Shared Motor client across Mongo repositories (issue #25)
+# ---------------------------------------------------------------------------
+
+
+def test_repos_share_injected_motor_client() -> None:
+    """A single Motor client passed into both repos must be reused, not duplicated.
+
+    Network-free: we never call any method on the client, just check identity
+    against ``_client``. This is the regression guard for issue #25 — before
+    the refactor each repo built its own ``AsyncIOMotorClient`` in ``__init__``.
+    """
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=False,
+        tls_cert_path="/dev/null",
+        database="test_library",
+    )
+    embedding_service = StubEmbeddingService()
+    shared_client = build_motor_client(settings)
+    try:
+        tome_repo = MongoTomeRepository(settings, embedding_service, client=shared_client)
+        job_repo = MongoResearchJobRepository(settings, client=shared_client)
+        assert tome_repo._client is shared_client
+        assert job_repo._client is shared_client
+        assert tome_repo._client is job_repo._client
+        # Repos must not own the lifespan-owned client; closing one must NOT
+        # tear down the underlying connection pool used by the other.
+        assert tome_repo._owns_client is False
+        assert job_repo._owns_client is False
+    finally:
+        shared_client.close()
+
+
+def test_repo_close_is_noop_for_injected_client() -> None:
+    """Closing a repo built with an injected client must NOT close that client.
+
+    The lifespan owns the shared client; if one repo's ``close()`` tore it
+    down, the sibling repo would suddenly see a dead connection pool.
+    """
+    embedding_service = StubEmbeddingService()
+    shared_client = MagicMock()
+    tome_repo = MongoTomeRepository.__new__(MongoTomeRepository)
+    tome_repo._client = shared_client  # type: ignore[attr-defined]
+    tome_repo._owns_client = False  # type: ignore[attr-defined]
+    tome_repo._embedding_service = embedding_service  # type: ignore[attr-defined]
+    tome_repo._collection = MagicMock()  # type: ignore[attr-defined]
+    tome_repo.close()
+    assert shared_client.close.call_count == 0
+
+    # And the opposite case: a repo that built its own client DOES close it.
+    owned_client = MagicMock()
+    tome_repo_owned = MongoTomeRepository.__new__(MongoTomeRepository)
+    tome_repo_owned._client = owned_client  # type: ignore[attr-defined]
+    tome_repo_owned._owns_client = True  # type: ignore[attr-defined]
+    tome_repo_owned._embedding_service = embedding_service  # type: ignore[attr-defined]
+    tome_repo_owned._collection = MagicMock()  # type: ignore[attr-defined]
+    tome_repo_owned.close()
+    assert owned_client.close.call_count == 1
+
+
+def test_build_motor_client_sets_timeout_defaults() -> None:
+    """The shared factory must apply the project's connection-timeout defaults.
+
+    These exist so a misconfigured / unreachable Mongo surfaces quickly instead
+    of hanging server startup behind the driver's 30-second default.
+    """
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=False,
+        tls_cert_path="/dev/null",
+        database="test_library",
+    )
+    client = build_motor_client(settings)
+    try:
+        opts = client.options
+        # Motor / pymongo converts ms kwargs into seconds on the ClientOptions
+        # and PoolOptions snapshots.
+        assert opts.server_selection_timeout == pytest.approx(5.0)
+        assert opts.pool_options.connect_timeout == pytest.approx(5.0)
+        assert opts.pool_options.socket_timeout == pytest.approx(30.0)
+    finally:
+        client.close()
 
 
 @pytest.mark.asyncio

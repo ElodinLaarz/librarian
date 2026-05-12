@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
 from mcp.server import FastMCP
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config import LibrarianConfig
 from src.models.enums import ResearchJobStatus
@@ -34,6 +35,7 @@ from src.services.verifier import Verifier
 from src.services.web_search import build_web_search_client
 from src.storage.filesystem.fs_research_job_repository import FsResearchJobRepository
 from src.storage.filesystem.fs_tome_repository import FsTomeRepository
+from src.storage.mongo.client import build_motor_client
 from src.storage.mongo.mongo_research_job_repository import MongoResearchJobRepository
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
 from src.storage.research_job_repository import ResearchJobRepository
@@ -91,6 +93,10 @@ class LibrarianServer:
         self.job_repo: ResearchJobRepository | None = None
         self.researcher: Researcher | None = None
         self._embedding_service: EmbeddingService | None = None
+        # Shared Motor client owned by the lifespan and handed to every
+        # Mongo-backed repo so the process maintains a single connection pool
+        # (issue #25). ``None`` when the backend is filesystem.
+        self._mongo_client: AsyncIOMotorClient[Mapping[str, Any]] | None = None
         self._bg_tasks: set[asyncio.Task[None]] = set()
         self.mcp = FastMCP(
             "The Librarian",
@@ -136,12 +142,21 @@ class LibrarianServer:
         self._embedding_service = await build_embedding_service(self.config.embedding)
 
         if self.config.database.uri.startswith("mongodb"):
+            # Build the single Motor client up front so both repos share one
+            # connection pool / TLS handshake (issue #25). Ownership lives on
+            # the server; repos receive it via ``client=`` and must NOT close
+            # it themselves.
+            self._mongo_client = build_motor_client(self.config.database)
             self.tome_repo = MongoTomeRepository(
                 self.config.database,
                 self._embedding_service,
                 self.config.tidy,
+                client=self._mongo_client,
             )
-            self.job_repo = MongoResearchJobRepository(self.config.database)
+            self.job_repo = MongoResearchJobRepository(
+                self.config.database,
+                client=self._mongo_client,
+            )
             await self.tome_repo.ensure_indexes()
         else:
             self.tome_repo = FsTomeRepository(
@@ -185,6 +200,11 @@ class LibrarianServer:
             self.job_repo = None
         if self.tome_repo:
             self.tome_repo.close()
+        # Repo .close() is a no-op for the shared client; the lifespan owns it
+        # and must tear it down here so the connection pool actually drains.
+        if self._mongo_client is not None:
+            self._mongo_client.close()
+            self._mongo_client = None
         if self.ingestor is not None:
             await self.ingestor.aclose()
         if isinstance(self._embedding_service, OllamaEmbeddingService):
