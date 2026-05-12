@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -29,6 +28,7 @@ from src.storage.errors import (
     DuplicateError,
     StorageError,
 )
+from src.storage.mongo.client import build_motor_client
 from src.storage.mongo.mongo_tome import MongoTome
 from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
@@ -91,17 +91,26 @@ class MongoTomeRepository(TomeRepository):
         settings: DatabaseSettings,
         embedding_service: EmbeddingService,
         tidy_settings: TidySettings | None = None,
+        *,
+        client: AsyncIOMotorClient[Mapping[str, Any]] | None = None,
+        owns_client: bool | None = None,
     ) -> None:
-        kwargs: dict[str, Any] = {"uuidRepresentation": "standard"}
-        if settings.tls:
-            kwargs["tls"] = True
-            kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
-        else:
-            kwargs["tls"] = False
+        """Create a tome repo against the given Mongo database.
 
-        self._client: AsyncIOMotorClient[Mapping[str, Any]] = AsyncIOMotorClient(
-            settings.uri, **kwargs
+        When ``client`` is provided the repository uses the shared client and
+        does NOT close it on ``close()`` — ownership stays with the caller
+        (typically :class:`LibrarianServer` lifespan). When ``client`` is
+        omitted a private client is built from ``settings`` and closed on
+        ``close()`` for backwards compatibility with the previous API and
+        with tests that construct repos directly.
+        """
+        self._client: AsyncIOMotorClient[Mapping[str, Any]] = (
+            client if client is not None else build_motor_client(settings)
         )
+        # Default ownership tracks whether the caller supplied the client: a
+        # repo that built its own client closes it; one handed a shared client
+        # does not. ``owns_client`` lets callers override this for tests.
+        self._owns_client = owns_client if owns_client is not None else (client is None)
 
         self._embedding_service = embedding_service
         self._tidy_settings = tidy_settings or TidySettings()
@@ -428,5 +437,11 @@ class MongoTomeRepository(TomeRepository):
                 raise _wrap_mongo(exc, "create_search_index (default)") from exc
 
     def close(self) -> None:
-        """Close the MongoDB client connection."""
-        self._client.close()
+        """Close the MongoDB client connection if this repo owns it.
+
+        When the client was injected by the caller (e.g. the lifespan-owned
+        shared client) ownership stays with the caller and ``close()`` is a
+        no-op, so a sibling repo using the same client can keep working.
+        """
+        if self._owns_client:
+            self._client.close()
