@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from uuid import uuid4
 
 import pytest
 
@@ -64,6 +65,7 @@ def test_expected_tools_are_registered() -> None:
     assert "library_ingest" in tool_names
     assert "library_research" in tool_names
     assert "library_get" in tool_names
+    assert "library_delete" in tool_names
 
 
 def test_no_unexpected_tools_registered() -> None:
@@ -77,6 +79,7 @@ def test_no_unexpected_tools_registered() -> None:
         "library_research",
         "library_tidy",
         "library_get",
+        "library_delete",
     }
 
 
@@ -109,6 +112,29 @@ def _make_tome(*, tome_id: uuid.UUID | None = None, title: str = "Test Tome") ->
         source_url=None,
         source_type=SourceType.AGENT_INPUT,
         confidence=0.8,
+        embedding=None,
+    )
+
+
+# ── library_delete behavioural tests (issue #39) ────────────────────
+
+
+def _make_test_tome(tome_id=None):
+    """Build a Tome instance suitable for inserting into a stub repo."""
+    from uuid import uuid4 as _uuid4
+
+    from src.models.enums import SourceType
+    from src.models.tome import Tome
+
+    return Tome(
+        id=tome_id or _uuid4(),
+        title="t",
+        content="c",
+        summary="s",
+        category="general",
+        tags=["x"],
+        source_type=SourceType.MANUAL,
+        confidence=0.9,
         embedding=None,
     )
 
@@ -154,7 +180,7 @@ async def test_library_get_accepts_canonical_hyphenated_uuid() -> None:
     )
 
     canonical = str(tome.id)
-    assert "-" in canonical  # sanity: confirm we're exercising the hyphenated path
+    assert "-" in canonical
     result = await library_get(GetInput(tome_id=canonical))
     assert result.status == "found"
     assert result.tome is not None
@@ -237,3 +263,80 @@ async def test_library_get_outside_lifespan_raises_runtime_error() -> None:
 
     with pytest.raises(RuntimeError, match="LibrarianServer not initialised"):
         await library_get(GetInput(tome_id=str(uuid.uuid4())))
+
+
+async def test_library_delete_existing_tome_returns_deleted_true() -> None:
+    """Deleting an existing tome returns deleted=True and removes it from the repo."""
+    from src.models.tool_schemas import DeleteInput
+    from src.server import LibrarianServer
+
+    server = LibrarianServer(make_test_config())
+    repo = StubTomeRepository()
+    tome = _make_test_tome()
+    await repo.insert(tome)
+    server.tome_repo = repo
+
+    library_delete = next(
+        t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_delete"
+    )
+
+    result = await library_delete(DeleteInput(tome_id=tome.id.hex))
+    assert result.deleted is True
+    assert result.error is None
+    assert await repo.get_by_id(tome.id) is None
+
+
+async def test_library_delete_missing_tome_returns_not_found() -> None:
+    """Deleting a non-existent UUID returns deleted=False with error='not_found'."""
+    from src.models.tool_schemas import DeleteInput
+    from src.server import LibrarianServer
+
+    server = LibrarianServer(make_test_config())
+    server.tome_repo = StubTomeRepository()
+
+    library_delete = next(
+        t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_delete"
+    )
+
+    result = await library_delete(DeleteInput(tome_id=uuid4().hex))
+    assert result.deleted is False
+    assert result.error == "not_found"
+
+
+async def test_library_delete_accepts_hyphenated_uuid() -> None:
+    """The handler accepts both hex and standard hyphenated UUID strings."""
+    from src.models.tool_schemas import DeleteInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    server = LibrarianServer(make_test_config())
+    repo = StubTomeRepository()
+    tome = _make_test_tome()
+    await repo.insert(tome)
+    server.tome_repo = repo
+
+    library_delete = next(
+        t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_delete"
+    )
+
+    # Hyphenated form (36 chars) — the canonical str(UUID) representation.
+    result = await library_delete(DeleteInput(tome_id=str(tome.id)))
+    assert result.deleted is True
+    assert result.error is None
+
+
+async def test_library_delete_invalid_id_returns_invalid_id_error() -> None:
+    """Malformed tome_id is reported as an error, never raised."""
+    from src.models.tool_schemas import DeleteInput
+    from src.server import LibrarianServer
+
+    server = LibrarianServer(make_test_config())
+    server.tome_repo = StubTomeRepository()
+
+    library_delete = next(
+        t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_delete"
+    )
+
+    result = await library_delete(DeleteInput(tome_id="not-a-uuid"))
+    assert result.deleted is False
+    assert result.error == "invalid_id"

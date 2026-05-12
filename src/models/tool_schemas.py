@@ -125,3 +125,19 @@ class TidyOutput(BaseModel):
     failed_groups: int
     skipped_groups: int
     elapsed_ms: int
+
+
+# ── library.delete ──────────────────────────────────────────────────
+
+
+class DeleteInput(BaseModel):
+    tome_id: str = Field(
+        ...,
+        description="UUID string (hex or hyphenated) identifying the tome to remove.",
+        max_length=64,
+    )
+
+
+class DeleteOutput(BaseModel):
+    deleted: bool
+    error: str | None = None
