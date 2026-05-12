@@ -139,6 +139,22 @@ class FsTomeRepository(TomeRepository):
             # absent" contract.
             return None
 
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id."""
+        path = self._get_path(tome_id)
+        try:
+            # Read the tome
+            tome = await self.get_by_id(tome_id)
+            if tome is None:
+                return False
+            # Mark as superseded
+            tome.superseded_by = by_tome_id
+            # Write back to file
+            await asyncio.to_thread(path.write_text, tome.model_dump_json())
+            return True
+        except OSError as exc:
+            raise _wrap_os(exc, "mark_superseded", path) from exc
+
     def _matches_filters(
         self,
         tome: Tome,
@@ -217,12 +233,14 @@ class FsTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
         """Brute-force cosine-similarity scan over all stored Tomes.
 
         Embeds *query* with the injected :class:`EmbeddingService` and ranks
         results by cosine similarity to each Tome's stored embedding.
         Tomes without an embedding are still included but scored 0.0.
+        When include_superseded is False (default), filters out tomes marked as superseded.
         """
         query_vec: NDArray[np.float64] | None = None
         try:
@@ -241,6 +259,8 @@ class FsTomeRepository(TomeRepository):
             if tome.confidence < min_confidence:
                 continue
             if category is not None and tome.category != category:
+                continue
+            if not include_superseded and tome.superseded_by is not None:
                 continue
 
             score = 0.0

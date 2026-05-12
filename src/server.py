@@ -416,6 +416,7 @@ class LibrarianServer:
                 top_k=params.top_k,
                 min_confidence=params.min_confidence,
                 category=params.category,
+                include_superseded=params.include_superseded,
             )
 
             scores = [s for _, s in results]
@@ -492,6 +493,7 @@ class LibrarianServer:
                 tags_hint=params.tags,
                 source_url=params.source_url,
                 force_format=params.force_format,
+                supersedes_tome_ids=params.supersedes_tome_ids,
             )
             return await ingestor.ingest(params.content, opts)
 

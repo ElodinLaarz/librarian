@@ -146,6 +146,17 @@ class MongoTomeRepository(TomeRepository):
             return None
         return MongoTome.model_validate(doc).to_tome()
 
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id."""
+        try:
+            result = await self._collection.update_one(
+                {"_id": tome_id},
+                {"$set": {"superseded_by": by_tome_id}},
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "mark_superseded") from exc
+        return result.modified_count > 0
+
     @staticmethod
     def _build_list_filter(
         *,
@@ -215,10 +226,12 @@ class MongoTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
         Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
+        When include_superseded is False (default), filters out tomes marked as superseded.
         """
         query_embedding = await self._embedding_service.embed(query)
         query_vector = Binary.from_vector(
@@ -227,8 +240,12 @@ class MongoTomeRepository(TomeRepository):
 
         try:
             lexical_results, vector_results = await asyncio.gather(
-                self._lexical_search(query, top_k, min_confidence, category),
-                self._vector_search(query_vector, top_k, min_confidence, category),
+                self._lexical_search(
+                    query, top_k, min_confidence, category, include_superseded
+                ),
+                self._vector_search(
+                    query_vector, top_k, min_confidence, category, include_superseded
+                ),
             )
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "search") from exc
@@ -236,13 +253,20 @@ class MongoTomeRepository(TomeRepository):
         return self._merge_results(lexical_results, vector_results, top_k)
 
     async def _lexical_search(
-        self, query: str, top_k: int, min_confidence: float, category: str | None
+        self,
+        query: str,
+        top_k: int,
+        min_confidence: float,
+        category: str | None,
+        include_superseded: bool = False,
     ) -> list[Tome]:
         filters: list[Mapping[str, Any]] = [
             {"range": {"path": "confidence", "gte": min_confidence}},
         ]
         if category is not None:
             filters.append({"equals": {"path": "category", "value": category}})
+        if not include_superseded:
+            filters.append({"equals": {"path": "superseded_by", "value": None}})
 
         pipeline: list[Mapping[str, Any]] = [
             {
@@ -271,11 +295,18 @@ class MongoTomeRepository(TomeRepository):
         return results
 
     async def _vector_search(
-        self, query_vector: Binary, top_k: int, min_confidence: float, category: str | None
+        self,
+        query_vector: Binary,
+        top_k: int,
+        min_confidence: float,
+        category: str | None,
+        include_superseded: bool = False,
     ) -> list[Tome]:
         vector_filter: dict[str, Any] = {"confidence": {"$gte": min_confidence}}
         if category is not None:
             vector_filter["category"] = category
+        if not include_superseded:
+            vector_filter["superseded_by"] = None
 
         pipeline: list[Mapping[str, Any]] = [
             {

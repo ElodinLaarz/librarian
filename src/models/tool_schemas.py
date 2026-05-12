@@ -44,6 +44,10 @@ class SearchInput(BaseModel):
             "``search.default_snippet_chars``."
         ),
     )
+    include_superseded: bool = Field(
+        default=False,
+        description="When False (default), search results exclude tomes marked as superseded.",
+    )
 
 
 class SearchOutput(BaseModel):
@@ -70,6 +74,14 @@ class IngestInput(BaseModel):
     category: str | None = None
     tags: list[str] | None = None
     source_url: str | None = None
+    supersedes_tome_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "When set, marks the specified tome IDs as superseded by the newly "
+            "ingested tome. Superseded tomes are soft-deleted (not removed from storage) "
+            "and filtered from search results by default."
+        ),
+    )
     force_format: Literal["text", "code", "python", "yaml", "json", "markdown"] | None = Field(
         default=None,
         description=(

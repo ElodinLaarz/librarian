@@ -45,8 +45,21 @@ class TomeRepository(ABC):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
-        """Perform search. Returns (Tome, score) pairs sorted by relevance."""
+        """Perform search. Returns (Tome, score) pairs sorted by relevance.
+
+        When include_superseded is False (default), filters out tomes marked as superseded.
+        """
+        ...
+
+    @abstractmethod
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id.
+
+        Soft-deletes: the tome remains in storage but is filtered from search results
+        by default. Returns True if successful, False if tome_id not found.
+        """
         ...
 
     @abstractmethod

@@ -94,13 +94,25 @@ class StubTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
     ) -> list[tuple[Tome, float]]:
         results = [
             (t, 1.0)
             for t in self._tomes.values()
-            if t.confidence >= min_confidence and (category is None or t.category == category)
+            if t.confidence >= min_confidence
+            and (category is None or t.category == category)
+            and (include_superseded or t.superseded_by is None)
         ]
         return results[:top_k]
+
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id."""
+        if tome_id not in self._tomes:
+            return False
+        tome = self._tomes[tome_id]
+        tome.superseded_by = by_tome_id
+        self._tomes[tome_id] = tome
+        return True
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:
         return list(self._near_duplicates)
