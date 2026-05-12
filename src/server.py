@@ -139,7 +139,7 @@ class LibrarianServer:
             t.cancel()
 
         try:
-            results = await asyncio.wait_for(
+            results: list[BaseException | None] = await asyncio.wait_for(
                 asyncio.gather(*pending, return_exceptions=True),
                 timeout=timeout,
             )
@@ -150,24 +150,28 @@ class LibrarianServer:
                 timeout,
                 sum(1 for t in pending if not t.done()),
             )
-            results = []
+            # Preserve telemetry for tasks that DID complete (with or without
+            # exception) before the timeout fired. Tasks still running are
+            # represented as ``None`` since we have no result to inspect yet.
+            results = [t.exception() if t.done() and not t.cancelled() else None for t in pending]
 
         for t, result in zip(pending, results, strict=False):
-            if isinstance(result, asyncio.CancelledError):
+            if result is None or isinstance(result, asyncio.CancelledError):
                 continue
             if isinstance(result, BaseException):
                 logging.error(
                     "Background task %s raised during shutdown: %s",
                     t.get_name(),
                     result,
-                    exc_info=(type(result), result, result.__traceback__),
+                    exc_info=result,
                 )
 
-        # Best-effort: drop references to any tasks that completed. The
-        # done_callback added by ``_track_background_task`` should already
-        # have discarded them, but a task abandoned via the timeout path
-        # may still be in the set.
-        self._bg_tasks = {t for t in self._bg_tasks if not t.done()}
+        # Abandon all tracked tasks. Tasks that completed have already been
+        # removed by the done_callback registered in ``_track_background_task``;
+        # tasks that timed out are explicitly dropped here so they cannot leak
+        # references to repositories/services that the rest of the lifespan
+        # teardown is about to close.
+        self._bg_tasks.clear()
 
     def _require(self, value: _T | None, name: str) -> _T:
         """Return ``value`` if not ``None`` else raise a clear ``RuntimeError``.
