@@ -75,6 +75,36 @@ class PerfTomeRepository(TomeRepository):
                 return True
         return False
 
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        for index, tome in enumerate(self.tomes):
+            if tome.id == tome_id:
+                update_dict: dict[str, object] = {}
+                if content is not None:
+                    update_dict["content"] = content
+                if category is not None:
+                    update_dict["category"] = category
+                if tags is not None:
+                    update_dict["tags"] = tags
+                if source_url is not None:
+                    update_dict["source_url"] = source_url
+                if confidence is not None:
+                    update_dict["confidence"] = confidence
+                if not update_dict:
+                    return tome
+                updated = tome.model_copy(update=update_dict)
+                self.tomes[index] = updated
+                return updated
+        return None
+
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         for tome in self.tomes:
             if tome.id == tome_id:
