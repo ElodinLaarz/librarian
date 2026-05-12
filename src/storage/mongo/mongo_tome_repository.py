@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -285,6 +284,7 @@ class MongoTomeRepository(TomeRepository):
         When include_superseded is False (default), filters out tomes marked as superseded.
         When recency_weight > 0, blends RRF scores with exponential-decay recency scores.
         """
+        recency_weight = max(0.0, min(1.0, recency_weight))
         query_embedding = await self._embedding_service.embed(query)
         query_vector = Binary.from_vector(
             np.array(query_embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
