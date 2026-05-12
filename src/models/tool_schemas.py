@@ -133,7 +133,7 @@ class TidyOutput(BaseModel):
 class DeleteInput(BaseModel):
     tome_id: str = Field(
         ...,
-        description="UUID hex string identifying the tome to remove.",
+        description="UUID string (hex or hyphenated) identifying the tome to remove.",
         max_length=64,
     )
 

@@ -303,6 +303,28 @@ async def test_library_delete_missing_tome_returns_not_found() -> None:
     assert result.error == "not_found"
 
 
+async def test_library_delete_accepts_hyphenated_uuid() -> None:
+    """The handler accepts both hex and standard hyphenated UUID strings."""
+    from src.models.tool_schemas import DeleteInput
+    from src.server import LibrarianServer
+    from tests.stubs import StubTomeRepository
+
+    server = LibrarianServer(make_test_config())
+    repo = StubTomeRepository()
+    tome = _make_test_tome()
+    await repo.insert(tome)
+    server.tome_repo = repo
+
+    library_delete = next(
+        t.fn for t in server.mcp._tool_manager.list_tools() if t.name == "library_delete"
+    )
+
+    # Hyphenated form (36 chars) — the canonical str(UUID) representation.
+    result = await library_delete(DeleteInput(tome_id=str(tome.id)))
+    assert result.deleted is True
+    assert result.error is None
+
+
 async def test_library_delete_invalid_id_returns_invalid_id_error() -> None:
     """Malformed tome_id is reported as an error, never raised."""
     from src.models.tool_schemas import DeleteInput

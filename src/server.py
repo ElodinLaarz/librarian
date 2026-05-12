@@ -450,17 +450,19 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_delete(params: DeleteInput) -> DeleteOutput:
-            """Permanently remove a tome from the library by its UUID hex id.
+            """Permanently remove a tome from the library by its UUID id.
 
-            Returns ``deleted=True`` on success. If the id is malformed the
-            response carries ``error="invalid_id"``; if no tome matches the id
-            it carries ``error="not_found"``. Validation problems are reported
-            in the output rather than raised so MCP clients can recover.
+            Accepts either the 32-char hex form or the standard hyphenated
+            form. Returns ``deleted=True`` on success. If the id is malformed
+            the response carries ``error="invalid_id"``; if no tome matches
+            the id it carries ``error="not_found"``. Validation problems are
+            reported in the output rather than raised so MCP clients can
+            recover.
             """
             tome_repo = self._require(self.tome_repo, "tome_repo")
             try:
-                tid = UUID(hex=params.tome_id)
-            except ValueError:
+                tid = UUID(params.tome_id)
+            except (ValueError, AttributeError, TypeError):
                 return DeleteOutput(deleted=False, error="invalid_id")
 
             deleted = await tome_repo.delete(tid)
