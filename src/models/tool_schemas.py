@@ -141,3 +141,39 @@ class DeleteInput(BaseModel):
 class DeleteOutput(BaseModel):
     deleted: bool
     error: str | None = None
+
+
+# ── library.list ────────────────────────────────────────────────────
+
+
+class ListInput(BaseModel):
+    """Filters + pagination for ``library_list``.
+
+    ``research_job_id`` is a string for MCP-client convenience (clients can
+    pass the value they got back from ``library_research`` without round-
+    tripping through UUID parsing); invalid values produce a clear error
+    at the tool boundary.
+    """
+
+    category: str | None = None
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    research_job_id: str | None = Field(
+        default=None,
+        description="Filter by research job. Must be a UUID hex string.",
+    )
+    limit: int = Field(default=50, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
+    include_summary: bool = True
+
+
+class ListOutput(BaseModel):
+    """A page of tomes plus the total number matching the filter.
+
+    ``total`` is the count *before* limit/offset are applied so clients can
+    compute the number of pages remaining. ``has_more`` is a convenience flag
+    derived from ``offset + len(tomes) < total``.
+    """
+
+    tomes: list[Tome]
+    total: int
+    has_more: bool

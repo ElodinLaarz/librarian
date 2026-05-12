@@ -20,6 +20,8 @@ from src.models.tool_schemas import (
     GetOutput,
     IngestInput,
     IngestOutput,
+    ListInput,
+    ListOutput,
     ResearchInput,
     ResearchOutput,
     SearchInput,
@@ -469,3 +471,47 @@ class LibrarianServer:
             if not deleted:
                 return DeleteOutput(deleted=False, error="not_found")
             return DeleteOutput(deleted=True)
+
+        @self.mcp.tool()
+        async def library_list(params: ListInput) -> ListOutput:
+            """Browse / paginate the library.
+
+            Returns a page of Tomes plus the total count matching the filter
+            (ignoring limit/offset). Embeddings are stripped to keep the
+            response payload small; pass ``include_summary=False`` to strip
+            summaries as well when the agent only needs titles + IDs.
+            """
+            tome_repo = self._require(self.tome_repo, "tome_repo")
+
+            research_job_uuid: UUID | None = None
+            if params.research_job_id is not None:
+                try:
+                    research_job_uuid = UUID(hex=params.research_job_id.strip())
+                except ValueError as exc:
+                    raise ValueError("research_job_id must be a UUID hex string") from exc
+
+            page, total = await asyncio.gather(
+                tome_repo.list_all(
+                    limit=params.limit,
+                    offset=params.offset,
+                    category=params.category,
+                    min_confidence=params.min_confidence,
+                    research_job_id=research_job_uuid,
+                ),
+                tome_repo.count(
+                    category=params.category,
+                    min_confidence=params.min_confidence,
+                    research_job_id=research_job_uuid,
+                ),
+            )
+
+            update_data: dict[str, object] = {"embedding": None}
+            if not params.include_summary:
+                update_data["summary"] = ""
+            tomes = [t.model_copy(update=update_data) for t in page]
+
+            return ListOutput(
+                tomes=tomes,
+                total=total,
+                has_more=(params.offset + len(page)) < total,
+            )

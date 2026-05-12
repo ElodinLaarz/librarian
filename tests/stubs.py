@@ -116,8 +116,59 @@ class StubTomeRepository(TomeRepository):
             return DuplicateScanResult(groups=[list(self._near_duplicates)], scanned=scanned)
         return DuplicateScanResult(groups=[], scanned=scanned)
 
-    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
-        return list(self._tomes.values())[offset : offset + limit]
+    def _matches_filters(
+        self,
+        tome: Tome,
+        *,
+        category: str | None,
+        min_confidence: float,
+        research_job_id: UUID | None,
+    ) -> bool:
+        if category is not None and tome.category != category:
+            return False
+        if tome.confidence < min_confidence:
+            return False
+        return not (research_job_id is not None and tome.research_job_id != research_job_id)
+
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> list[Tome]:
+        filtered = [
+            t
+            for t in self._tomes.values()
+            if self._matches_filters(
+                t,
+                category=category,
+                min_confidence=min_confidence,
+                research_job_id=research_job_id,
+            )
+        ]
+        filtered.sort(key=lambda x: x.created_at, reverse=True)
+        return filtered[offset : offset + limit]
+
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> int:
+        return sum(
+            1
+            for t in self._tomes.values()
+            if self._matches_filters(
+                t,
+                category=category,
+                min_confidence=min_confidence,
+                research_job_id=research_job_id,
+            )
+        )
 
     def close(self) -> None:
         self._tomes.clear()

@@ -267,6 +267,63 @@ async def test_find_all_near_duplicates_ignores_boilerplate_facts(repo: FsTomeRe
     assert result.ignored_high_frequency_facts == 1
 
 
+# ── list_all + count: pagination and filters ────────────────────────────────
+
+
+async def test_list_all_returns_all_tomes(repo: FsTomeRepository) -> None:
+    for _ in range(3):
+        await repo.insert(_make_tome())
+
+    page = await repo.list_all(limit=10, offset=0)
+    assert len(page) == 3
+
+
+async def test_list_all_pagination_offset(repo: FsTomeRepository) -> None:
+    for i in range(5):
+        await repo.insert(_make_tome(title=f"T{i}"))
+
+    page1 = await repo.list_all(limit=2, offset=0)
+    page2 = await repo.list_all(limit=2, offset=2)
+    page3 = await repo.list_all(limit=2, offset=4)
+
+    assert len(page1) == 2
+    assert len(page2) == 2
+    assert len(page3) == 1
+    # Pages must be disjoint
+    ids = {t.id for t in page1} | {t.id for t in page2} | {t.id for t in page3}
+    assert len(ids) == 5
+
+
+async def test_list_all_filters_by_category(repo: FsTomeRepository) -> None:
+    await repo.insert(_make_tome(category="science"))
+    await repo.insert(_make_tome(category="history"))
+    await repo.insert(_make_tome(category="science"))
+
+    page = await repo.list_all(category="science")
+    assert len(page) == 2
+    assert all(t.category == "science" for t in page)
+
+
+async def test_list_all_filters_by_min_confidence(repo: FsTomeRepository) -> None:
+    await repo.insert(_make_tome(confidence=0.9))
+    await repo.insert(_make_tome(confidence=0.4))
+
+    page = await repo.list_all(min_confidence=0.5)
+    assert len(page) == 1
+    assert page[0].confidence == pytest.approx(0.9)
+
+
+async def test_count_matches_list_all(repo: FsTomeRepository) -> None:
+    await repo.insert(_make_tome(category="science", confidence=0.9))
+    await repo.insert(_make_tome(category="science", confidence=0.4))
+    await repo.insert(_make_tome(category="history", confidence=0.9))
+
+    total = await repo.count(category="science", min_confidence=0.5)
+    page = await repo.list_all(category="science", min_confidence=0.5)
+    assert total == 1
+    assert len(page) == 1
+
+
 async def test_find_all_near_duplicates_detects_semantic_only_groups(
     repo: FsTomeRepository,
 ) -> None:

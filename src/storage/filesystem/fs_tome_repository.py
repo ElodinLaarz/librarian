@@ -139,16 +139,77 @@ class FsTomeRepository(TomeRepository):
             # absent" contract.
             return None
 
-    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
-        """Retrieve a page of Tomes from the library."""
+    def _matches_filters(
+        self,
+        tome: Tome,
+        *,
+        category: str | None,
+        min_confidence: float,
+        research_job_id: UUID | None,
+    ) -> bool:
+        if category is not None and tome.category != category:
+            return False
+        if tome.confidence < min_confidence:
+            return False
+        return not (research_job_id is not None and tome.research_job_id != research_job_id)
+
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> list[Tome]:
+        """Return a filtered + paginated page of Tomes, newest first.
+
+        Scans every JSON file under the tomes directory and filters in
+        memory — acknowledged to be O(n) per call; acceptable for the
+        filesystem backend's small-library use case. Tomes that fail to
+        parse are silently skipped (matching the existing search-path
+        behaviour).
+        """
         try:
             all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
         except OSError as exc:
             raise _wrap_os(exc, "list_all", self._tomes_dir) from exc
-        # Sort by ID or creation time for deterministic paging?
-        # FsTomeRepository doesn't store created_at in the filename, but Tome model has it.
-        all_tomes.sort(key=lambda x: x.id)
-        return all_tomes[offset : offset + limit]
+
+        filtered = [
+            t
+            for t in all_tomes
+            if self._matches_filters(
+                t,
+                category=category,
+                min_confidence=min_confidence,
+                research_job_id=research_job_id,
+            )
+        ]
+        filtered.sort(key=lambda x: x.created_at, reverse=True)
+        return filtered[offset : offset + limit]
+
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> int:
+        """Count Tomes matching the same filter predicates as :meth:`list_all`."""
+        try:
+            all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
+        except OSError as exc:
+            raise _wrap_os(exc, "count", self._tomes_dir) from exc
+        return sum(
+            1
+            for t in all_tomes
+            if self._matches_filters(
+                t,
+                category=category,
+                min_confidence=min_confidence,
+                research_job_id=research_job_id,
+            )
+        )
 
     async def search(
         self,

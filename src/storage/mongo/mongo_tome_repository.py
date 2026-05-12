@@ -146,9 +146,43 @@ class MongoTomeRepository(TomeRepository):
             return None
         return MongoTome.model_validate(doc).to_tome()
 
-    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
-        """Retrieve a page of Tomes from the library."""
-        cursor = self._collection.find().skip(offset).limit(limit)
+    @staticmethod
+    def _build_list_filter(
+        *,
+        category: str | None,
+        min_confidence: float,
+        research_job_id: UUID | None,
+    ) -> dict[str, Any]:
+        """Translate the public filter args into a Mongo ``find`` predicate.
+
+        Only adds clauses for set filters so the default ``list_all()`` call
+        is a full collection scan (matches the abstract contract).
+        """
+        query: dict[str, Any] = {}
+        if category is not None:
+            query["category"] = category
+        if min_confidence > 0.0:
+            query["confidence"] = {"$gte": min_confidence}
+        if research_job_id is not None:
+            query["research_job_id"] = research_job_id
+        return query
+
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> list[Tome]:
+        """Return a filtered + paginated page of Tomes, newest first."""
+        query = self._build_list_filter(
+            category=category,
+            min_confidence=min_confidence,
+            research_job_id=research_job_id,
+        )
+        cursor = self._collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
         results = []
         try:
             async for doc in cursor:
@@ -156,6 +190,24 @@ class MongoTomeRepository(TomeRepository):
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "list_all") from exc
         return results
+
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> int:
+        """Count Tomes matching the same filter predicates as :meth:`list_all`."""
+        query = self._build_list_filter(
+            category=category,
+            min_confidence=min_confidence,
+            research_job_id=research_job_id,
+        )
+        try:
+            return int(await self._collection.count_documents(query))
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "count") from exc
 
     async def search(
         self,

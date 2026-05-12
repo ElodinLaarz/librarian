@@ -11,10 +11,11 @@ An MCP server that gives AI agents a persistent, searchable knowledge base. The 
 | `library.research` | Implemented | Plans queries (Ollama optional), searches the web, fetches pages, ingests findings; `async: true` returns a `job_id` for polling |
 | `library.tidy` | Implemented | Scan the library for near-duplicate tomes and consolidate them; tunable `limit`, `threshold`, and `skip_verify` |
 | `library.delete` | Implemented | Permanently remove a tome by its UUID (hex or hyphenated) `tome_id`; returns `deleted=False` with `error="invalid_id"` or `"not_found"` instead of raising |
+| `library.list` | Implemented | Browse / paginate stored tomes without a query; supports `limit`, `offset`, `category`, `min_confidence`, and `research_job_id` filters. Returns `total` and `has_more` for paging. |
 
 ### Usage pattern
 
-Call `library.search` first. If results are sparse or low-confidence, call `library.research` to populate the library on that topic. Call `library.ingest` whenever the agent learns something worth persisting.
+Call `library.search` first. If results are sparse or low-confidence, call `library.research` to populate the library on that topic. Call `library.ingest` whenever the agent learns something worth persisting. Use `library.list` to enumerate or audit the library — e.g. after a `library.research` run, pass the returned `job_id` as `research_job_id` to inspect everything that job ingested.
 
 ## Data Model
 
