@@ -93,7 +93,33 @@ class IngestCallOptions:
     research_job_id: UUID | None = None
     category_hint: str | None = None
     tags_hint: list[str] | None = None
+    # ``extra_tags`` are appended to the tome's tag list *after* classification,
+    # unlike ``tags_hint`` which (when supplied alongside ``category_hint``)
+    # short-circuits the classifier. Use this for caller-supplied tags that
+    # should accompany — not replace — content-derived tags (e.g. the research
+    # job topic).
+    extra_tags: list[str] | None = None
     force_format: DetectedFormat | None = None
+
+
+def _cap_tags(tags: list[str]) -> list[str]:
+    """Dedupe, strip blanks, truncate each tag, and cap the list size.
+
+    Order is preserved (first-seen wins). Length and count limits come from
+    :mod:`src.constants` so all tag-producing paths stay aligned.
+    """
+    seen: dict[str, None] = {}
+    for raw in tags:
+        if not isinstance(raw, str):
+            continue
+        cleaned = raw.strip()
+        if not cleaned:
+            continue
+        truncated = cleaned[: constants.MAX_TAG_LENGTH]
+        seen.setdefault(truncated, None)
+        if len(seen) >= constants.MAX_TAGS_PER_TOME:
+            break
+    return list(seen.keys())
 
 
 class ReshardError(Exception):
@@ -237,6 +263,12 @@ class Ingestor:
             self._generate_title_and_summary(text),
             self._embedding_service.embed(text),
         )
+
+        # Append caller-supplied extra tags (e.g. researcher job topic) AFTER
+        # classification so they accompany — rather than replace — the
+        # content-derived tag set. Cap each tag length and the list size to
+        # keep tag UIs and indexes bounded.
+        tags = _cap_tags([*tags, *(opts.extra_tags or [])])
 
         tome = Tome(
             id=uuid.uuid4(),
