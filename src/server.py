@@ -14,6 +14,8 @@ from src.config import LibrarianConfig
 from src.models.enums import ResearchJobStatus
 from src.models.research_job import ResearchJob
 from src.models.tool_schemas import (
+    DeleteInput,
+    DeleteOutput,
     GetInput,
     GetOutput,
     IngestInput,
@@ -445,3 +447,23 @@ class LibrarianServer:
                 skip_verify=params.skip_verify,
             )
             return TidyOutput(**report)
+
+        @self.mcp.tool()
+        async def library_delete(params: DeleteInput) -> DeleteOutput:
+            """Permanently remove a tome from the library by its UUID hex id.
+
+            Returns ``deleted=True`` on success. If the id is malformed the
+            response carries ``error="invalid_id"``; if no tome matches the id
+            it carries ``error="not_found"``. Validation problems are reported
+            in the output rather than raised so MCP clients can recover.
+            """
+            tome_repo = self._require(self.tome_repo, "tome_repo")
+            try:
+                tid = UUID(hex=params.tome_id)
+            except ValueError:
+                return DeleteOutput(deleted=False, error="invalid_id")
+
+            deleted = await tome_repo.delete(tid)
+            if not deleted:
+                return DeleteOutput(deleted=False, error="not_found")
+            return DeleteOutput(deleted=True)
