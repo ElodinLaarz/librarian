@@ -87,13 +87,14 @@ def test_no_unexpected_tools_registered() -> None:
 
 def _make_tome(
     *,
-    title: str,
+    tome_id: uuid.UUID | None = None,
+    title: str = "Test Tome",
     category: str = "general",
     confidence: float = 0.8,
     research_job_id: uuid.UUID | None = None,
 ) -> Tome:
     return Tome(
-        id=uuid.uuid4(),
+        id=tome_id or uuid.uuid4(),
         title=title,
         content=f"Body of {title}",
         summary=f"Summary of {title}",
@@ -246,21 +247,6 @@ async def test_library_search_outside_lifespan_raises_runtime_error() -> None:
 
     with pytest.raises(RuntimeError, match="LibrarianServer not initialised"):
         await library_search(SearchInput(query="anything"))
-
-
-def _make_tome(*, tome_id: uuid.UUID | None = None, title: str = "Test Tome") -> Tome:
-    return Tome(
-        id=tome_id or uuid.uuid4(),
-        title=title,
-        content="Some content.",
-        summary="A summary.",
-        category="general",
-        tags=[],
-        source_url=None,
-        source_type=SourceType.AGENT_INPUT,
-        confidence=0.8,
-        embedding=None,
-    )
 
 
 # ── library_delete behavioural tests (issue #39) ────────────────────
