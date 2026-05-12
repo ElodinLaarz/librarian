@@ -14,6 +14,36 @@ class SearchInput(BaseModel):
     category: str | None = None
     min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     include_summary: bool = False
+    # Payload-shaping knobs (issue #48). Defaults preserve backward compatibility:
+    # full content is returned unless the caller (or the server's
+    # ``search.default_content_max_chars`` / ``search.default_snippet_chars``)
+    # opts in.
+    include_content: bool = Field(
+        default=True,
+        description=(
+            "When False, ``content`` is replaced with an empty string. Use this "
+            "to retrieve only metadata; full content can still be fetched later "
+            "using the returned ``tome_ids``."
+        ),
+    )
+    content_max_chars: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Truncate each hit's ``content`` to this many characters and append "
+            "``...`` when cut. Overrides ``search.default_content_max_chars``."
+        ),
+    )
+    snippet_chars: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "If > 0, return only a window of this many characters around the "
+            "first lexical match of any query term (falls back to the leading "
+            "window when no term matches). Overrides "
+            "``search.default_snippet_chars``."
+        ),
+    )
 
 
 class SearchOutput(BaseModel):
@@ -21,6 +51,14 @@ class SearchOutput(BaseModel):
     scores: list[float]
     query_id: str
     from_cache: bool
+    # 1:1 with ``tomes``. Exposed so that callers can request the full content
+    # of an individual hit (via a future ``library_get`` tool) when the
+    # returned snippet/truncated payload is insufficient.
+    tome_ids: list[str] = Field(default_factory=list)
+    # 1:1 with ``tomes``. ``True`` when the corresponding tome's ``content``
+    # was truncated, snippeted, or dropped — i.e. the payload is no longer the
+    # full stored content.
+    is_snippet: list[bool] = Field(default_factory=list)
 
 
 # ── library.ingest ──────────────────────────────────────────────────
