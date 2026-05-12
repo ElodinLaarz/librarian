@@ -282,6 +282,8 @@ class FsTomeRepository(TomeRepository):
         min_confidence: float = 0.5,
         category: str | None = None,
         include_superseded: bool = False,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
         """Brute-force cosine-similarity scan over all stored Tomes.
 

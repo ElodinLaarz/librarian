@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -274,11 +275,14 @@ class MongoTomeRepository(TomeRepository):
         min_confidence: float = 0.5,
         category: str | None = None,
         include_superseded: bool = False,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
         Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
         When include_superseded is False (default), filters out tomes marked as superseded.
+        When recency_weight > 0, blends RRF scores with exponential-decay recency scores.
         """
         query_embedding = await self._embedding_service.embed(query)
         query_vector = Binary.from_vector(
@@ -295,7 +299,13 @@ class MongoTomeRepository(TomeRepository):
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "search") from exc
 
-        return self._merge_results(lexical_results, vector_results, top_k)
+        return self._merge_results(
+            lexical_results,
+            vector_results,
+            top_k,
+            recency_weight=recency_weight,
+            recency_half_life_days=recency_half_life_days,
+        )
 
     async def _lexical_search(
         self,
@@ -310,8 +320,6 @@ class MongoTomeRepository(TomeRepository):
         ]
         if category is not None:
             filters.append({"equals": {"path": "category", "value": category}})
-        if not include_superseded:
-            filters.append({"equals": {"path": "superseded_by", "value": None}})
 
         pipeline: list[Mapping[str, Any]] = [
             {
@@ -333,6 +341,9 @@ class MongoTomeRepository(TomeRepository):
             {"$sort": {"score": -1}},
             {"$limit": top_k * 10},
         ]
+        # Atlas Search $equals does not support null; filter superseded docs via $match.
+        if not include_superseded:
+            pipeline.append({"$match": {"document.superseded_by": None}})
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
@@ -347,11 +358,11 @@ class MongoTomeRepository(TomeRepository):
         category: str | None,
         include_superseded: bool = False,
     ) -> list[Tome]:
+        # $vectorSearch filter only supports fields declared in the index definition.
+        # superseded_by is not indexed there, so filter it via $match after projection.
         vector_filter: dict[str, Any] = {"confidence": {"$gte": min_confidence}}
         if category is not None:
             vector_filter["category"] = category
-        if not include_superseded:
-            vector_filter["superseded_by"] = None
 
         pipeline: list[Mapping[str, Any]] = [
             {
@@ -367,6 +378,8 @@ class MongoTomeRepository(TomeRepository):
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
             {"$sort": {"score": -1}},
         ]
+        if not include_superseded:
+            pipeline.append({"$match": {"document.superseded_by": None}})
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
@@ -380,13 +393,21 @@ class MongoTomeRepository(TomeRepository):
         lexical: list[Tome],
         vector: list[Tome],
         top_k: int,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
         """Reciprocal Rank Fusion (RRF) over two ranked result lists.
 
         Each list is assumed to be pre-sorted by its native score descending.
         RRF score for a document is: sum(1 / (k + rank)) across the lists it
         appears in, where rank is 1-based.
+
+        When recency_weight > 0, blends RRF with exponential-decay recency:
+          recency_score = exp(-ln(2) * age_days / half_life_days)
+          final = rrf * (1 - recency_weight) + recency_weight * recency_score
         """
+        from datetime import UTC, datetime
+
         k = MongoTomeRepository.RRF_K
 
         tome_by_id: dict[UUID, Tome] = {}
@@ -400,7 +421,24 @@ class MongoTomeRepository(TomeRepository):
             tome_by_id[tome.id] = tome
             rrf_scores[tome.id] = rrf_scores.get(tome.id, 0.0) + 1.0 / (k + rank)
 
-        combined = [(tome_by_id[tid], score) for tid, score in rrf_scores.items()]
+        if recency_weight <= 0.0:
+            combined = [(tome_by_id[tid], score) for tid, score in rrf_scores.items()]
+        else:
+            now = datetime.now(UTC)
+            combined = []
+            for tid, rrf in rrf_scores.items():
+                tome = tome_by_id[tid]
+                created = tome.created_at
+                if created is not None:
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=UTC)
+                    age_days = max(0.0, (now - created).total_seconds() / 86400.0)
+                else:
+                    age_days = 0.0
+                recency = math.exp(-math.log(2) * age_days / recency_half_life_days)
+                score = rrf * (1.0 - recency_weight) + recency_weight * recency
+                combined.append((tome, score))
+
         combined.sort(key=lambda x: x[1], reverse=True)
         return combined[:top_k]
 
