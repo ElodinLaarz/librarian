@@ -1075,8 +1075,8 @@ class Ingestor:
             raise ValueError("Tome content cannot be empty")
         if len(tome.content) < self._config.ingest.min_shard_chars:
             raise ValueError(
-                f"Tome content too short ({len(tome.content)} < "
-                f"{self._config.ingest.min_shard_chars} characters)"
+                f"Tome content too short: minimum {self._config.ingest.min_shard_chars} "
+                f"characters required, got {len(tome.content)}"
             )
         if len(tome.title) > self._config.ingest.title_length:
             raise ValueError(

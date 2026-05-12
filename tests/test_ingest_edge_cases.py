@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from src.models.enums import IngestStatus
+from tests.conftest import make_test_config
 from tests.stubs import make_stub_ingestor
 from tests.test_utils import make_tome as _make_tome
 
@@ -90,26 +91,31 @@ async def test_reshard_delete_failure_reports_partial() -> None:
 
 @pytest.mark.asyncio
 async def test_minimum_content_size() -> None:
-    """Enforce minimum 100-character tome size to prevent fragments.
+    """Enforce minimum 400-character tome size to prevent fragments.
 
     Validates issue #35: minimum tome content length prevents short pollution.
-    Aligns with README spec of 100–400 words per tome.
+    400-character threshold prevents storing incomplete information.
     """
-    ingestor, repo, _ = make_stub_ingestor()
+    from src.config import IngestSettings
+
+    # Create a config with the production minimum (400 chars)
+    ingest_settings = IngestSettings(min_shard_chars=400)
+    config = make_test_config(ingest=ingest_settings)
+    ingestor, repo, _ = make_stub_ingestor(config=config)
 
     # Test 1: 2-char content should be REJECTED
     output_short = await ingestor.ingest("hi")
     assert output_short.status == IngestStatus.REJECTED
     assert "minimum" in output_short.reject_reason.lower()
 
-    # Test 2: 100-char content (at floor) should be STORED
-    content_valid = "a" * 100
+    # Test 2: 400-char content (at floor) should be STORED
+    content_valid = "a" * 400
     output_valid = await ingestor.ingest(content_valid)
     assert output_valid.status == IngestStatus.STORED
     assert len(output_valid.tomes) > 0
 
-    # Test 3: 99-char content (just below floor) should be REJECTED
-    content_below = "b" * 99
+    # Test 3: 399-char content (just below floor) should be REJECTED
+    content_below = "b" * 399
     output_below = await ingestor.ingest(content_below)
     assert output_below.status == IngestStatus.REJECTED
     assert "minimum" in output_below.reject_reason.lower()

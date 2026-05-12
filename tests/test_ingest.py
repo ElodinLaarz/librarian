@@ -708,6 +708,7 @@ async def test_summary_is_not_content_prefix_when_llm_enabled(
         use_llm_chunking=False,
         use_llm_summary=True,
         use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -744,6 +745,7 @@ async def test_summary_falls_back_on_http_error(monkeypatch: pytest.MonkeyPatch)
         use_llm_chunking=False,
         use_llm_summary=True,
         use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -770,6 +772,7 @@ async def test_summary_falls_back_on_bad_json(monkeypatch: pytest.MonkeyPatch) -
         use_llm_chunking=False,
         use_llm_summary=True,
         use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -798,6 +801,7 @@ async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatc
         use_llm_chunking=False,
         use_llm_summary=False,
         use_llm_classification=False,
+        min_shard_chars=0,  # Tests allow arbitrary content length
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -1204,7 +1208,9 @@ async def test_use_llm_classification_flag_off_skips_llm(
     """When the flag is disabled, no HTTP call is made and defaults are used."""
     from src.config import IngestSettings
 
-    config = make_test_config(ingest=IngestSettings(use_llm_classification=False))
+    config = make_test_config(
+        ingest=IngestSettings(use_llm_classification=False, min_shard_chars=0)
+    )
     ingestor, _ = _make_llm_classify_ingestor(config)
 
     counter = _patch_httpx_post(

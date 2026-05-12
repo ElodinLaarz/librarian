@@ -30,6 +30,8 @@ from src.models.tool_schemas import (
     SearchOutput,
     TidyInput,
     TidyOutput,
+    UpdateInput,
+    UpdateOutput,
 )
 from src.services.embedding import (
     EmbeddingService,
@@ -571,6 +573,41 @@ class LibrarianServer:
             return GetOutput(
                 tome=tome.model_copy(update={"embedding": None}),
                 status="found",
+            )
+
+        @self.mcp.tool()
+        async def library_update(params: UpdateInput) -> UpdateOutput:
+            """Update one or more mutable fields of an existing Tome."""
+            tome_repo = self._require(self.tome_repo, "tome_repo")
+
+            raw_id = params.tome_id.strip()
+            try:
+                tome_uuid = UUID(raw_id)
+            except ValueError:
+                return UpdateOutput(
+                    tome=None,
+                    status="invalid_id",
+                    error="tome_id must be a valid UUID string",
+                )
+
+            updated = await tome_repo.update(
+                tome_uuid,
+                content=params.content,
+                category=params.category,
+                tags=params.tags,
+                source_url=params.source_url,
+                confidence=params.confidence,
+            )
+            if updated is None:
+                return UpdateOutput(
+                    tome=None,
+                    status="not_found",
+                    error=f"No tome found with id {raw_id}",
+                )
+            # Strip embedding payload before returning to clients.
+            return UpdateOutput(
+                tome=updated.model_copy(update={"embedding": None}),
+                status="updated",
             )
 
         @self.mcp.tool()

@@ -150,6 +150,46 @@ class GetOutput(BaseModel):
     error: str | None = None
 
 
+# ── library.update ──────────────────────────────────────────────────
+
+
+class UpdateInput(BaseModel):
+    tome_id: str = Field(
+        ...,
+        max_length=64,
+        description="UUID string (hex or hyphenated) identifying the tome to update.",
+    )
+    content: str | None = Field(
+        default=None,
+        max_length=500_000,
+        description="New content to store. If omitted, existing content is unchanged.",
+    )
+    category: str | None = Field(
+        default=None,
+        description="New category. If omitted, existing category is unchanged.",
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        description="New tags list. If omitted, existing tags are unchanged.",
+    )
+    source_url: str | None = Field(
+        default=None,
+        description="New source URL. If omitted, existing URL is unchanged.",
+    )
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="New confidence score. If omitted, existing confidence is unchanged.",
+    )
+
+
+class UpdateOutput(BaseModel):
+    tome: Tome | None = None
+    status: Literal["updated", "not_found", "invalid_id"]
+    error: str | None = None
+
+
 # ── library.tidy ──────────────────────────────────────────────────
 
 

@@ -335,10 +335,14 @@ def make_stub_ingestor(
     repo: StubTomeRepository | None = None,
     dimensions: int | None = None,
 ) -> tuple[StubIngestor, StubTomeRepository, StubVerifier]:
-    """Convenience factory — returns (ingestor, repo, verifier) wired together."""
-    config = config or LibrarianConfig(
-        database=DatabaseSettings(uri="mongodb://localhost:27017"),
-    )
+    """Convenience factory — returns (ingestor, repo, verifier) wired together.
+
+    Tests use min_shard_chars=0 to allow arbitrary content lengths without
+    enforcing the 400-char production minimum.
+    """
+    from tests.conftest import make_test_config
+
+    config = config or make_test_config()
     repo = repo or StubTomeRepository()
     verifier = StubVerifier(confidence=confidence)
     if dimensions is None:

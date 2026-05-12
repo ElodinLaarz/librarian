@@ -133,6 +133,14 @@ class PerfTomeRepository(TomeRepository):
         settings = self.tidy_settings.model_copy(update={"threshold": threshold})
         return build_duplicate_groups(self.tomes, settings)
 
+    async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
+        """Mark tome_id as superseded by by_tome_id."""
+        for tome in self.tomes:
+            if tome.id == tome_id:
+                tome.superseded_by = by_tome_id
+                return True
+        return False
+
     async def list_all(
         self,
         limit: int = 100,

@@ -182,7 +182,15 @@ async def test_e2e_ingest_search_research_pipeline(server: LibrarianServer) -> N
     ingest_input = IngestInput(
         content=(
             "The mitochondrion is the powerhouse of the cell. "
-            "It produces ATP via oxidative phosphorylation."
+            "It produces ATP via oxidative phosphorylation. "
+            "Mitochondria are double-membrane-bound organelles found in most eukaryotic cells. "
+            "They serve as the energy production centers, converting nutrients into adenosine triphosphate (ATP) "
+            "through the process of cellular respiration. The inner mitochondrial membrane contains the electron "
+            "transport chain and ATP synthase, which are crucial for oxidative phosphorylation. This process "
+            "involves the transfer of electrons through a series of protein complexes, creating a proton gradient "
+            "that drives ATP synthesis. Cells with high energy demands, such as muscle cells and neurons, contain "
+            "numerous mitochondria to meet their substantial ATP requirements. Mitochondrial dysfunction has been "
+            "implicated in various diseases including neurodegenerative disorders and metabolic diseases."
         ),
         skip_verify=True,
         category="science",
