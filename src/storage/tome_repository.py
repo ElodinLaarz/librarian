@@ -64,8 +64,38 @@ class TomeRepository(ABC):
         ...
 
     @abstractmethod
-    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
-        """Retrieve a page of Tomes from the library."""
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> list[Tome]:
+        """Return a page of Tomes matching the given filters.
+
+        Results are sorted by ``created_at`` descending (newest first) for
+        consistent pagination across calls. Filters compose with AND.
+        Embeddings should be included so the caller can decide whether to
+        strip them — keeps this method usable from non-MCP code paths.
+        """
+        ...
+
+    @abstractmethod
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> int:
+        """Return the total number of Tomes matching the given filters.
+
+        Companion to :meth:`list_all` for pagination — implementations must
+        apply the same filter predicates so callers can compute ``has_more``
+        from ``offset + len(page) < total``.
+        """
         ...
 
     @abstractmethod

@@ -206,6 +206,7 @@ def _build_repo_with_mocked_collection(
     collection.name = "tomes"
     collection.database = MagicMock()
     collection.database.create_collection = AsyncMock(return_value=None)
+    collection.create_index = AsyncMock(return_value=None)
     collection.create_search_index = AsyncMock(return_value=None)
     if create_search_index_side_effect is not None:
         collection.create_search_index.side_effect = create_search_index_side_effect
@@ -318,8 +319,6 @@ def test_repos_share_injected_motor_client() -> None:
         assert tome_repo._client is shared_client
         assert job_repo._client is shared_client
         assert tome_repo._client is job_repo._client
-        # Repos must not own the lifespan-owned client; closing one must NOT
-        # tear down the underlying connection pool used by the other.
         assert tome_repo._owns_client is False
         assert job_repo._owns_client is False
     finally:
@@ -327,11 +326,7 @@ def test_repos_share_injected_motor_client() -> None:
 
 
 def test_repo_close_is_noop_for_injected_client() -> None:
-    """Closing a repo built with an injected client must NOT close that client.
-
-    The lifespan owns the shared client; if one repo's ``close()`` tore it
-    down, the sibling repo would suddenly see a dead connection pool.
-    """
+    """Closing a repo built with an injected client must NOT close that client."""
     embedding_service = StubEmbeddingService()
     shared_client = MagicMock()
     tome_repo = MongoTomeRepository.__new__(MongoTomeRepository)
@@ -342,7 +337,6 @@ def test_repo_close_is_noop_for_injected_client() -> None:
     tome_repo.close()
     assert shared_client.close.call_count == 0
 
-    # And the opposite case: a repo that built its own client DOES close it.
     owned_client = MagicMock()
     tome_repo_owned = MongoTomeRepository.__new__(MongoTomeRepository)
     tome_repo_owned._client = owned_client  # type: ignore[attr-defined]
@@ -354,11 +348,7 @@ def test_repo_close_is_noop_for_injected_client() -> None:
 
 
 def test_build_motor_client_sets_timeout_defaults() -> None:
-    """The shared factory must apply the project's connection-timeout defaults.
-
-    These exist so a misconfigured / unreachable Mongo surfaces quickly instead
-    of hanging server startup behind the driver's 30-second default.
-    """
+    """The shared factory must apply the project's connection-timeout defaults."""
     settings = DatabaseSettings(
         uri=TEST_MONGO_URI,
         tls=False,
@@ -368,13 +358,33 @@ def test_build_motor_client_sets_timeout_defaults() -> None:
     client = build_motor_client(settings)
     try:
         opts = client.options
-        # Motor / pymongo converts ms kwargs into seconds on the ClientOptions
-        # and PoolOptions snapshots.
         assert opts.server_selection_timeout == pytest.approx(5.0)
         assert opts.pool_options.connect_timeout == pytest.approx(5.0)
         assert opts.pool_options.socket_timeout == pytest.approx(30.0)
     finally:
         client.close()
+
+
+def test_build_list_filter_empty_when_no_args() -> None:
+    """Default ``list_all`` call must produce a no-op Mongo filter."""
+    assert (
+        MongoTomeRepository._build_list_filter(
+            category=None, min_confidence=0.0, research_job_id=None
+        )
+        == {}
+    )
+
+
+def test_build_list_filter_applies_all_clauses() -> None:
+    job_id = uuid.uuid4()
+    out = MongoTomeRepository._build_list_filter(
+        category="science", min_confidence=0.5, research_job_id=job_id
+    )
+    assert out == {
+        "category": "science",
+        "confidence": {"$gte": 0.5},
+        "research_job_id": job_id,
+    }
 
 
 @pytest.mark.asyncio

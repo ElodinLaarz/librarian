@@ -103,8 +103,38 @@ class PerfTomeRepository(TomeRepository):
         settings = self.tidy_settings.model_copy(update={"threshold": threshold})
         return build_duplicate_groups(self.tomes, settings)
 
-    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Tome]:
-        return self.tomes[offset : offset + limit]
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> list[Tome]:
+        filtered = [
+            t
+            for t in self.tomes
+            if (category is None or t.category == category)
+            and t.confidence >= min_confidence
+            and (research_job_id is None or t.research_job_id == research_job_id)
+        ]
+        return filtered[offset : offset + limit]
+
+    async def count(
+        self,
+        *,
+        category: str | None = None,
+        min_confidence: float = 0.0,
+        research_job_id: UUID | None = None,
+    ) -> int:
+        return sum(
+            1
+            for t in self.tomes
+            if (category is None or t.category == category)
+            and t.confidence >= min_confidence
+            and (research_job_id is None or t.research_job_id == research_job_id)
+        )
 
     def close(self) -> None:
         self.tomes.clear()

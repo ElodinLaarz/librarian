@@ -6,6 +6,7 @@ import importlib
 import uuid
 from uuid import uuid4
 
+import numpy as np
 import pytest
 
 from src.models.enums import SourceType
@@ -80,7 +81,154 @@ def test_no_unexpected_tools_registered() -> None:
         "library_tidy",
         "library_get",
         "library_delete",
+        "library_list",
     }
+
+
+def _make_tome(
+    *,
+    tome_id: uuid.UUID | None = None,
+    title: str = "Test Tome",
+    category: str = "general",
+    confidence: float = 0.8,
+    research_job_id: uuid.UUID | None = None,
+) -> Tome:
+    return Tome(
+        id=tome_id or uuid.uuid4(),
+        title=title,
+        content=f"Body of {title}",
+        summary=f"Summary of {title}",
+        category=category,
+        tags=["t"],
+        source_url=None,
+        source_type=SourceType.AGENT_INPUT,
+        confidence=confidence,
+        research_job_id=research_job_id,
+        embedding=np.zeros(8, dtype=np.float32),
+    )
+
+
+def _build_server_with_repo(repo: StubTomeRepository):
+    """Construct a LibrarianServer and inject a pre-populated stub repo.
+
+    Bypasses lifespan() so unit tests don't need MongoDB or Ollama running.
+    """
+    from src.server import LibrarianServer
+
+    server = LibrarianServer(make_test_config())
+    server.tome_repo = repo
+    return server
+
+
+def _get_tool(server, name: str):
+    return next(t.fn for t in server.mcp._tool_manager.list_tools() if t.name == name)
+
+
+async def test_library_list_paginates_first_page() -> None:
+    """library_list returns the requested page and signals more results remain."""
+    from src.models.tool_schemas import ListInput
+
+    repo = StubTomeRepository()
+    for i in range(5):
+        await repo.insert(_make_tome(title=f"Tome {i}"))
+
+    server = _build_server_with_repo(repo)
+    library_list = _get_tool(server, "library_list")
+
+    out = await library_list(ListInput(limit=2, offset=0))
+
+    assert len(out.tomes) == 2
+    assert out.total == 5
+    assert out.has_more is True
+
+
+async def test_library_list_offset_returns_remainder_no_more() -> None:
+    """library_list with offset returns the tail and reports no more pages."""
+    from src.models.tool_schemas import ListInput
+
+    repo = StubTomeRepository()
+    for i in range(5):
+        await repo.insert(_make_tome(title=f"Tome {i}"))
+
+    server = _build_server_with_repo(repo)
+    library_list = _get_tool(server, "library_list")
+
+    out = await library_list(ListInput(limit=10, offset=3))
+
+    assert len(out.tomes) == 2
+    assert out.total == 5
+    assert out.has_more is False
+
+
+async def test_library_list_filters_by_category() -> None:
+    """library_list applies category filter before pagination."""
+    from src.models.tool_schemas import ListInput
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="A", category="science"))
+    await repo.insert(_make_tome(title="B", category="history"))
+    await repo.insert(_make_tome(title="C", category="science"))
+
+    server = _build_server_with_repo(repo)
+    library_list = _get_tool(server, "library_list")
+
+    out = await library_list(ListInput(category="science"))
+
+    assert out.total == 2
+    assert {t.title for t in out.tomes} == {"A", "C"}
+    assert out.has_more is False
+
+
+async def test_library_list_filters_by_research_job_id() -> None:
+    """library_list filters by research_job_id when provided."""
+    from src.models.tool_schemas import ListInput
+
+    job_id = uuid.uuid4()
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="J1", research_job_id=job_id))
+    await repo.insert(_make_tome(title="J2", research_job_id=job_id))
+    await repo.insert(_make_tome(title="Other", research_job_id=uuid.uuid4()))
+
+    server = _build_server_with_repo(repo)
+    library_list = _get_tool(server, "library_list")
+
+    out = await library_list(ListInput(research_job_id=str(job_id)))
+
+    assert out.total == 2
+    assert {t.title for t in out.tomes} == {"J1", "J2"}
+
+
+async def test_library_list_strips_embeddings() -> None:
+    """Embeddings should be stripped from list output to keep payload small."""
+    from src.models.tool_schemas import ListInput
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="Tome"))
+
+    server = _build_server_with_repo(repo)
+    library_list = _get_tool(server, "library_list")
+
+    out = await library_list(ListInput())
+
+    assert len(out.tomes) == 1
+    assert out.tomes[0].embedding is None
+
+
+async def test_library_list_min_confidence_filter() -> None:
+    """library_list respects min_confidence filter."""
+    from src.models.tool_schemas import ListInput
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="Hi", confidence=0.9))
+    await repo.insert(_make_tome(title="Lo", confidence=0.2))
+
+    server = _build_server_with_repo(repo)
+    library_list = _get_tool(server, "library_list")
+
+    out = await library_list(ListInput(min_confidence=0.5))
+
+    assert out.total == 1
+    assert out.tomes[0].title == "Hi"
 
 
 async def test_library_search_outside_lifespan_raises_runtime_error() -> None:
@@ -99,21 +247,6 @@ async def test_library_search_outside_lifespan_raises_runtime_error() -> None:
 
     with pytest.raises(RuntimeError, match="LibrarianServer not initialised"):
         await library_search(SearchInput(query="anything"))
-
-
-def _make_tome(*, tome_id: uuid.UUID | None = None, title: str = "Test Tome") -> Tome:
-    return Tome(
-        id=tome_id or uuid.uuid4(),
-        title=title,
-        content="Some content.",
-        summary="A summary.",
-        category="general",
-        tags=[],
-        source_url=None,
-        source_type=SourceType.AGENT_INPUT,
-        confidence=0.8,
-        embedding=None,
-    )
 
 
 # ── library_delete behavioural tests (issue #39) ────────────────────
