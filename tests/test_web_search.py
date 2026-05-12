@@ -401,9 +401,7 @@ async def test_fetch_url_rejects_dns_rebind_via_transport_hijack(
     # Capture the request after the transport modifies it.
     captured_request = None
 
-    async def mock_parent_handle_async_request(
-        self: object, req: httpx.Request
-    ) -> httpx.Response:
+    async def mock_parent_handle_async_request(self: object, req: httpx.Request) -> httpx.Response:
         nonlocal captured_request
         captured_request = req
         return httpx.Response(200)
@@ -419,18 +417,15 @@ async def test_fetch_url_rejects_dns_rebind_via_transport_hijack(
     # Verify request modifications:
     # 1. URL host should be the pinned IP (prevents DNS re-resolution at socket).
     assert str(captured_request.url.host) == validated_ip, (
-        f"URL host should be pinned IP {validated_ip}, "
-        f"got {captured_request.url.host}"
+        f"URL host should be pinned IP {validated_ip}, got {captured_request.url.host}"
     )
 
     # 2. Host header should be the original hostname (for virtual hosting).
     assert captured_request.headers.get("host") == hostname, (
-        f"Host header should be {hostname}, "
-        f"got {captured_request.headers.get('host')}"
+        f"Host header should be {hostname}, got {captured_request.headers.get('host')}"
     )
 
     # 3. SNI hostname should be the original hostname (for HTTPS cert validation).
     assert captured_request.extensions.get("sni_hostname") == hostname, (
-        f"SNI hostname should be {hostname}, "
-        f"got {captured_request.extensions.get('sni_hostname')}"
+        f"SNI hostname should be {hostname}, got {captured_request.extensions.get('sni_hostname')}"
     )

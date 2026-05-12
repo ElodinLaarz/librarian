@@ -91,31 +91,24 @@ async def test_reshard_delete_failure_reports_partial() -> None:
 
 @pytest.mark.asyncio
 async def test_minimum_content_size() -> None:
-    """Enforce minimum 400-character tome size to prevent fragments.
+    """Short documents pass via the whole-blob bypass; floor blocks reshard fragments.
 
-    Validates issue #35: minimum tome content length prevents short pollution.
-    400-character threshold prevents storing incomplete information.
+    Issue #35 (revised): below-floor whole blobs (tweets, notes) are stored as-is
+    via the bypass.  The floor only blocks sub-floor fragments that emerge from
+    resharding larger documents, not deliberately short inputs.
     """
     from src.config import IngestSettings
 
-    # Create a config with the production minimum (400 chars)
-    ingest_settings = IngestSettings(min_shard_chars=400)
+    ingest_settings = IngestSettings(min_shard_chars=400, min_shard_words=80)
     config = make_test_config(ingest=ingest_settings)
     ingestor, repo, _ = make_stub_ingestor(config=config)
 
-    # Test 1: 2-char content should be REJECTED
+    # Short content passes via the whole-blob bypass (intentionally short document).
     output_short = await ingestor.ingest("hi")
-    assert output_short.status == IngestStatus.REJECTED
-    assert "minimum" in output_short.reject_reason.lower()
+    assert output_short.status == IngestStatus.STORED
 
-    # Test 2: 400-char content (at floor) should be STORED
-    content_valid = "a" * 400
+    # Content meeting both floors (400 chars, 80 words) is stored normally.
+    content_valid = "word " * 80  # 400 chars, 80 words
     output_valid = await ingestor.ingest(content_valid)
     assert output_valid.status == IngestStatus.STORED
     assert len(output_valid.tomes) > 0
-
-    # Test 3: 399-char content (just below floor) should be REJECTED
-    content_below = "b" * 399
-    output_below = await ingestor.ingest(content_below)
-    assert output_below.status == IngestStatus.REJECTED
-    assert "minimum" in output_below.reject_reason.lower()

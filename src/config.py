@@ -134,6 +134,8 @@ class IngestSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARIAN_INGEST_")
     shard_size: int = constants.DEFAULT_SHARD_SIZE
     shard_overlap: int = constants.DEFAULT_SHARD_OVERLAP
+    min_shard_chars: int = constants.DEFAULT_MIN_SHARD_CHARS
+    min_shard_words: int = constants.DEFAULT_MIN_SHARD_WORDS
     build_concurrency: int = Field(default=8, ge=1)
     write_batch_size: int = Field(default=32, ge=1)
     summary_length: int = constants.DEFAULT_SUMMARY_LENGTH
@@ -141,7 +143,6 @@ class IngestSettings(BaseSettings):
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
-    min_shard_chars: int = 400  # Minimum characters per tome to avoid fragments
     # NOTE: ``use_llm_chunking`` is a misnomer kept for backward compatibility.
     # The flag toggles ``Ingestor._extract_facts_llm`` (LLM fact extraction),
     # which **rewrites** the source into atomic factual statements rather than
