@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -21,6 +23,7 @@ from pymongo.operations import SearchIndexModel
 
 from src.config import DatabaseSettings, TidySettings
 from src.models.tome import Tome
+from src.models.tool_schemas import TaxonomySummary
 from src.services.duplicate_detection import build_duplicate_groups
 from src.services.embedding import EmbeddingService
 from src.storage.errors import (
@@ -104,6 +107,7 @@ class MongoTomeRepository(TomeRepository):
         ``close()`` for backwards compatibility with the previous API and
         with tests that construct repos directly.
         """
+        self._settings = settings
         self._client: AsyncIOMotorClient[Mapping[str, Any]] = (
             client if client is not None else build_motor_client(settings)
         )
@@ -135,6 +139,54 @@ class MongoTomeRepository(TomeRepository):
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "delete") from exc
         return result.deleted_count > 0
+
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update tome fields. Returns updated Tome or None if not found."""
+        # Build update dict from non-None params
+        update_dict: dict[str, Any] = {}
+        if content is not None:
+            # Re-embed if content changes
+            embedding = await self._embedding_service.embed(content)
+            update_dict["content"] = content
+            update_dict["embedding"] = Binary.from_uuid(
+                embedding,
+                subtype=BinaryVectorDtype.VECTOR,
+            )
+        if category is not None:
+            update_dict["category"] = category
+        if tags is not None:
+            update_dict["tags"] = tags
+        if source_url is not None:
+            update_dict["source_url"] = source_url
+        if confidence is not None:
+            update_dict["confidence"] = confidence
+
+        if not update_dict:
+            # No fields to update, just return current tome
+            return await self.get_by_id(tome_id)
+
+        try:
+            result = await self._collection.update_one(
+                {"_id": tome_id},
+                {"$set": update_dict},
+            )
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "update") from exc
+
+        if result.matched_count == 0:
+            return None
+
+        # Fetch and return the updated tome
+        return await self.get_by_id(tome_id)
 
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Retrieve a single Tome by its ID."""
@@ -215,10 +267,13 @@ class MongoTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        recency_weight: float | None = None,
+        recency_half_life_days: float | None = None,
     ) -> list[tuple[Tome, float]]:
         """Perform hybrid search using Atlas Search (lexical) and Vector Search.
 
         Runs both pipelines concurrently and combines results using Reciprocal Rank Fusion.
+        Optionally applies exponential decay recency weighting to blend with RRF scores.
         """
         query_embedding = await self._embedding_service.embed(query)
         query_vector = Binary.from_vector(
@@ -233,7 +288,25 @@ class MongoTomeRepository(TomeRepository):
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "search") from exc
 
-        return self._merge_results(lexical_results, vector_results, top_k)
+        # Use provided recency params or fall back to config defaults
+        effective_weight = (
+            recency_weight
+            if recency_weight is not None
+            else self._settings.search.recency_weight
+        )
+        effective_half_life = (
+            recency_half_life_days
+            if recency_half_life_days is not None
+            else self._settings.search.recency_half_life_days
+        )
+
+        return self._merge_results(
+            lexical_results,
+            vector_results,
+            top_k,
+            recency_weight=effective_weight,
+            recency_half_life_days=effective_half_life,
+        )
 
     async def _lexical_search(
         self, query: str, top_k: int, min_confidence: float, category: str | None
@@ -304,12 +377,18 @@ class MongoTomeRepository(TomeRepository):
         lexical: list[Tome],
         vector: list[Tome],
         top_k: int,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
         """Reciprocal Rank Fusion (RRF) over two ranked result lists.
 
         Each list is assumed to be pre-sorted by its native score descending.
         RRF score for a document is: sum(1 / (k + rank)) across the lists it
         appears in, where rank is 1-based.
+
+        If recency_weight > 0, blends RRF with exponential decay recency score:
+        recency_score = exp(-ln(2) * age_days / half_life_days)
+        final_score = rrf * (1 - w) + w * recency  (both normalized to [0, 1])
         """
         k = MongoTomeRepository.RRF_K
 
@@ -324,7 +403,35 @@ class MongoTomeRepository(TomeRepository):
             tome_by_id[tome.id] = tome
             rrf_scores[tome.id] = rrf_scores.get(tome.id, 0.0) + 1.0 / (k + rank)
 
-        combined = [(tome_by_id[tid], score) for tid, score in rrf_scores.items()]
+        # Normalize RRF scores to [0, 1] for blending
+        max_rrf = max(rrf_scores.values()) if rrf_scores else 1.0
+        if max_rrf > 0:
+            normalized_rrf = {tid: score / max_rrf for tid, score in rrf_scores.items()}
+        else:
+            normalized_rrf = rrf_scores
+
+        # Apply recency weighting if enabled
+        final_scores: dict[UUID, float] = {}
+        if recency_weight > 0:
+            now_utc = datetime.now(UTC)
+            for tid, tome in tome_by_id.items():
+                # Compute age in days (clamp negative to 0 for clock skew)
+                age_days = max(0, (now_utc - tome.created_at).days)
+
+                # Exponential decay: recency_score = exp(-ln(2) * age_days / half_life)
+                recency_score = math.exp(
+                    -math.log(2) * age_days / recency_half_life_days
+                )
+
+                # Blend: final = rrf * (1 - w) + w * recency
+                rrf_component = normalized_rrf[tid] * (1 - recency_weight)
+                recency_component = recency_score * recency_weight
+                final_scores[tid] = rrf_component + recency_component
+        else:
+            # No recency weighting: use normalized RRF directly
+            final_scores = normalized_rrf
+
+        combined = [(tome_by_id[tid], score) for tid, score in final_scores.items()]
         combined.sort(key=lambda x: x[1], reverse=True)
         return combined[:top_k]
 
@@ -500,6 +607,30 @@ class MongoTomeRepository(TomeRepository):
                 raise StorageError("Failed to create Atlas lexical search index 'default'") from exc
             except PyMongoError as exc:
                 raise _wrap_mongo(exc, "create_search_index (default)") from exc
+
+    async def taxonomy(self) -> TaxonomySummary:
+        """Count categories and tags across all tomes using MongoDB aggregation."""
+        try:
+            # Aggregate categories: group by category, count documents
+            categories_pipeline: list[Mapping[str, Any]] = [
+                {"$group": {"_id": "$category", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]
+            categories_docs = await self._collection.aggregate(categories_pipeline).to_list(None)
+            categories = {doc["_id"]: doc["count"] for doc in categories_docs}
+
+            # Aggregate tags: unwind tags array, group by tag, count documents
+            tags_pipeline: list[Mapping[str, Any]] = [
+                {"$unwind": "$tags"},
+                {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]
+            tags_docs = await self._collection.aggregate(tags_pipeline).to_list(None)
+            tags = {doc["_id"]: doc["count"] for doc in tags_docs}
+
+            return TaxonomySummary(categories=categories, tags=tags)
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "taxonomy") from exc
 
     def close(self) -> None:
         """Close the MongoDB client connection if this repo owns it.
