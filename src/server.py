@@ -13,6 +13,8 @@ from src.config import LibrarianConfig
 from src.models.enums import ResearchJobStatus
 from src.models.research_job import ResearchJob
 from src.models.tool_schemas import (
+    GetInput,
+    GetOutput,
     IngestInput,
     IngestOutput,
     ResearchInput,
@@ -96,9 +98,10 @@ class LibrarianServer:
             "The Librarian",
             instructions=(
                 "An intelligent knowledge management server. Use library_search to "
-                "find information, library_ingest to store new knowledge, and "
-                "library_research to gather information from the web when the library "
-                "is thin on a topic. Use library_tidy to consolidate duplicates."
+                "find information, library_get to fetch a single tome by ID, "
+                "library_ingest to store new knowledge, and library_research to gather "
+                "information from the web when the library is thin on a topic. Use "
+                "library_tidy to consolidate duplicates."
             ),
             lifespan=self.lifespan,
             host=self.config.server.host,
@@ -323,6 +326,34 @@ class LibrarianServer:
 
             await researcher.run_job(job.id)
             return await self._research_poll(job.id)
+
+        @self.mcp.tool()
+        async def library_get(params: GetInput) -> GetOutput:
+            """Fetch a single Tome by its UUID. Returns not_found if the ID is unknown."""
+            tome_repo = self._require(self.tome_repo, "tome_repo")
+
+            raw_id = params.tome_id.strip()
+            try:
+                tome_uuid = UUID(hex=raw_id)
+            except ValueError:
+                return GetOutput(
+                    tome=None,
+                    status="invalid_tome_id",
+                    error="tome_id must be a UUID hex string",
+                )
+
+            tome = await tome_repo.get_by_id(tome_uuid)
+            if tome is None:
+                return GetOutput(
+                    tome=None,
+                    status="not_found",
+                    error=f"No tome found with id {raw_id}",
+                )
+            # Strip embedding payload before returning to clients (matches search/research).
+            return GetOutput(
+                tome=tome.model_copy(update={"embedding": None}),
+                status="found",
+            )
 
         @self.mcp.tool()
         async def library_tidy(params: TidyInput) -> TidyOutput:
