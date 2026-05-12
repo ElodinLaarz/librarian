@@ -121,6 +121,64 @@ class LibrarianServer:
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
+    async def _shutdown_background_tasks(self, timeout: float = 5.0) -> None:
+        """Cancel tracked background tasks and wait for them to unwind.
+
+        Issue #23: previously the lifespan handler only called ``cancel()``
+        and cleared ``_bg_tasks``, never awaiting the tasks. That meant any
+        in-flight work (HTTP requests, Mongo writes, partial ResearchJob
+        records) was torn down mid-flight without giving the task a chance
+        to clean up, run ``finally`` blocks, or propagate cancellation
+        through pending I/O.
+
+        This helper requests cancellation, then awaits all tasks with a
+        timeout (so a malicious / stuck task cannot block server shutdown
+        indefinitely). Exceptions surfaced during the unwind are logged but
+        not re-raised so a single failing task does not abort the rest of
+        the lifespan teardown (closing repositories, embedding services).
+        """
+        if not self._bg_tasks:
+            return
+
+        pending = list(self._bg_tasks)
+        for t in pending:
+            t.cancel()
+
+        try:
+            results: list[BaseException | None] = await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True),
+                timeout=timeout,
+            )
+        except TimeoutError:
+            logging.error(
+                "Background tasks did not finish within %.1fs of shutdown; "
+                "%d task(s) still pending — abandoning to avoid blocking shutdown.",
+                timeout,
+                sum(1 for t in pending if not t.done()),
+            )
+            # Preserve telemetry for tasks that DID complete (with or without
+            # exception) before the timeout fired. Tasks still running are
+            # represented as ``None`` since we have no result to inspect yet.
+            results = [t.exception() if t.done() and not t.cancelled() else None for t in pending]
+
+        for t, result in zip(pending, results, strict=False):
+            if result is None or isinstance(result, asyncio.CancelledError):
+                continue
+            if isinstance(result, BaseException):
+                logging.error(
+                    "Background task %s raised during shutdown: %s",
+                    t.get_name(),
+                    result,
+                    exc_info=result,
+                )
+
+        # Abandon all tracked tasks. Tasks that completed have already been
+        # removed by the done_callback registered in ``_track_background_task``;
+        # tasks that timed out are explicitly dropped here so they cannot leak
+        # references to repositories/services that the rest of the lifespan
+        # teardown is about to close.
+        self._bg_tasks.clear()
+
     def _require(self, value: _T | None, name: str) -> _T:
         """Return ``value`` if not ``None`` else raise a clear ``RuntimeError``.
 
@@ -191,9 +249,9 @@ class LibrarianServer:
 
         yield
 
-        for t in list(self._bg_tasks):
-            t.cancel()
-        self._bg_tasks.clear()
+        # Cancel + await in-flight background tasks so they get a chance to
+        # unwind cleanly (issue #23) before we tear down their dependencies.
+        await self._shutdown_background_tasks(timeout=5.0)
 
         if self.job_repo:
             self.job_repo.close()
