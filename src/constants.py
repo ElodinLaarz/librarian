@@ -2,6 +2,10 @@
 
 # Tome model constraints
 TITLE_MAX_LENGTH = 120
+# Per-tag character cap and per-tome tag-list cap. Keeps tag UIs and
+# search indexes bounded regardless of how the LLM classifier behaves.
+MAX_TAG_LENGTH = 60
+MAX_TAGS_PER_TOME = 10
 
 # Ingest defaults
 DEFAULT_SHARD_SIZE = 2000

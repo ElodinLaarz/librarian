@@ -104,14 +104,20 @@ class Researcher:
                 await self._jobs.update(job)
                 return
 
-            tags = [t for t in (job.topic[:60],) if t]
+            # Preserve the topic as an additional tag (so users can still
+            # filter tomes by research job topic) but let the ingestor's
+            # classifier derive content-based tags per chunk. Issue #42 —
+            # previously this was passed as ``tags_hint``, which pinned the
+            # final tag list to ``[topic]`` and blocked classifier output.
+            topic_tag = job.topic.strip()[:60]
+            extra_tags = [topic_tag] if topic_tag else []
             opts = IngestCallOptions(
                 skip_verify=False,
                 source_type=SourceType.RESEARCHER,
                 source_url=sources[0] if sources else None,
                 research_job_id=job.id,
                 category_hint=job.category,
-                tags_hint=tags,
+                extra_tags=extra_tags,
             )
             out = await self._ingestor.ingest(combined, opts)
 
