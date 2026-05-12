@@ -235,16 +235,23 @@ class StubTomeRepository(TomeRepository):
 
 
 class StubEmbeddingService(EmbeddingService):
-    """Returns a zero vector of the configured dimensionality."""
+    """Returns a fixed vector of the configured dimensionality (zeros by default)."""
 
-    def __init__(self, dimensions: int = 768) -> None:
+    def __init__(
+        self,
+        dimensions: int = 768,
+        vector: NDArray[np.float32] | None = None,
+    ) -> None:
         super().__init__(EmbeddingSettings(dimensions=dimensions))
+        self._vector: NDArray[np.float32] = (
+            vector if vector is not None else np.zeros(dimensions, dtype=np.float32)
+        )
 
     async def initialize(self) -> None:
         pass
 
     async def embed(self, text: str) -> NDArray[np.float32]:
-        return np.zeros(self._settings.dimensions, dtype=np.float32)
+        return self._vector
 
 
 class StubVerifier(Verifier):
