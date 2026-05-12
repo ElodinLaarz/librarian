@@ -424,6 +424,19 @@ class MongoTomeRepository(TomeRepository):
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "ensure_indexes") from exc
 
+        # Standard secondary indexes for non-Atlas-Search queries — chiefly
+        # ``list_all`` which sorts by ``created_at`` descending and may filter
+        # by ``category`` or ``research_job_id``. Without these the server has
+        # to do an in-memory sort, which Mongo caps at 32 MB and aborts on
+        # large libraries. ``create_index`` is idempotent so we can call it
+        # unconditionally on every startup.
+        try:
+            await self._collection.create_index([("created_at", -1)])
+            await self._collection.create_index("category")
+            await self._collection.create_index("research_job_id")
+        except PyMongoError as exc:
+            raise _wrap_mongo(exc, "ensure_indexes (standard indexes)") from exc
+
         existing_search_indexes: list[str] = []
 
         try:

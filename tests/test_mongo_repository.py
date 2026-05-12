@@ -206,6 +206,7 @@ def _build_repo_with_mocked_collection(
     collection.name = "tomes"
     collection.database = MagicMock()
     collection.database.create_collection = AsyncMock(return_value=None)
+    collection.create_index = AsyncMock(return_value=None)
     collection.create_search_index = AsyncMock(return_value=None)
     if create_search_index_side_effect is not None:
         collection.create_search_index.side_effect = create_search_index_side_effect
