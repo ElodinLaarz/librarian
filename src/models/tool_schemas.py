@@ -79,6 +79,27 @@ class ResearchOutput(BaseModel):
     error: str | None = None
 
 
+# ── library.get ─────────────────────────────────────────────────────
+
+
+class GetInput(BaseModel):
+    tome_id: str = Field(
+        ...,
+        max_length=200,
+        description=(
+            "UUID string identifying the Tome to retrieve. Accepts the "
+            "canonical hyphenated form (e.g. as returned by library_search) "
+            "as well as bare hex."
+        ),
+    )
+
+
+class GetOutput(BaseModel):
+    tome: Tome | None = None
+    status: Literal["found", "not_found", "invalid_tome_id"]
+    error: str | None = None
+
+
 # ── library.tidy ──────────────────────────────────────────────────
 
 
