@@ -116,6 +116,44 @@ class FsTomeRepository(TomeRepository):
             raise _wrap_os(exc, "delete", path) from exc
         return True
 
+    async def update(
+        self,
+        tome_id: UUID,
+        *,
+        content: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        confidence: float | None = None,
+    ) -> Tome | None:
+        """Update a Tome's mutable fields. Returns updated Tome or None if not found."""
+        tome = await self.get_by_id(tome_id)
+        if tome is None:
+            return None
+
+        update_dict: dict[str, object] = {}
+        if content is not None:
+            update_dict["content"] = content
+        if category is not None:
+            update_dict["category"] = category
+        if tags is not None:
+            update_dict["tags"] = tags
+        if source_url is not None:
+            update_dict["source_url"] = source_url
+        if confidence is not None:
+            update_dict["confidence"] = confidence
+
+        if not update_dict:
+            return tome
+
+        updated = tome.model_copy(update=update_dict)
+        try:
+            path = self._get_path(tome_id)
+            await asyncio.to_thread(path.write_text, updated.model_dump_json(indent=2))
+        except OSError as exc:
+            raise _wrap_os(exc, "update", path) from exc
+        return updated
+
     async def get_by_id(self, tome_id: UUID) -> Tome | None:
         """Read a Tome from its JSON file."""
         path = self._get_path(tome_id)
