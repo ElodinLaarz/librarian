@@ -1703,9 +1703,7 @@ async def test_ingest_with_thread_grouping(
 
     # Verify sequential thread_position (0, 1, 2, 3, 4)
     positions = sorted([t.thread_position for t in all_tomes])
-    assert positions == [0, 1, 2, 3, 4], (
-        f"Expected thread_position [0,1,2,3,4], got {positions}"
-    )
+    assert positions == [0, 1, 2, 3, 4], f"Expected thread_position [0,1,2,3,4], got {positions}"
 
     # Call library_list with thread_id filter, expect all 5 in order
     filtered = await repo.list_all(thread_id=uuid.UUID(hex=thread_id))
