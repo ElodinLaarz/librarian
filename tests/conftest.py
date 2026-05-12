@@ -28,7 +28,7 @@ def make_test_config(**overrides: Any) -> LibrarianConfig:
     enforcing the 400-char production minimum.
     """
     overrides.setdefault("database", _TEST_DB_SETTINGS)
-    overrides.setdefault("ingest", IngestSettings(min_shard_chars=0))
+    overrides.setdefault("ingest", IngestSettings(min_shard_chars=0, min_shard_words=0))
     return LibrarianConfig(**overrides)
 
 

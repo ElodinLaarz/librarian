@@ -685,7 +685,7 @@ async def test_llm_short_facts_are_bundled() -> None:
     from src.config import IngestSettings
 
     # Use a small floor so 5 short facts can be bundled into multiple tomes.
-    ingest = IngestSettings(min_shard_chars=40, min_shard_words=8)
+    ingest = IngestSettings(min_shard_chars=40, min_shard_words=8, use_llm_chunking=True)
     cfg = make_test_config(ingest=ingest)
 
     long_blob = "y" * (ingest.min_shard_chars * 5)
@@ -699,11 +699,11 @@ async def test_llm_short_facts_are_bundled() -> None:
     ]
 
     class LLMShortFactsIngestor(StubIngestor):
-        async def _reshard_llm(self, blob: str) -> list[str] | None:
+        async def _extract_facts_llm(self, blob: str) -> list[str] | None:
             return list(short_facts)
 
         async def _reshard(self, blob: str, opts: IngestCallOptions | None = None) -> list[str]:
-            # Mirror the production _reshard logic but use our mocked _reshard_llm.
+            # Delegate to production _reshard so _apply_min_floor bundling runs.
             return await Ingestor._reshard(self, blob, opts)
 
     repo = StubTomeRepository()
@@ -814,12 +814,15 @@ async def test_heuristic_tail_shard_below_floor_merged_with_previous(
     )
 
 
-async def test_validate_rejects_below_floor(config: LibrarianConfig) -> None:
+async def test_validate_rejects_below_floor() -> None:
     """_validate must raise when content is below the floor and allow_short=False."""
+    from src.config import IngestSettings
+
+    floor_config = make_test_config(ingest=IngestSettings(min_shard_chars=400, min_shard_words=80))
     repo = StubTomeRepository()
     ingestor = Ingestor(
-        config,
-        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        floor_config,
+        StubEmbeddingService(dimensions=floor_config.embedding.dimensions),
         StubVerifier(confidence=0.9),
         repo,
     )
@@ -835,22 +838,25 @@ async def test_validate_rejects_below_floor(config: LibrarianConfig) -> None:
         source_url=None,
         source_type=SourceType.AGENT_INPUT,
         confidence=0.9,
-        embedding=np.zeros(config.embedding.dimensions, dtype=np.float32),
+        embedding=np.zeros(floor_config.embedding.dimensions, dtype=np.float32),
     )
 
     with pytest.raises(ValueError):
         ingestor._validate(tome, allow_short=False)
 
 
-async def test_legitimate_short_blob_passes_through(config: LibrarianConfig) -> None:
+async def test_legitimate_short_blob_passes_through() -> None:
     """A genuine short input (e.g. a tweet) must be stored as a single tome."""
+    from src.config import IngestSettings
+
+    floor_config = make_test_config(ingest=IngestSettings(min_shard_chars=400, min_shard_words=80))
     short_blob = "Cats sleep ~16 hours per day."  # ~30 chars
-    assert len(short_blob) < config.ingest.min_shard_chars
+    assert len(short_blob) < floor_config.ingest.min_shard_chars
 
     repo = StubTomeRepository()
     ingestor = Ingestor(
-        config,
-        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        floor_config,
+        StubEmbeddingService(dimensions=floor_config.embedding.dimensions),
         StubVerifier(confidence=0.9),
         repo,
     )
@@ -898,6 +904,7 @@ async def test_summary_is_not_content_prefix_when_llm_enabled(
         use_llm_summary=True,
         use_llm_classification=False,
         min_shard_chars=0,  # Tests allow arbitrary content length
+        min_shard_words=0,
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -935,6 +942,7 @@ async def test_summary_falls_back_on_http_error(monkeypatch: pytest.MonkeyPatch)
         use_llm_summary=True,
         use_llm_classification=False,
         min_shard_chars=0,  # Tests allow arbitrary content length
+        min_shard_words=0,
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -962,6 +970,7 @@ async def test_summary_falls_back_on_bad_json(monkeypatch: pytest.MonkeyPatch) -
         use_llm_summary=True,
         use_llm_classification=False,
         min_shard_chars=0,  # Tests allow arbitrary content length
+        min_shard_words=0,
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -991,6 +1000,7 @@ async def test_use_llm_summary_flag_off_skips_llm(monkeypatch: pytest.MonkeyPatc
         use_llm_summary=False,
         use_llm_classification=False,
         min_shard_chars=0,  # Tests allow arbitrary content length
+        min_shard_words=0,
     )
     config = make_test_config(
         verification=VerificationSettings(enabled=False),
@@ -1398,7 +1408,7 @@ async def test_use_llm_classification_flag_off_skips_llm(
     from src.config import IngestSettings
 
     config = make_test_config(
-        ingest=IngestSettings(use_llm_classification=False, min_shard_chars=0)
+        ingest=IngestSettings(use_llm_classification=False, min_shard_chars=0, min_shard_words=0)
     )
     ingestor, _ = _make_llm_classify_ingestor(config)
 

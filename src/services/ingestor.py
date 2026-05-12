@@ -589,7 +589,7 @@ class Ingestor:
 
         if fmt == "text":
             if self._config.ingest.use_llm_chunking:
-                llm_shards = await self._reshard_llm(blob)
+                llm_shards = await self._extract_facts_llm(blob)
                 if llm_shards:
                     bundled = self._apply_min_floor(llm_shards)
                     if bundled:
@@ -938,10 +938,6 @@ class Ingestor:
         if not out:
             return None
         return out
-
-    async def _reshard_llm(self, blob: str) -> list[str] | None:
-        """Thin wrapper around _extract_facts_llm; override in tests to inject mock shards."""
-        return await self._extract_facts_llm(blob)
 
     async def _classify_and_tag(
         self,
