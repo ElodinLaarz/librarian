@@ -44,6 +44,24 @@ class SearchInput(BaseModel):
             "``search.default_snippet_chars``."
         ),
     )
+    recency_weight: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Blend RRF scores with recency: [0, 1]. "
+            "0 = no recency boost (RRF only), 1 = pure age-based ranking. "
+            "None uses ``search.recency_weight`` from config."
+        ),
+    )
+    recency_half_life_days: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Half-life in days for exponential decay: days until recency score = 50%. "
+            "None uses ``search.recency_half_life_days`` from config."
+        ),
+    )
 
 
 class SearchOutput(BaseModel):
@@ -211,6 +229,46 @@ class DeleteOutput(BaseModel):
     error: str | None = None
 
 
+# ── library.update ──────────────────────────────────────────────────
+
+
+class UpdateInput(BaseModel):
+    tome_id: str = Field(
+        ...,
+        description="UUID hex or hyphenated string identifying the tome to update.",
+        max_length=64,
+    )
+    content: str | None = Field(
+        default=None,
+        max_length=500_000,
+        description="New content for the tome. If provided, embedding will be recomputed.",
+    )
+    category: str | None = Field(
+        default=None,
+        description="New category for the tome.",
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        description="New tags for the tome.",
+    )
+    source_url: str | None = Field(
+        default=None,
+        description="New source URL for the tome.",
+    )
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="New confidence score [0.0-1.0].",
+    )
+
+
+class UpdateOutput(BaseModel):
+    tome: Tome | None = None
+    status: Literal["updated", "not_found", "invalid_id"]
+    error: str | None = None
+
+
 # ── library.list ────────────────────────────────────────────────────
 
 
@@ -249,3 +307,31 @@ class ListOutput(BaseModel):
     tomes: list[Tome]
     total: int
     has_more: bool
+
+
+# ── library.taxonomy ────────────────────────────────────────────────
+
+
+class TaxonomySummary(BaseModel):
+    """Count of categories and tags in the library."""
+
+    categories: dict[str, int]
+    tags: dict[str, int]
+
+
+class TaxonomyInput(BaseModel):
+    """Parameters for taxonomy discovery.
+
+    Currently accepts no filters, but structured for future extensibility
+    (e.g., min_count: int = 1 to exclude singleton categories).
+    """
+
+    pass
+
+
+class TaxonomyOutput(BaseModel):
+    """Taxonomy enumeration response."""
+
+    summary: TaxonomySummary
+    status: Literal["ok", "error"]
+    error: str | None = None

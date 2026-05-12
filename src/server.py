@@ -28,10 +28,12 @@ from src.models.tool_schemas import (
     ResearchOutput,
     SearchInput,
     SearchOutput,
-    TidyInput,
-    TidyOutput,
     UpdateInput,
     UpdateOutput,
+    TaxonomyInput,
+    TaxonomyOutput,
+    TidyInput,
+    TidyOutput,
 )
 from src.services.embedding import (
     EmbeddingService,
@@ -418,6 +420,8 @@ class LibrarianServer:
                 top_k=params.top_k,
                 min_confidence=params.min_confidence,
                 category=params.category,
+                recency_weight=params.recency_weight,
+                recency_half_life_days=params.recency_half_life_days,
             )
 
             scores = [s for _, s in results]
@@ -488,20 +492,11 @@ class LibrarianServer:
         async def library_ingest(params: IngestInput) -> IngestOutput:
             """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
             ingestor = self._require(self.ingestor, "ingestor")
-
-            thread_uuid: UUID | None = None
-            if params.thread_id is not None:
-                try:
-                    thread_uuid = UUID(hex=params.thread_id.strip())
-                except ValueError as exc:
-                    raise ValueError("thread_id must be a UUID hex string") from exc
-
             opts = IngestCallOptions(
                 skip_verify=params.skip_verify,
                 category_hint=params.category,
                 tags_hint=params.tags,
                 source_url=params.source_url,
-                thread_id=thread_uuid,
                 force_format=params.force_format,
             )
             return await ingestor.ingest(params.content, opts)
@@ -617,15 +612,12 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_update(params: UpdateInput) -> UpdateOutput:
-            """Update mutable fields of a tome (content, category, tags, source_url, confidence).
+            """Update a tome's mutable fields: content, category, tags, source_url, confidence.
 
-            Immutable fields (source_type, summary, research_job_id) are rejected.
-            When content is updated, embeddings are recomputed.
-            Accepts either the 32-char hex form or the standard hyphenated UUID form.
-            Returns the updated tome on success. If the id is malformed the response
-            carries ``status="invalid_id"``; if no tome matches the id it carries
-            ``status="not_found"``. Validation problems are reported in the output
-            rather than raised so MCP clients can recover.
+            Accepts either the 32-char hex form or the standard hyphenated form
+            for the tome_id. Only the provided fields are updated. If content is
+            changed, the embedding is recomputed. Returns the updated Tome on success,
+            or an error status if the id is malformed or the tome is not found.
             """
             tome_repo = self._require(self.tome_repo, "tome_repo")
             try:
@@ -644,6 +636,7 @@ class LibrarianServer:
             if updated is None:
                 return UpdateOutput(tome=None, status="not_found", error="not_found")
 
+            # Strip embedding before returning to clients
             return UpdateOutput(
                 tome=updated.model_copy(update={"embedding": None}),
                 status="updated",
@@ -667,13 +660,6 @@ class LibrarianServer:
                 except ValueError as exc:
                     raise ValueError("research_job_id must be a UUID hex string") from exc
 
-            thread_uuid: UUID | None = None
-            if params.thread_id is not None:
-                try:
-                    thread_uuid = UUID(hex=params.thread_id.strip())
-                except ValueError as exc:
-                    raise ValueError("thread_id must be a UUID hex string") from exc
-
             page, total = await asyncio.gather(
                 tome_repo.list_all(
                     limit=params.limit,
@@ -681,13 +667,11 @@ class LibrarianServer:
                     category=params.category,
                     min_confidence=params.min_confidence,
                     research_job_id=research_job_uuid,
-                    thread_id=thread_uuid,
                 ),
                 tome_repo.count(
                     category=params.category,
                     min_confidence=params.min_confidence,
                     research_job_id=research_job_uuid,
-                    thread_id=thread_uuid,
                 ),
             )
 
@@ -701,3 +685,15 @@ class LibrarianServer:
                 total=total,
                 has_more=(params.offset + len(page)) < total,
             )
+
+        @self.mcp.tool()
+        async def library_taxonomy(params: TaxonomyInput) -> TaxonomyOutput:
+            """Enumerate categories and tags in the library.
+
+            Discovers all distinct category values and individual tags
+            across the collection, returning counts for each. Useful for
+            taxonomy-aware search interfaces and exploration.
+            """
+            tome_repo = self._require(self.tome_repo, "tome_repo")
+            summary = await tome_repo.taxonomy()
+            return TaxonomyOutput(summary=summary, status="ok")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -10,6 +12,7 @@ from numpy.typing import NDArray
 
 from src.config import DatabaseSettings, TidySettings
 from src.models.tome import Tome
+from src.models.tool_schemas import TaxonomySummary
 from src.services.duplicate_detection import build_duplicate_groups
 from src.services.embedding import EmbeddingService
 from src.storage.errors import (
@@ -60,6 +63,7 @@ class FsTomeRepository(TomeRepository):
         embedding_service: EmbeddingService,
         tidy_settings: TidySettings | None = None,
     ) -> None:
+        self._settings = settings
         self._embedding_service = embedding_service
         self._tidy_settings = tidy_settings or TidySettings()
         self._tomes_dir = resolve_base_path(settings.uri) / settings.tomes_collection
@@ -269,12 +273,16 @@ class FsTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        recency_weight: float | None = None,
+        recency_half_life_days: float | None = None,
     ) -> list[tuple[Tome, float]]:
         """Brute-force cosine-similarity scan over all stored Tomes.
 
         Embeds *query* with the injected :class:`EmbeddingService` and ranks
         results by cosine similarity to each Tome's stored embedding.
         Tomes without an embedding are still included but scored 0.0.
+
+        Optionally applies exponential decay recency weighting to blend with cosine scores.
         """
         query_vec: NDArray[np.float64] | None = None
         try:
@@ -282,6 +290,18 @@ class FsTomeRepository(TomeRepository):
             query_vec = np.array(raw, dtype=np.float64)
         except Exception:
             pass
+
+        # Use provided recency params or fall back to config defaults
+        effective_weight = (
+            recency_weight
+            if recency_weight is not None
+            else self._settings.search.recency_weight
+        )
+        effective_half_life = (
+            recency_half_life_days
+            if recency_half_life_days is not None
+            else self._settings.search.recency_half_life_days
+        )
 
         results: list[tuple[Tome, float]] = []
         try:
@@ -300,6 +320,26 @@ class FsTomeRepository(TomeRepository):
                 score = _cosine_similarity(query_vec, np.array(tome.embedding, dtype=np.float64))
 
             results.append((tome, score))
+
+        # Normalize cosine scores to [0, 1] if recency weighting is enabled
+        if effective_weight > 0 and results:
+            max_score = max(s for _, s in results)
+            if max_score > 0:
+                normalized_results = [(t, s / max_score) for t, s in results]
+            else:
+                normalized_results = results
+
+            # Apply recency weighting
+            now_utc = datetime.now(UTC)
+            final_results = []
+            for tome, cosine_norm in normalized_results:
+                age_days = max(0, (now_utc - tome.created_at).days)
+                recency_score = math.exp(-math.log(2) * age_days / effective_half_life)
+                rrf_component = cosine_norm * (1 - effective_weight)
+                recency_component = recency_score * effective_weight
+                final_score = rrf_component + recency_component
+                final_results.append((tome, final_score))
+            results = final_results
 
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
@@ -335,6 +375,27 @@ class FsTomeRepository(TomeRepository):
             all_tomes,
             self._tidy_settings.model_copy(update={"threshold": threshold}),
         )
+
+    async def taxonomy(self) -> TaxonomySummary:
+        """Count categories and tags across all tomes."""
+        try:
+            all_tomes = await asyncio.to_thread(self._read_all_tomes_sync)
+        except OSError as exc:
+            raise _wrap_os(exc, "taxonomy", self._tomes_dir) from exc
+
+        categories: dict[str, int] = {}
+        tags: dict[str, int] = {}
+
+        for tome in all_tomes:
+            # Count categories
+            cat = tome.category
+            categories[cat] = categories.get(cat, 0) + 1
+
+            # Count tags
+            for tag in tome.tags:
+                tags[tag] = tags.get(tag, 0) + 1
+
+        return TaxonomySummary(categories=categories, tags=tags)
 
     def close(self) -> None:
         pass

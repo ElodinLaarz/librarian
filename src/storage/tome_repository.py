@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from src.models.tome import Tome
+
+if TYPE_CHECKING:
+    from src.models.tool_schemas import TaxonomySummary
 
 
 @dataclass(slots=True)
@@ -44,7 +48,12 @@ class TomeRepository(ABC):
         source_url: str | None = None,
         confidence: float | None = None,
     ) -> Tome | None:
-        """Update mutable fields of a Tome. Returns updated Tome or None if not found."""
+        """Update tome fields. Returns updated Tome or None if not found.
+
+        Only updateable fields (content, category, tags, source_url, confidence)
+        may be changed. Immutable fields (source_type, summary, research_job_id)
+        are ignored if provided. If content is updated, the embedding is recomputed.
+        """
         ...
 
     @abstractmethod
@@ -59,8 +68,13 @@ class TomeRepository(ABC):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        recency_weight: float | None = None,
+        recency_half_life_days: float | None = None,
     ) -> list[tuple[Tome, float]]:
-        """Perform search. Returns (Tome, score) pairs sorted by relevance."""
+        """Perform search. Returns (Tome, score) pairs sorted by relevance.
+
+        Optionally applies exponential decay recency weighting (None = use config defaults).
+        """
         ...
 
     @abstractmethod
@@ -86,15 +100,13 @@ class TomeRepository(ABC):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
-        thread_id: UUID | None = None,
     ) -> list[Tome]:
         """Return a page of Tomes matching the given filters.
 
         Results are sorted by ``created_at`` descending (newest first) for
-        consistent pagination across calls, unless ``thread_id`` is set in which
-        case results are sorted by ``thread_position`` ascending (conversational order).
-        Filters compose with AND. Embeddings should be included so the caller can
-        decide whether to strip them — keeps this method usable from non-MCP code paths.
+        consistent pagination across calls. Filters compose with AND.
+        Embeddings should be included so the caller can decide whether to
+        strip them — keeps this method usable from non-MCP code paths.
         """
         ...
 
@@ -105,13 +117,21 @@ class TomeRepository(ABC):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
-        thread_id: UUID | None = None,
     ) -> int:
         """Return the total number of Tomes matching the given filters.
 
         Companion to :meth:`list_all` for pagination — implementations must
         apply the same filter predicates so callers can compute ``has_more``
         from ``offset + len(page) < total``.
+        """
+        ...
+
+    @abstractmethod
+    async def taxonomy(self) -> TaxonomySummary:
+        """Return a count of categories and tags in the library.
+
+        Categories are unique category values; tags are individual tag strings.
+        Returns empty dicts when the library is empty.
         """
         ...
 

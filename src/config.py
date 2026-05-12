@@ -99,6 +99,11 @@ class SearchSettings(BaseSettings):
     # Default snippet window applied by ``library_search`` when the caller does
     # not pass an explicit ``snippet_chars``. ``0`` disables snippet extraction.
     default_snippet_chars: int = Field(default=0, ge=0)
+    # Recency weighting in search ranking: blend RRF with age-based exponential decay.
+    # [0, 1]: 0 = no recency boost (backward compatible), 1 = pure age-based ranking.
+    recency_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Half-life in days for recency exponential decay: days until score = 50%.
+    recency_half_life_days: float = Field(default=90.0, gt=0.0)
 
 
 class WebSearchSettings(BaseSettings):
@@ -136,6 +141,7 @@ class IngestSettings(BaseSettings):
     unverified_confidence: float = constants.DEFAULT_UNVERIFIED_CONFIDENCE
     default_category: str = constants.DEFAULT_CATEGORY
     default_tags: list[str] = Field(default_factory=lambda: list(constants.DEFAULT_TAGS))
+    min_shard_chars: int = 400  # Minimum characters per tome to avoid fragments
     # NOTE: ``use_llm_chunking`` is a misnomer kept for backward compatibility.
     # The flag toggles ``Ingestor._extract_facts_llm`` (LLM fact extraction),
     # which **rewrites** the source into atomic factual statements rather than
