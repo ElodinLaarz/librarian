@@ -10,6 +10,32 @@ from pydantic.json_schema import SkipJsonSchema
 from src import constants
 from src.models.enums import SourceType
 
+# Cap evidence URLs persisted per Tome to keep search payloads small and
+# bound storage growth on tomes that surface many claims.
+VERIFICATION_EVIDENCE_URL_LIMIT = 10
+
+
+class VerificationSummary(BaseModel):
+    """Persisted snapshot of the Verifier's run on a Tome's source text.
+
+    Counts let agents reason about *why* a tome has its ``confidence`` —
+    e.g. distinguishing a verified-but-unsupported claim from a skipped
+    verification run that fell back to a mock confidence. ``evidence_urls``
+    is the short list of citations the verifier consulted; we cap it at
+    :data:`VERIFICATION_EVIDENCE_URL_LIMIT` so the field stays small enough
+    to ship in ``library_search`` results.
+    """
+
+    skipped: bool
+    claim_count: int = Field(default=0, ge=0)
+    supported: int = Field(default=0, ge=0)
+    contradicted: int = Field(default=0, ge=0)
+    unverifiable: int = Field(default=0, ge=0)
+    evidence_urls: list[str] = Field(
+        default_factory=list,
+        max_length=VERIFICATION_EVIDENCE_URL_LIMIT,
+    )
+
 
 class Tome(BaseModel):
     """A compact, single-topic knowledge document stored in the library.
@@ -28,6 +54,10 @@ class Tome(BaseModel):
     source_type: SourceType
     confidence: float = Field(..., ge=0.0, le=1.0)
     research_job_id: UUID | None = None
+    # ``None`` for tomes ingested before this field existed (loaded as-is from
+    # the FS/Mongo backends — see issue #41 migration notes) or for tomes whose
+    # ingest path did not run the verifier at all.
+    verification: VerificationSummary | None = None
 
     embedding: Annotated[NDArray[np.float32] | None, SkipJsonSchema()] = Field(default=None)
 

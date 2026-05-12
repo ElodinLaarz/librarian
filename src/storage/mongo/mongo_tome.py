@@ -8,7 +8,7 @@ from bson.binary import Binary, BinaryVector, BinaryVectorDtype
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.models.enums import SourceType
-from src.models.tome import Tome
+from src.models.tome import Tome, VerificationSummary
 
 
 class MongoTome(BaseModel):
@@ -32,6 +32,10 @@ class MongoTome(BaseModel):
     research_job_id: UUID | None = None
     embedding: Binary | BinaryVector
     created_at: datetime
+    # Defaulted to ``None`` so documents written before issue #41 (no
+    # ``verification`` key) deserialize cleanly. Pydantic will accept either a
+    # dict or a ``VerificationSummary`` instance here.
+    verification: VerificationSummary | None = None
 
     @classmethod
     def from_tome(cls, tome: Tome) -> MongoTome:
@@ -51,6 +55,7 @@ class MongoTome(BaseModel):
                 np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
             ),
             created_at=tome.created_at,
+            verification=tome.verification,
         )
 
     def to_tome(self) -> Tome:
@@ -73,4 +78,5 @@ class MongoTome(BaseModel):
                 dtype=np.float32,
             ),
             created_at=self.created_at,
+            verification=self.verification,
         )

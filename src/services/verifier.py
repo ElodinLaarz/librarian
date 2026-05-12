@@ -9,6 +9,7 @@ import httpx
 
 from src.config import LibrarianConfig
 from src.models.enums import VerificationVerdict
+from src.models.tome import VERIFICATION_EVIDENCE_URL_LIMIT, VerificationSummary
 from src.services.claim_extraction import extract_claims
 from src.services.web_search import WebSearchClient, WebSearchResult
 
@@ -25,6 +26,38 @@ class VerificationResult:
     confidence: float
     claims: list[ClaimResult]
     skipped: bool
+
+    def to_summary(self) -> VerificationSummary:
+        """Aggregate claim verdicts into the persisted summary shape.
+
+        Caps the captured evidence URLs at
+        :data:`~src.models.tome.VERIFICATION_EVIDENCE_URL_LIMIT` to keep
+        ``library_search`` payloads small. We treat ``ClaimResult.evidence``
+        as a URL when it starts with ``http(s)://`` and skip the sentinel
+        values used for verifier failures (``"search_failed"``,
+        ``"no_results"``).
+        """
+        supported = sum(1 for c in self.claims if c.verdict == VerificationVerdict.SUPPORTED)
+        contradicted = sum(1 for c in self.claims if c.verdict == VerificationVerdict.CONTRADICTED)
+        unverifiable = sum(1 for c in self.claims if c.verdict == VerificationVerdict.UNVERIFIABLE)
+        evidence_urls: list[str] = []
+        for claim in self.claims:
+            ev = claim.evidence
+            if not ev.startswith(("http://", "https://")):
+                continue
+            if ev in evidence_urls:
+                continue
+            evidence_urls.append(ev)
+            if len(evidence_urls) >= VERIFICATION_EVIDENCE_URL_LIMIT:
+                break
+        return VerificationSummary(
+            skipped=self.skipped,
+            claim_count=len(self.claims),
+            supported=supported,
+            contradicted=contradicted,
+            unverifiable=unverifiable,
+            evidence_urls=evidence_urls,
+        )
 
 
 class Verifier:
