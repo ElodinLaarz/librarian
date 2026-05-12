@@ -660,10 +660,11 @@ class Ingestor:
 
         Oversized chunks route through ``RecursiveCharacterTextSplitter``,
         which is offloaded via ``asyncio.to_thread`` to keep the event loop
-        responsive (issue #24).
+        responsive (issue #24). ``json.loads`` is also offloaded because
+        parsing very large blobs is CPU-bound (Gemini review on this PR).
         """
         try:
-            parsed = json.loads(blob)
+            parsed = await asyncio.to_thread(json.loads, blob)
         except (json.JSONDecodeError, ValueError):
             parsed = None
 

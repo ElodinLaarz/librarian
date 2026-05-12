@@ -240,3 +240,29 @@ async def test_split_json_oversized_chunk_is_offloaded(
         f"event loop was blocked during _split_structured(json): "
         f"concurrent task finished after {concurrent_wall:.3f}s"
     )
+
+
+async def test_split_json_loads_is_offloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``json.loads`` in ``_split_json`` must be offloaded for large blobs.
+
+    Per Gemini review on PR #82: parsing very large JSON is CPU-bound.
+    """
+    ing = _make_ingestor()
+    import json as _json
+
+    real_loads = _json.loads
+
+    def _slow_loads(s: str | bytes) -> Any:
+        time.sleep(BLOCK_S)
+        return real_loads(s)
+
+    monkeypatch.setattr(ingestor_module.json, "loads", _slow_loads)
+
+    coro_wall, concurrent_wall = await _measure_concurrent(
+        ing._split_structured('{"k": "v"}', "json")
+    )
+    assert coro_wall >= BLOCK_S
+    assert concurrent_wall < MAX_CONCURRENT_WALL_S, (
+        f"event loop was blocked during json.loads in _split_json: "
+        f"concurrent task finished after {concurrent_wall:.3f}s"
+    )
