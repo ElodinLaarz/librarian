@@ -293,9 +293,10 @@ class Ingestor:
         )
         try:
             self._validate(tome)
-        except ValueError:
-            logging.error("Tome validation failed", exc_info=True)
-            return None
+        except ValueError as e:
+            # Re-raise validation errors so they propagate to asyncio.gather
+            # and are included in reject_reasons with full context
+            raise e
         return tome
 
     async def consolidate(self, tomes: list[Tome], skip_verify: bool = False) -> list[Tome]:
@@ -1041,6 +1042,11 @@ class Ingestor:
         """Post-construction checks; raises on failure."""
         if not tome.content.strip():
             raise ValueError("Tome content cannot be empty")
+        if len(tome.content) < self._config.ingest.min_shard_chars:
+            raise ValueError(
+                f"Tome content too short ({len(tome.content)} < "
+                f"{self._config.ingest.min_shard_chars} characters)"
+            )
         if len(tome.title) > self._config.ingest.title_length:
             raise ValueError(
                 f"Tome title too long ({len(tome.title)} > {self._config.ingest.title_length})"

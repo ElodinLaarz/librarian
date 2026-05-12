@@ -148,23 +148,30 @@ class _PinnedDNSTransport(httpx.AsyncHTTPTransport):
         self._hostname = hostname
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        """Override to replace hostname with pinned IP in the request URL."""
-        # Replace the host in the request URL with our pinned IP.
-        # This ensures the socket connection uses the validated IP, not DNS.
-        try:
-            # Create a new URL with the pinned IP as the host.
-            pinned_url = request.url.copy_with(host=self._pinned_ip)
-            # httpx.Request is immutable, so create a new one with the modified URL.
-            request = httpx.Request(
-                method=request.method,
-                url=pinned_url,
-                content=request.content,
-                headers=request.headers,
-                extensions=request.extensions,
-            )
-        except Exception:
-            # If anything goes wrong, fall back to the original request.
-            pass
+        """Override to replace hostname with pinned IP in the request URL.
+
+        Sets the Host header and SNI hostname extension to preserve HTTPS
+        certificate validation and virtual hosting support.
+        """
+        # Preserve the original hostname for HTTPS/SNI validation.
+        headers = request.headers.copy()
+        headers["host"] = self._hostname
+
+        # Set SNI hostname in extensions for TLS handshake.
+        extensions = dict(request.extensions)
+        extensions["sni_hostname"] = self._hostname
+
+        # Create a new URL with the pinned IP as the host.
+        pinned_url = request.url.copy_with(host=self._pinned_ip)
+
+        # httpx.Request is immutable, so create a new one with the modified URL.
+        request = httpx.Request(
+            method=request.method,
+            url=pinned_url,
+            content=request.content,
+            headers=headers,
+            extensions=extensions,
+        )
 
         return await super().handle_async_request(request)
 

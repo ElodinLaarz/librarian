@@ -86,3 +86,30 @@ async def test_reshard_delete_failure_reports_partial() -> None:
     # Check that replacements ARE in the repo
     for t in output.tomes:
         assert t.id in repo._tomes
+
+
+@pytest.mark.asyncio
+async def test_minimum_content_size() -> None:
+    """Enforce minimum 100-character tome size to prevent fragments.
+
+    Validates issue #35: minimum tome content length prevents short pollution.
+    Aligns with README spec of 100–400 words per tome.
+    """
+    ingestor, repo, _ = make_stub_ingestor()
+
+    # Test 1: 2-char content should be REJECTED
+    output_short = await ingestor.ingest("hi")
+    assert output_short.status == IngestStatus.REJECTED
+    assert "minimum" in output_short.reject_reason.lower()
+
+    # Test 2: 100-char content (at floor) should be STORED
+    content_valid = "a" * 100
+    output_valid = await ingestor.ingest(content_valid)
+    assert output_valid.status == IngestStatus.STORED
+    assert len(output_valid.tomes) > 0
+
+    # Test 3: 99-char content (just below floor) should be REJECTED
+    content_below = "b" * 99
+    output_below = await ingestor.ingest(content_below)
+    assert output_below.status == IngestStatus.REJECTED
+    assert "minimum" in output_below.reject_reason.lower()
