@@ -195,6 +195,7 @@ class MongoTomeRepository(TomeRepository):
         category: str | None,
         min_confidence: float,
         research_job_id: UUID | None,
+        thread_id: UUID | None,
     ) -> dict[str, Any]:
         """Translate the public filter args into a Mongo ``find`` predicate.
 
@@ -208,6 +209,8 @@ class MongoTomeRepository(TomeRepository):
             query["confidence"] = {"$gte": min_confidence}
         if research_job_id is not None:
             query["research_job_id"] = research_job_id
+        if thread_id is not None:
+            query["thread_id"] = thread_id
         return query
 
     async def list_all(
@@ -218,14 +221,27 @@ class MongoTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> list[Tome]:
-        """Return a filtered + paginated page of Tomes, newest first."""
+        """Return a filtered + paginated page of Tomes, newest first.
+
+        When thread_id is set, return tomes in that thread sorted by thread_position
+        ascending (conversational order). Otherwise, sort by created_at descending.
+        """
         query = self._build_list_filter(
             category=category,
             min_confidence=min_confidence,
             research_job_id=research_job_id,
+            thread_id=thread_id,
         )
-        cursor = self._collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
+        # If thread_id is set, sort by thread_position ascending; otherwise by created_at descending
+        if thread_id is not None:
+            sort_key = "thread_position"
+            sort_order = 1
+        else:
+            sort_key = "created_at"
+            sort_order = -1
+        cursor = self._collection.find(query).sort(sort_key, sort_order).skip(offset).limit(limit)
         results = []
         try:
             async for doc in cursor:
@@ -240,12 +256,14 @@ class MongoTomeRepository(TomeRepository):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> int:
         """Count Tomes matching the same filter predicates as :meth:`list_all`."""
         query = self._build_list_filter(
             category=category,
             min_confidence=min_confidence,
             research_job_id=research_job_id,
+            thread_id=thread_id,
         )
         try:
             return int(await self._collection.count_documents(query))

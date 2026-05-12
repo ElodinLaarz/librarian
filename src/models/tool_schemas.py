@@ -70,6 +70,10 @@ class IngestInput(BaseModel):
     category: str | None = None
     tags: list[str] | None = None
     source_url: str | None = None
+    thread_id: str | None = Field(
+        default=None,
+        description="Thread UUID (hex string) for grouping related tomes in conversation.",
+    )
     force_format: Literal["text", "code", "python", "yaml", "json", "markdown"] | None = Field(
         default=None,
         description=(
@@ -213,10 +217,10 @@ class DeleteOutput(BaseModel):
 class ListInput(BaseModel):
     """Filters + pagination for ``library_list``.
 
-    ``research_job_id`` is a string for MCP-client convenience (clients can
-    pass the value they got back from ``library_research`` without round-
-    tripping through UUID parsing); invalid values produce a clear error
-    at the tool boundary.
+    ``research_job_id`` and ``thread_id`` are strings for MCP-client convenience
+    (clients can pass the value they got back from ``library_research`` or
+    ``library_ingest`` without round-tripping through UUID parsing); invalid
+    values produce a clear error at the tool boundary.
     """
 
     category: str | None = None
@@ -224,6 +228,10 @@ class ListInput(BaseModel):
     research_job_id: str | None = Field(
         default=None,
         description="Filter by research job. Must be a UUID hex string.",
+    )
+    thread_id: str | None = Field(
+        default=None,
+        description="Filter by thread. Must be a UUID hex string.",
     )
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)

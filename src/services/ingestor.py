@@ -91,6 +91,7 @@ class IngestCallOptions:
     source_type: SourceType = SourceType.AGENT_INPUT
     source_url: str | None = None
     research_job_id: UUID | None = None
+    thread_id: UUID | None = None
     category_hint: str | None = None
     tags_hint: list[str] | None = None
     # ``extra_tags`` are appended to the tome's tag list *after* classification,
@@ -276,6 +277,14 @@ class Ingestor:
         # keep tag UIs and indexes bounded.
         tags = _cap_tags([*tags, *(opts.extra_tags or [])])
 
+        # Compute thread_position: if thread_id is set, query repo for max position
+        thread_position: int | None = None
+        if opts.thread_id is not None:
+            existing = await self._tome_repo.list_all(thread_id=opts.thread_id)
+            positions = [t.thread_position for t in existing if t.thread_position is not None]
+            max_position = max(positions, default=-1)
+            thread_position = max_position + 1
+
         tome = Tome(
             id=uuid.uuid4(),
             content=text,
@@ -288,6 +297,8 @@ class Ingestor:
             source_type=opts.source_type,
             confidence=confidence,
             research_job_id=opts.research_job_id,
+            thread_id=opts.thread_id,
+            thread_position=thread_position,
             verification=verification_summary,
             created_at=datetime.now(UTC),
         )

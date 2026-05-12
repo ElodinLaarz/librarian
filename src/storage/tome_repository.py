@@ -86,13 +86,15 @@ class TomeRepository(ABC):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> list[Tome]:
         """Return a page of Tomes matching the given filters.
 
         Results are sorted by ``created_at`` descending (newest first) for
-        consistent pagination across calls. Filters compose with AND.
-        Embeddings should be included so the caller can decide whether to
-        strip them — keeps this method usable from non-MCP code paths.
+        consistent pagination across calls, unless ``thread_id`` is set in which
+        case results are sorted by ``thread_position`` ascending (conversational order).
+        Filters compose with AND. Embeddings should be included so the caller can
+        decide whether to strip them — keeps this method usable from non-MCP code paths.
         """
         ...
 
@@ -103,6 +105,7 @@ class TomeRepository(ABC):
         category: str | None = None,
         min_confidence: float = 0.0,
         research_job_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> int:
         """Return the total number of Tomes matching the given filters.
 
