@@ -421,23 +421,28 @@ class MongoTomeRepository(TomeRepository):
         if recency_weight <= 0.0:
             combined = [(tome_by_id[tid], score) for tid, score in rrf_scores.items()]
         else:
+            # Normalize RRF into [0, 1] so recency_weight has consistent meaning.
+            # Raw RRF sums top out around 1/(k+1) ≈ 0.016 with RRF_K=60, while
+            # recency is already in [0, 1], causing recency to dominate at any weight.
+            max_rrf = max(rrf_scores.values()) if rrf_scores else 1.0
             now = datetime.now(UTC)
             combined = []
             for tid, rrf in rrf_scores.items():
                 tome = tome_by_id[tid]
+                norm_rrf = rrf / max_rrf if max_rrf > 0 else 0.0
                 created = tome.created_at
-                if created is not None:
+                if created is None:
+                    recency = 0.0
+                else:
                     if created.tzinfo is None:
                         created = created.replace(tzinfo=UTC)
                     age_days = max(0.0, (now - created).total_seconds() / 86400.0)
-                else:
-                    age_days = 0.0
-                recency = (
-                    2.0 ** (-age_days / recency_half_life_days)
-                    if recency_half_life_days > 0
-                    else 0.0
-                )
-                score = rrf * (1.0 - recency_weight) + recency_weight * recency
+                    recency = (
+                        2.0 ** (-age_days / recency_half_life_days)
+                        if recency_half_life_days > 0
+                        else 0.0
+                    )
+                score = norm_rrf * (1.0 - recency_weight) + recency_weight * recency
                 combined.append((tome, score))
 
         combined.sort(key=lambda x: x[1], reverse=True)

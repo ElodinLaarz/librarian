@@ -326,17 +326,17 @@ class FsTomeRepository(TomeRepository):
             reranked: list[tuple[Tome, float]] = []
             for tome, cosine in results:
                 created = tome.created_at
-                if created is not None:
+                if created is None:
+                    recency = 0.0
+                else:
                     if created.tzinfo is None:
                         created = created.replace(tzinfo=UTC)
                     age_days = max(0.0, (now - created).total_seconds() / 86400.0)
-                else:
-                    age_days = 0.0
-                recency = (
-                    2.0 ** (-age_days / recency_half_life_days)
-                    if recency_half_life_days > 0
-                    else 0.0
-                )
+                    recency = (
+                        2.0 ** (-age_days / recency_half_life_days)
+                        if recency_half_life_days > 0
+                        else 0.0
+                    )
                 blended = cosine * (1.0 - recency_weight) + recency_weight * recency
                 reranked.append((tome, blended))
             results = reranked
