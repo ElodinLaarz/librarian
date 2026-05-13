@@ -294,6 +294,7 @@ class FsTomeRepository(TomeRepository):
         When include_superseded is False (default), filters out tomes marked as superseded.
         """
         recency_weight = max(0.0, min(1.0, recency_weight))
+        recency_half_life_days = max(0.0, recency_half_life_days)
         query_vec: NDArray[np.float64] | None = None
         try:
             raw = await self._embedding_service.embed(query)

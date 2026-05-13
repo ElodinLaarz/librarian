@@ -125,7 +125,9 @@ class PerfTomeRepository(TomeRepository):
         return [
             (tome, 0.0)
             for tome in self.tomes
-            if tome.confidence >= min_confidence and (category is None or tome.category == category)
+            if tome.confidence >= min_confidence
+            and (category is None or tome.category == category)
+            and (include_superseded or tome.superseded_by is None)
         ][:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:

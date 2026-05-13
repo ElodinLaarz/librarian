@@ -285,18 +285,31 @@ class MongoTomeRepository(TomeRepository):
         When recency_weight > 0, blends RRF scores with exponential-decay recency scores.
         """
         recency_weight = max(0.0, min(1.0, recency_weight))
+        recency_half_life_days = max(0.0, recency_half_life_days)
         query_embedding = await self._embedding_service.embed(query)
-        query_vector = Binary.from_vector(
-            np.array(query_embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
+        query_array = np.asarray(query_embedding, dtype=np.float32)
+        # Atlas $vectorSearch raises OperationFailure for zero query vectors.
+        # Fall back to lexical-only when the embedding is all zeros.
+        has_valid_vector = query_array.size > 0 and bool(np.any(query_array))
+        query_vector = (
+            Binary.from_vector(query_array.tolist(), BinaryVectorDtype.FLOAT32)
+            if has_valid_vector
+            else None
         )
 
         try:
-            lexical_results, vector_results = await asyncio.gather(
-                self._lexical_search(query, top_k, min_confidence, category, include_superseded),
-                self._vector_search(
-                    query_vector, top_k, min_confidence, category, include_superseded
-                ),
-            )
+            if query_vector is not None:
+                lexical_results, vector_results = await asyncio.gather(
+                    self._lexical_search(query, top_k, min_confidence, category, include_superseded),
+                    self._vector_search(
+                        query_vector, top_k, min_confidence, category, include_superseded
+                    ),
+                )
+            else:
+                lexical_results = await self._lexical_search(
+                    query, top_k, min_confidence, category, include_superseded
+                )
+                vector_results = []
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "search") from exc
 
