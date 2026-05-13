@@ -300,7 +300,9 @@ class MongoTomeRepository(TomeRepository):
         try:
             if query_vector is not None:
                 lexical_results, vector_results = await asyncio.gather(
-                    self._lexical_search(query, top_k, min_confidence, category, include_superseded),
+                    self._lexical_search(
+                        query, top_k, min_confidence, category, include_superseded
+                    ),
                     self._vector_search(
                         query_vector, top_k, min_confidence, category, include_superseded
                     ),
