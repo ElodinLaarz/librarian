@@ -128,7 +128,11 @@ class StubTomeRepository(TomeRepository):
         min_confidence: float = 0.5,
         category: str | None = None,
         include_superseded: bool = False,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
+        # recency_weight intentionally ignored: stub returns uniform scores for
+        # unit tests that verify correctness, not ranking order.
         results = [
             (t, 1.0)
             for t in self._tomes.values()
@@ -233,16 +237,23 @@ class StubTomeRepository(TomeRepository):
 
 
 class StubEmbeddingService(EmbeddingService):
-    """Returns a zero vector of the configured dimensionality."""
+    """Returns a fixed vector of the configured dimensionality (zeros by default)."""
 
-    def __init__(self, dimensions: int = 768) -> None:
+    def __init__(
+        self,
+        dimensions: int = 768,
+        vector: NDArray[np.float32] | None = None,
+    ) -> None:
         super().__init__(EmbeddingSettings(dimensions=dimensions))
+        self._vector: NDArray[np.float32] = (
+            vector if vector is not None else np.zeros(dimensions, dtype=np.float32)
+        )
 
     async def initialize(self) -> None:
         pass
 
     async def embed(self, text: str) -> NDArray[np.float32]:
-        return np.zeros(self._settings.dimensions, dtype=np.float32)
+        return self._vector
 
 
 class StubVerifier(Verifier):

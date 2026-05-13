@@ -61,7 +61,10 @@ async def mongo_repo() -> AsyncIterator[MongoTomeRepository]:
         tls_cert_path="/dev/null",
         database="test_library_recency",
     )
-    embedding_service = StubEmbeddingService()
+    # Use a non-zero vector: Atlas $vectorSearch cannot compute cosine similarity
+    # against a zero query vector and raises OperationFailure.  This matches the
+    # embeddings used by the tomes inserted in the test ([0.1] * 768).
+    embedding_service = StubEmbeddingService(vector=np.full(768, 0.1, dtype=np.float32))
     repo = MongoTomeRepository(settings, embedding_service)
 
     await repo._collection.delete_many({})

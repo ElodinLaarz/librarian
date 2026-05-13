@@ -117,12 +117,17 @@ class PerfTomeRepository(TomeRepository):
         top_k: int = 5,
         min_confidence: float = 0.5,
         category: str | None = None,
+        include_superseded: bool = False,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
         del query
         return [
             (tome, 0.0)
             for tome in self.tomes
-            if tome.confidence >= min_confidence and (category is None or tome.category == category)
+            if tome.confidence >= min_confidence
+            and (category is None or tome.category == category)
+            and (include_superseded or tome.superseded_by is None)
         ][:top_k]
 
     async def find_near_duplicates(self, tome: Tome) -> list[Tome]:

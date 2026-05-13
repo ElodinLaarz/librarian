@@ -46,10 +46,13 @@ class TomeRepository(ABC):
         min_confidence: float = 0.5,
         category: str | None = None,
         include_superseded: bool = False,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
         """Perform search. Returns (Tome, score) pairs sorted by relevance.
 
         When include_superseded is False (default), filters out tomes marked as superseded.
+        When recency_weight > 0, blends relevance scores with exponential-decay recency.
         """
         ...
 

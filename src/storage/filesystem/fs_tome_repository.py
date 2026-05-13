@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -282,6 +283,8 @@ class FsTomeRepository(TomeRepository):
         min_confidence: float = 0.5,
         category: str | None = None,
         include_superseded: bool = False,
+        recency_weight: float = 0.0,
+        recency_half_life_days: float = 90.0,
     ) -> list[tuple[Tome, float]]:
         """Brute-force cosine-similarity scan over all stored Tomes.
 
@@ -290,6 +293,8 @@ class FsTomeRepository(TomeRepository):
         Tomes without an embedding are still included but scored 0.0.
         When include_superseded is False (default), filters out tomes marked as superseded.
         """
+        recency_weight = max(0.0, min(1.0, recency_weight))
+        recency_half_life_days = max(0.0, recency_half_life_days)
         query_vec: NDArray[np.float64] | None = None
         try:
             raw = await self._embedding_service.embed(query)
@@ -316,6 +321,26 @@ class FsTomeRepository(TomeRepository):
                 score = _cosine_similarity(query_vec, np.array(tome.embedding, dtype=np.float64))
 
             results.append((tome, score))
+
+        if recency_weight > 0.0:
+            now = datetime.now(UTC)
+            reranked: list[tuple[Tome, float]] = []
+            for tome, cosine in results:
+                created = tome.created_at
+                if created is None:
+                    recency = 0.0
+                else:
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=UTC)
+                    age_days = max(0.0, (now - created).total_seconds() / 86400.0)
+                    recency = (
+                        2.0 ** (-age_days / recency_half_life_days)
+                        if recency_half_life_days > 0
+                        else 0.0
+                    )
+                blended = cosine * (1.0 - recency_weight) + recency_weight * recency
+                reranked.append((tome, blended))
+            results = reranked
 
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
