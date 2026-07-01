@@ -5,6 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from pydantic import ValidationError
 from pymongo.errors import (
     ConnectionFailure,
     DuplicateKeyError,
@@ -80,7 +81,12 @@ class MongoResearchJobRepository(ResearchJobRepository):
             raise StorageError(f"Mongo find_one failed for job {job_id}") from exc
         if not raw:
             return None
-        return MongoResearchJob.model_validate(raw).to_domain()
+        try:
+            return MongoResearchJob.model_validate(raw).to_domain()
+        except ValidationError as exc:
+            # Corrupt/legacy job documents are a storage problem; services
+            # must see StorageError, never pydantic exception types.
+            raise StorageError(f"Corrupt research-job document (_id={raw.get('_id')!r})") from exc
 
     def close(self) -> None:
         """Close the MongoDB client if this repo owns it (see MongoTomeRepository.close)."""
