@@ -18,7 +18,7 @@ from src.storage.errors import (
     BackendUnavailableError,
     StorageError,
 )
-from src.storage.filesystem.utils import resolve_base_path
+from src.storage.filesystem.utils import atomic_write_text, resolve_base_path
 from src.storage.tome_repository import DuplicateScanResult, TomeRepository
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ class FsTomeRepository(TomeRepository):
         """
         path = self._get_path(tome.id)
         try:
-            await asyncio.to_thread(path.write_text, tome.model_dump_json(indent=2))
+            await asyncio.to_thread(atomic_write_text, path, tome.model_dump_json(indent=2))
         except OSError as exc:
             raise _wrap_os(exc, "insert", path) from exc
         return tome.id
@@ -157,7 +157,7 @@ class FsTomeRepository(TomeRepository):
         updated = tome.model_copy(update=update_dict)
         try:
             path = self._get_path(tome_id)
-            await asyncio.to_thread(path.write_text, updated.model_dump_json(indent=2))
+            await asyncio.to_thread(atomic_write_text, path, updated.model_dump_json(indent=2))
         except OSError as exc:
             raise _wrap_os(exc, "update", path) from exc
         return updated
@@ -198,7 +198,7 @@ class FsTomeRepository(TomeRepository):
             # Mark as superseded
             tome.superseded_by = by_tome_id
             # Write back to file
-            await asyncio.to_thread(path.write_text, tome.model_dump_json())
+            await asyncio.to_thread(atomic_write_text, path, tome.model_dump_json(indent=2))
             return True
         except OSError as exc:
             raise _wrap_os(exc, "mark_superseded", path) from exc

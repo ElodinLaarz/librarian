@@ -12,7 +12,7 @@ from src.storage.errors import (
     NotFoundError,
     StorageError,
 )
-from src.storage.filesystem.utils import resolve_base_path
+from src.storage.filesystem.utils import atomic_write_text, resolve_base_path
 from src.storage.research_job_repository import ResearchJobRepository
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class FsResearchJobRepository(ResearchJobRepository):
         """Create a new job."""
         path = self._get_path(job.id)
         try:
-            await asyncio.to_thread(path.write_text, job.model_dump_json(indent=2))
+            await asyncio.to_thread(atomic_write_text, path, job.model_dump_json(indent=2))
         except (FileNotFoundError, PermissionError) as exc:
             raise BackendUnavailableError(
                 f"Filesystem storage root unreachable or not writable: {self._jobs_dir}"
@@ -62,7 +62,7 @@ class FsResearchJobRepository(ResearchJobRepository):
         if not exists:
             raise NotFoundError(f"Job {job.id} does not exist")
         try:
-            await asyncio.to_thread(path.write_text, job.model_dump_json(indent=2))
+            await asyncio.to_thread(atomic_write_text, path, job.model_dump_json(indent=2))
         except (FileNotFoundError, PermissionError) as exc:
             raise BackendUnavailableError(
                 f"Filesystem storage root unreachable or not writable: {self._jobs_dir}"
