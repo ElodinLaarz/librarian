@@ -46,6 +46,11 @@ jobs:
       - uses: astral-sh/setup-uv@v8.0.0
       - run: uv python install 3.11
       - run: uv sync --extra dev --extra sentence-transformers --index https://pypi.org/simple
+      - name: Cache Hugging Face model (all-MiniLM-L6-v2)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2
       - run: uv run pytest
         env:
           LIBRARIAN_DATABASE_URI: mongodb://localhost:27017
