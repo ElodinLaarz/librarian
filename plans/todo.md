@@ -17,12 +17,12 @@ This document breaks down the design document into a comprehensive, step-by-step
 
 - [x] **Docker Compose Setup:** Create a `docker-compose.yml` file with a `mongodb/mongodb-atlas-local` service to support vector search locally (refer to Appendix A).
 - [x] **Database Connection:** Create a `db.py` module. Write an asynchronous function using `motor` to connect to MongoDB based on the URI in the settings and return the database instance.
-- [ ] **Index Creation Script:** Write a standalone Python script (`scripts/setup_db.py`) that connects to MongoDB and creates the necessary collections (`tomes`, `research_jobs`).
-- [ ] **Apply Indexes:** In the setup script, add logic to create the indexes specified in section 4.2:
-  - Vector Index on `embedding` (using Atlas Search index definition).
-  - Text Index on `title + content + tags`.
-  - Compound Index on `{ category: 1, created_at: -1 }`.
-  - Standard Index on `research_job` in the `tomes` collection.
+- [x] **Index Creation Script:** ~~Write a standalone Python script (`scripts/setup_db.py`)~~ — implemented differently: `MongoTomeRepository.ensure_indexes()` creates the collection and every index automatically at server startup (invoked from the lifespan) and waits for the Atlas search indexes to become queryable. No standalone script exists or is needed.
+- [x] **Apply Indexes:** Done via `ensure_indexes()`, with two deliberate deviations from section 4.2:
+  - Vector Index on `embedding` (Atlas Search index `vectors`, cosine, dims from the configured embedding model, with a startup dimension-mismatch check). ✔
+  - ~~Text Index on `title + content + tags`~~ — replaced by a dynamic-mapping Atlas lexical Search index (`default`) covering title/content/summary/tags.
+  - ~~Compound Index on `{ category: 1, created_at: -1 }`~~ — separate standard indexes on `created_at` (desc) and `category` instead.
+  - Standard Index on `research_job_id` in the `tomes` collection. ✔
 
 ### P1.3: Embedding Service
 
@@ -97,10 +97,16 @@ ______________________________________________________________________
 - [x] **Ingest Chunking Tests:** Write unit tests verifying that long text is correctly split into \<400 word chunks without breaking sentences.
 - [x] **Search Integration Tests:** Write `pytest-asyncio` tests that insert known `Tome` records into a local test database and verify that `library.search` returns the correct semantic matches.
 
-### P4.2: Migration Utility
+### P4.2: Migration Utility (still open)
 
 - [ ] **CLI Setup:** Create a command-line script (e.g., using the `argparse` or `typer` library) with a command like `python -m scripts.migrate_index`.
 - [ ] **Migration Logic:** Implement logic that iterates over all documents in the `tomes` collection, re-calculates their embeddings using the currently configured `EmbeddingService`, and updates the documents. This is necessary for when a user changes the embedding model.
+
+> Status: not built. Startup now fails fast when the existing Atlas vector
+> index's dimensions disagree with the configured model, and the README
+> documents the interim migration paths (drop + re-ingest, or pin the old
+> model via config). This utility remains the missing piece for in-place
+> migration.
 
 ### P4.3: Final Documentation & Deployment
 
@@ -108,5 +114,5 @@ ______________________________________________________________________
 - [x] **README:** Write a comprehensive `README.md` containing:
   - What The Librarian is.
   - Quick-start instructions (using Docker Compose).
-  - Examples of how an agent can call the 3 tools.
+  - The full tool surface (grew from the 3 planned tools to 8: search, ingest, research, get, update, delete, tidy, list).
   - Configuration environment variables.

@@ -1,6 +1,16 @@
 # Comparison and GitHub Issues Proposal
 
-This document compares the initial independent `gap_analysis.md` with the provided `ARCHITECTURE_AUDIT.md` and synthesizes the findings into actionable GitHub Issues.
+> **Historical document (July 2026 note):** this compares two point-in-time
+> audits and most findings below have since been fixed (skip-guarded Mongo
+> tests, consolidated dev dependencies, the StorageError taxonomy, resharding
+> delete failures surfacing as `ReshardError`/partial status, `gemma2:2b`
+> defaults, graceful shutdown, the shared Motor client, recency weighting,
+> thread_id, update/delete/supersede tools, payload shaping). `gap_analysis.md`
+> was verified almost entirely stale against the current code and deleted.
+> Still open from this list: replacing the hand-rolled `.env` parser in
+> `src/config.py` (Issue 4.1) and the `scripts.migrate_index` utility.
+
+This document compares the initial independent `gap_analysis.md` (since deleted) with the provided `ARCHITECTURE_AUDIT.md` and synthesizes the findings into actionable GitHub Issues.
 
 ## 1. Comparison of Findings
 

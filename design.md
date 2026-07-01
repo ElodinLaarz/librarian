@@ -286,7 +286,7 @@ To avoid re-embedding identical or near-identical texts, The Librarian maintains
 
 ### 6.2 Dimensionality & Index Configuration
 
-The MongoDB vector index must be configured to match the chosen model's output dimensions. The Librarian checks this at startup and will refuse to start if there is a mismatch. A migration utility (`librarian migrate-index`) is provided to re-embed the full Tomes collection when switching models.
+The MongoDB vector index must be configured to match the chosen model's output dimensions. The Librarian checks this at startup and will refuse to start if there is a mismatch. The planned migration utility (`librarian migrate-index`) has **not** been built (see `plans/todo.md` P4.2); to switch models today, either drop the collection and re-ingest, or pin the previous model via config (see the README's "Breaking Change: Embedding Model" section).
 
 ______________________________________________________________________
 
@@ -381,7 +381,7 @@ ______________________________________________________________________
 
 - Integration tests for all three MCP tools using a local MongoDB test instance.
 - Load testing: measure latency under 1,000 and 10,000 Tomes in the collection.
-- Embedding model swap test: verify `migrate-index` utility preserves all Tomes correctly.
+- Embedding model swap test: verify the `migrate-index` utility preserves all Tomes correctly (blocked on `plans/todo.md` P4.2 — the utility does not exist yet).
 - Write comprehensive README with Docker Compose setup for zero-config local deployment.
 - Publish as an installable MCP server to the MCP registry.
 

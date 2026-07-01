@@ -1,25 +1,42 @@
 # librarian
 
-An MCP server that gives AI agents a persistent, searchable knowledge base. The Librarian stores verified, bite-sized knowledge documents called **Tomes** — single-topic documents with dense semantic embeddings — and exposes them via three MCP tools.
+An MCP server that gives AI agents a persistent, searchable knowledge base. The Librarian stores verified, bite-sized knowledge documents called **Tomes** — single-topic documents with dense semantic embeddings — and exposes them via eight MCP tools.
 
 ## Tools
 
-| Tool | Status | Description |
-| --- | --- | --- |
-| `library.search` | Implemented | Hybrid vector + lexical search over stored tomes, with optional category and confidence filtering |
-| `library.ingest` | Implemented | Splits content into shards, generates embeddings, deduplicates, and stores tomes; optional `skip_verify`, `category`, `tags`, `source_url` |
-| `library.research` | Implemented | Plans queries (Ollama optional), searches the web, fetches pages, ingests findings; `async: true` returns a `job_id` for polling |
-| `library.tidy` | Implemented | Scan the library for near-duplicate tomes and consolidate them; tunable `limit`, `threshold`, and `skip_verify` |
-| `library.delete` | Implemented | Permanently remove a tome by its UUID (hex or hyphenated) `tome_id`; returns `deleted=False` with `error="invalid_id"` or `"not_found"` instead of raising |
-| `library.list` | Implemented | Browse / paginate stored tomes without a query; supports `limit`, `offset`, `category`, `min_confidence`, and `research_job_id` filters. Returns `total` and `has_more` for paging. |
+Tool names use underscores (`library_search`, not `library.search`) — these are the exact names an MCP client sees.
+
+| Tool | Description |
+| --- | --- |
+| `library_search` | Search stored tomes: hybrid vector + lexical (RRF) on the MongoDB backend, cosine similarity on the filesystem backend. Params: `query`, `top_k`, `category`, `min_confidence`, `include_superseded`, plus payload shaping (`include_content`, `content_max_chars`, `snippet_chars`, `include_summary`) |
+| `library_ingest` | Splits content into shards, verifies claims (can reject low-confidence content), generates embeddings, deduplicates, and stores tomes; params: `skip_verify`, `category`, `tags`, `source_url`, `supersedes_tome_ids`, `force_format`. Returns status `stored` / `partial` / `rejected` with a `reject_reason` |
+| `library_get` | Fetch a single tome by UUID (hex or hyphenated); returns `found` / `not_found` / `invalid_tome_id` in-band |
+| `library_update` | Patch mutable fields (`content`, `category`, `tags`, `source_url`, `confidence`) of an existing tome. Note: updating `content` does **not** regenerate the embedding — semantic search keeps ranking on the old vector until the tome is re-ingested |
+| `library_research` | Plans queries (Ollama optional), searches the web, fetches pages, ingests findings; `async: true` returns a `job_id` immediately — pass it back as `job_id` to poll status/results |
+| `library_tidy` | Scan the library for near-duplicate tomes and consolidate them; tunable `limit`, `threshold`, and `skip_verify` |
+| `library_delete` | Permanently remove a tome by its UUID (hex or hyphenated) `tome_id`; returns `deleted=False` with `error="invalid_id"` or `"not_found"` instead of raising |
+| `library_list` | Browse / paginate stored tomes without a query; supports `limit`, `offset`, `category`, `min_confidence`, `research_job_id`, and `include_summary`. Returns `total` and `has_more` for paging. |
 
 ### Usage pattern
 
-Call `library.search` first. If results are sparse or low-confidence, call `library.research` to populate the library on that topic. Call `library.ingest` whenever the agent learns something worth persisting. Use `library.list` to enumerate or audit the library — e.g. after a `library.research` run, pass the returned `job_id` as `research_job_id` to inspect everything that job ingested.
+Call `library_search` first. If results are sparse or low-confidence, call `library_research` to populate the library on that topic. Call `library_ingest` whenever the agent learns something worth persisting. Use `library_list` to enumerate or audit the library — e.g. after a `library_research` run, pass the returned `job_id` as `research_job_id` to inspect everything that job ingested — and `library_get` to pull a search hit's full content by `tome_id`.
 
 ## Data Model
 
 The core unit is a **Tome**: a compact, single-topic document (100–400 words) with a title, content, one-to-two sentence summary, category, tags, source provenance, a `confidence` score (0.0–1.0), and a dense embedding vector. Tomes are intentionally small to keep retrieval precise.
+
+## Storage backends
+
+The backend is selected by `database.uri` (or `LIBRARIAN_DATABASE_URI`):
+
+- A URI starting with `mongodb` selects **MongoDB** (Atlas-capable, e.g. the `mongodb/mongodb-atlas-local` container from `docker-compose.yml`). All indexes — standard secondary indexes **and** the Atlas Vector Search + lexical search indexes — are created automatically at startup and the server waits for them to become queryable; there is no manual index setup. If an existing vector index was built for a different embedding dimensionality than the configured model, startup fails with a migration hint instead of letting search silently degrade.
+- Any other value selects the **filesystem** backend: tomes are stored as JSON files and search is a brute-force cosine scan (no lexical component). `file:///abs/path` and plain paths are used as-is; an empty string or `localhost` maps to `~/.librarian_mcp`. Beware: a typo'd Mongo URI (e.g. `mongo://…`) therefore silently selects the filesystem backend — the active backend is logged at startup, so check the log line `Storage backend: …` if tomes seem to vanish.
+
+See [docs/e2e.md](docs/e2e.md) for the repeatable end-to-end runbook (Docker path, no-Docker filesystem path, and the live e2e test).
+
+## Embedding providers
+
+`embedding.provider` accepts `sentence-transformers`, `ollama`, `dummy`, or `auto` (default). `auto` tries sentence-transformers, then Ollama — and **fails at startup** if neither is available, with an error explaining the fixes. It never silently falls back to `dummy` (zero vectors that make search meaningless); pass `provider: dummy` explicitly if you want that for plumbing tests.
 
 ## Verification
 
@@ -29,7 +46,7 @@ Before storing, a Verifier cross-references key factual claims against web searc
 - **confidence 0.3–0.7** — stored with a low-confidence flag
 - **confidence < 0.3** — rejected
 
-Set `skip_verify: true` on ingest to bypass (useful for notes or fictional content). With no search API key, verification is skipped and a synthetic confidence of `0.6` is assigned. To enable live checks and `library.research`, set `LIBRARIAN_WEB_SEARCH_PROVIDER` (`brave` / `serper` / `tavily`) and an API key (`LIBRARIAN_WEB_SEARCH_API_KEY`, or `BRAVE_API_KEY` / `SERPER_API_KEY` / `TAVILY_API_KEY`). Claim extraction uses Ollama’s OpenAI-compatible chat JSON when reachable (`LIBRARIAN_VERIFICATION__OLLAMA_BASE_URL`, `LIBRARIAN_VERIFICATION__CLAIM_MODEL`); otherwise text is split into sentence-like claims.
+Set `skip_verify: true` on ingest to bypass (useful for notes or fictional content). With no search API key, verification is skipped and a synthetic confidence of `0.6` is assigned. To enable live checks and `library_research`, set `LIBRARIAN_WEB_SEARCH_PROVIDER` (`brave` / `serper` / `tavily`) and an API key (`LIBRARIAN_WEB_SEARCH_API_KEY`, or `BRAVE_API_KEY` / `SERPER_API_KEY` / `TAVILY_API_KEY`). Claim extraction uses Ollama’s OpenAI-compatible chat JSON when reachable (`LIBRARIAN_VERIFICATION_OLLAMA_BASE_URL`, `LIBRARIAN_VERIFICATION_CLAIM_MODEL`); otherwise text is split into sentence-like claims.
 
 ## LLM Fact Extraction (opt-in, changes content semantics)
 
@@ -56,8 +73,8 @@ and have a model you trust for paraphrase.
 | Component | Technology |
 | --- | --- |
 | MCP Framework | FastMCP (Python) |
-| Database | MongoDB 7.x via `motor` (async) |
-| Vector Search | Atlas Vector Search (cosine similarity) |
+| Database | MongoDB 7.x via `motor` (async), or filesystem JSON fallback (see Storage backends) |
+| Vector Search | Atlas Vector Search (cosine similarity); brute-force cosine on the filesystem backend |
 | Embedding (default) | `nomic-embed-text` (768 dims) via Ollama |
 | Embedding (alt) | `sentence-transformers/all-MiniLM-L6-v2` (384 dims) |
 | Sharding (default) | LangChain `RecursiveCharacterTextSplitter` (deterministic split) |
@@ -69,7 +86,7 @@ and have a model you trust for paraphrase.
 
 ## Breaking Change: Embedding Model (May 2026)
 
-The default embedding model has moved from `all-MiniLM-L6-v2` (384 dimensions) to `nomic-embed-text` (768 dimensions). This provides better retrieval quality but **will cause dimension mismatch errors** if you have an existing MongoDB Atlas Vector Search index.
+The default embedding model has moved from `all-MiniLM-L6-v2` (384 dimensions) to `nomic-embed-text` (768 dimensions). This provides better retrieval quality, but if you have an existing MongoDB Atlas Vector Search index built for 384 dimensions, **startup fails with a dimension-mismatch error** (the `ensure_indexes` check compares the existing index's `numDimensions` against the configured model) until you pick one of the migration options below.
 
 ### Migration Options
 
@@ -89,9 +106,11 @@ The default embedding model has moved from `all-MiniLM-L6-v2` (384 dimensions) t
 docker compose up -d
 docker compose exec ollama ollama pull nomic-embed-text
 # Required for default LLM claim extraction (override via
-# LIBRARIAN_VERIFICATION__CLAIM_MODEL / LIBRARIAN_INGEST__EXTRACTION_MODEL):
+# LIBRARIAN_VERIFICATION_CLAIM_MODEL / LIBRARIAN_INGEST_EXTRACTION_MODEL):
 docker compose exec ollama ollama pull gemma2:2b
 ```
+
+All MongoDB indexes (including the Atlas vector index) are created automatically when the server starts — no manual index setup.
 
 **2. Install Python deps:**
 
@@ -135,8 +154,9 @@ LIBRARIAN_EMBEDDING_PROVIDER=sentence-transformers
 **4. Run:**
 
 ```bash
-python -m src
-# Server starts on http://localhost:8000
+uv run python -m src
+# Default transport is stdio (for MCP clients that spawn the process).
+# For an HTTP server on :8000, pass --transport sse or streamable-http.
 ```
 
 ## Setup guides (Cursor, Claude, Gemini / Antigravity)
@@ -237,6 +257,9 @@ Then:
 # Run tests (no external deps required)
 uv run pytest
 
+# With coverage (CI gates the test job at 80% on src/)
+uv run pytest --cov=src --cov-report=term
+
 # Lint + format
 uv run ruff check . && uv run ruff format .
 
@@ -247,7 +270,7 @@ uv run mypy src
 git ls-files -z '*.md' | xargs -0 -r uv run mdformat --check
 ```
 
-Tests use in-memory stubs for all services — no MongoDB or embedding model needed for the unit test suite. Integration tests in `tests/test_mongo_repository.py` require a running MongoDB instance; when one is not reachable those tests skip automatically (a fast ping with `serverSelectionTimeoutMS=500` decides).
+Tests use in-memory stubs for all services — no MongoDB or embedding model needed for the unit test suite. Integration tests in `tests/test_mongo_repository.py` and the full-lifespan e2e in `tests/test_e2e_live_mongo.py` require a running MongoDB instance (the e2e also needs the `sentence-transformers` extra); when a dependency is not reachable those tests skip automatically (a fast ping with `serverSelectionTimeoutMS=500` decides). In CI they run for real against a `mongodb/mongodb-atlas-local` service container.
 
 ### Test environment variables
 

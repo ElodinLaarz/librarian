@@ -305,12 +305,13 @@ Current concrete implementation. Stores each Tome as a JSON file under
 | `insert` | Writes `<uuid>.json` via `Tome.model_dump_json()` |
 | `delete` | Unlinks `<uuid>.json`; returns `False` if file not found |
 | `get_by_id` | Reads and deserialises `<uuid>.json` |
-| `search` | Brute-force scan of all `.json` files; filters by `min_confidence`; placeholder similarity score |
-| `find_near_duplicates` | Scans all files; placeholder comparison by title equality |
+| `search` | Brute-force scan of all `.json` files; filters by `min_confidence`; real cosine similarity against stored embeddings |
+| `find_near_duplicates` | Scans all files; cosine similarity above the configured tidy threshold |
 
-> **Note:** `search` and `find_near_duplicates` in `FsTomeRepository` use
-> placeholder logic. A production implementation (MongoDB or similar) will
-> replace these with proper vector similarity search against stored embeddings.
+> **Note:** `search` and `find_near_duplicates` in `FsTomeRepository` perform
+> real cosine-similarity scans against stored embeddings (the placeholder
+> logic this section originally described has been replaced). The MongoDB
+> backend uses Atlas `$vectorSearch` / `$search` instead.
 
 ______________________________________________________________________
 
@@ -481,6 +482,15 @@ All errors use this envelope:
 
 `details` is an optional free-form object; its structure is not stable across
 versions.
+
+> **Implementation note:** these string error codes were never built. The
+> shipped error model is the typed `StorageError` hierarchy in
+> `src/storage/errors.py` (`NotFoundError`, `DuplicateError`,
+> `BackendUnavailableError`) plus soft per-tool status/error strings in the
+> tool outputs (e.g. `library_delete` returns `error="invalid_id"`). The
+> *behaviours* described here exist — e.g. embedding-provider failure and
+> vector-index dimension mismatch both abort startup loudly — just not under
+> these code names.
 
 ______________________________________________________________________
 
