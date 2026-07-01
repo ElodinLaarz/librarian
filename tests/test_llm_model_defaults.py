@@ -40,12 +40,17 @@ async def test_lifespan_logs_llm_claim_extraction_enabled(
     caplog: pytest.LogCaptureFixture, tmp_path: object
 ) -> None:
     """The lifespan startup must emit a log line naming the LLM model in use."""
-    # Build a fresh server bound to filesystem storage so the lifespan
-    # initialises without requiring a live MongoDB.
-    from src.config import DatabaseSettings, LibrarianConfig
+    # Build a fresh server bound to filesystem storage with explicit dummy
+    # embeddings so the lifespan initialises without requiring a live MongoDB,
+    # sentence-transformers, or Ollama ('auto' now fails fast when neither
+    # real provider is available).
+    from src.config import DatabaseSettings, EmbeddingSettings, LibrarianConfig
     from src.server import LibrarianServer
 
-    cfg = LibrarianConfig(database=DatabaseSettings(uri=f"file://{tmp_path}"))
+    cfg = LibrarianConfig(
+        database=DatabaseSettings(uri=f"file://{tmp_path}"),
+        embedding=EmbeddingSettings(provider="dummy", dimensions=8),
+    )
     server = LibrarianServer(cfg)
 
     caplog.set_level(logging.INFO)
@@ -70,11 +75,17 @@ async def test_lifespan_logs_verification_disabled(
     caplog: pytest.LogCaptureFixture, tmp_path: object
 ) -> None:
     """When verification is disabled, the startup log must say so explicitly."""
-    from src.config import DatabaseSettings, LibrarianConfig, VerificationSettings
+    from src.config import (
+        DatabaseSettings,
+        EmbeddingSettings,
+        LibrarianConfig,
+        VerificationSettings,
+    )
     from src.server import LibrarianServer
 
     cfg = LibrarianConfig(
         database=DatabaseSettings(uri=f"file://{tmp_path}"),
+        embedding=EmbeddingSettings(provider="dummy", dimensions=8),
         verification=VerificationSettings(enabled=False),
     )
     server = LibrarianServer(cfg)
@@ -94,11 +105,17 @@ async def test_lifespan_logs_llm_claim_extraction_disabled(
     caplog: pytest.LogCaptureFixture, tmp_path: object
 ) -> None:
     """When verification is on but use_llm_claims=False, the heuristic note must log."""
-    from src.config import DatabaseSettings, LibrarianConfig, VerificationSettings
+    from src.config import (
+        DatabaseSettings,
+        EmbeddingSettings,
+        LibrarianConfig,
+        VerificationSettings,
+    )
     from src.server import LibrarianServer
 
     cfg = LibrarianConfig(
         database=DatabaseSettings(uri=f"file://{tmp_path}"),
+        embedding=EmbeddingSettings(provider="dummy", dimensions=8),
         verification=VerificationSettings(enabled=True, use_llm_claims=False),
     )
     server = LibrarianServer(cfg)

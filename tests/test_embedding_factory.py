@@ -31,13 +31,19 @@ async def test_build_embedding_service_auto_fallback_to_ollama() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_embedding_service_auto_fallback_to_dummy() -> None:
+async def test_build_embedding_service_auto_raises_when_no_real_provider() -> None:
+    """'auto' must fail loudly when neither real provider initializes.
+
+    A silent fallback to dummy (zero-vector) embeddings makes the server look
+    healthy while search ranks on garbage; the factory instead raises an
+    actionable error telling the operator how to fix it or opt in to dummy.
+    """
     settings = EmbeddingSettings(provider="auto", dimensions=384)
 
     # Mock ST to fail
     with patch("src.services.embedding.SentenceTransformerEmbeddingService") as mock_st:
         mock_st_instance = mock_st.return_value
-        mock_st_instance.initialize = AsyncMock(side_effect=ImportError())
+        mock_st_instance.initialize = AsyncMock(side_effect=ImportError("ST not found"))
 
         # Mock Ollama to fail
         with patch("src.services.embedding.OllamaEmbeddingService") as mock_ollama:
@@ -46,17 +52,27 @@ async def test_build_embedding_service_auto_fallback_to_dummy() -> None:
                 side_effect=httpx.ConnectError("Ollama down")
             )
 
-            # Mock Dummy to succeed
-            with patch("src.services.embedding.DummyEmbeddingService") as mock_dummy:
-                mock_dummy_instance = mock_dummy.return_value
-                mock_dummy_instance.initialize = AsyncMock()
+            with pytest.raises(RuntimeError) as exc_info:
+                await build_embedding_service(settings)
 
-                service = await build_embedding_service(settings)
-
-            assert service == mock_dummy_instance
             mock_st_instance.initialize.assert_called_once()
             mock_ollama_instance.initialize.assert_called_once()
-            mock_dummy_instance.initialize.assert_called_once()
+
+    message = str(exc_info.value)
+    # The error must name both failures and how to resolve them.
+    assert "ST not found" in message
+    assert "Ollama down" in message
+    assert "sentence-transformers" in message
+    assert "dummy" in message
+
+
+@pytest.mark.asyncio
+async def test_build_embedding_service_explicit_dummy_still_works() -> None:
+    """provider='dummy' remains a supported explicit opt-in."""
+    settings = EmbeddingSettings(provider="dummy", dimensions=8)
+    service = await build_embedding_service(settings)
+    vec = await service.embed("anything")
+    assert vec.shape == (8,)
 
 
 @pytest.mark.asyncio

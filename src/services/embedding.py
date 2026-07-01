@@ -22,9 +22,12 @@ logger = logging.getLogger(__name__)
 async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingService:
     """Factory to instantiate the correct embedding service based on settings.
 
-    In 'auto' mode, it attempts to load SentenceTransformers first, then Ollama,
-    and finally falls back to Dummy embeddings if neither is available or
-    fails to initialize.
+    In 'auto' mode, it attempts to load SentenceTransformers first, then
+    Ollama. If neither real provider is available it raises rather than
+    degrading: dummy embeddings are zero vectors, so a server that silently
+    fell back to them would look healthy while every search ranked on
+    garbage. Callers who genuinely want that (tests, plumbing checks) must
+    opt in with ``provider: dummy``.
     """
     provider = settings.provider
     service: EmbeddingService
@@ -51,6 +54,7 @@ async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingServi
             await service.initialize()
             return service
         except Exception as exc:
+            st_error = exc
             logger.warning(
                 "SentenceTransformers initialization failed, falling back to Ollama: %s",
                 exc,
@@ -62,15 +66,13 @@ async def build_embedding_service(settings: EmbeddingSettings) -> EmbeddingServi
             await service.initialize()
             return service
         except Exception as exc:
-            logger.warning(
-                "Ollama initialization failed, falling back to dummy: %s",
-                exc,
-            )
-
-        # 3. Fallback to Dummy
-        service = DummyEmbeddingService(settings)
-        await service.initialize()
-        return service
+            raise RuntimeError(
+                "No embedding provider available: sentence-transformers failed "
+                f"({st_error}) and Ollama at {settings.ollama_url} failed ({exc}). "
+                "Install the extra (`uv sync --extra sentence-transformers`), start "
+                "Ollama, or set embedding.provider to 'dummy' explicitly (zero "
+                "vectors — search will not rank meaningfully)."
+            ) from exc
 
     raise ValueError(f"Unknown embedding provider: {provider}")
 
