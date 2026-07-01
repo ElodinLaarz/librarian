@@ -468,9 +468,7 @@ async def test_wait_for_search_indexes_polls_until_queryable() -> None:
         ]
     )
     # Completes without raising once the second poll reports queryable.
-    await repo._wait_for_search_indexes(
-        ("vectors", "default"), timeout_s=5.0, poll_interval_s=0.01
-    )
+    await repo._wait_for_search_indexes(("vectors", "default"), timeout_s=5.0, poll_interval_s=0.01)
 
 
 @pytest.mark.asyncio
