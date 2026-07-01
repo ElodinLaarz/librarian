@@ -198,10 +198,12 @@ class LibrarianServer:
             "The Librarian",
             instructions=(
                 "An intelligent knowledge management server. Use library_search to "
-                "find information, library_get to fetch a single tome by ID, "
-                "library_ingest to store new knowledge, and library_research to gather "
-                "information from the web when the library is thin on a topic. Use "
-                "library_tidy to consolidate duplicates."
+                "find information, library_get to fetch a single tome by ID, and "
+                "library_list to browse/paginate without a query. Use library_ingest "
+                "to store new knowledge, library_update to patch a tome's mutable "
+                "fields, and library_delete to remove one. Use library_research to "
+                "gather information from the web when the library is thin on a "
+                "topic, and library_tidy to consolidate duplicates."
             ),
             lifespan=self.lifespan,
             host=self.config.server.host,
@@ -436,11 +438,14 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_search(params: SearchInput) -> SearchOutput:
-            """Search the library for relevant Tomes using semantic vector search.
+            """Search the library for relevant Tomes.
 
-            The returned ``content`` may be capped or snippet-ised to keep
-            agent context windows under control (issue #48). The full content
-            of any hit can be retrieved later via its ``tome_id``.
+            On the MongoDB backend this is hybrid Atlas lexical + vector
+            search fused with RRF; on the filesystem backend it is a cosine
+            similarity scan. The returned ``content`` may be capped or
+            snippet-ised to keep agent context windows under control
+            (issue #48). The full content of any hit can be retrieved later
+            via its ``tome_id`` with ``library_get``.
             """
             tome_repo = self._require(self.tome_repo, "tome_repo")
 
@@ -518,7 +523,14 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_ingest(params: IngestInput) -> IngestOutput:
-            """Ingest new knowledge into the library. Validates, chunks, embeds, and stores it."""
+            """Ingest new knowledge into the library.
+
+            Shards the content, verifies claims against web search (unless
+            ``skip_verify``; low-confidence shards are rejected), classifies,
+            titles, embeds, deduplicates, and stores the result. The response
+            status is ``stored``, ``partial``, or ``rejected`` — check
+            ``reject_reason`` for anything other than ``stored``.
+            """
             ingestor = self._require(self.ingestor, "ingestor")
             opts = IngestCallOptions(
                 skip_verify=params.skip_verify,
@@ -532,7 +544,13 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_research(params: ResearchInput) -> ResearchOutput:
-            """Research a topic on the web and ingest findings as new Tomes."""
+            """Research a topic on the web and ingest findings as new Tomes.
+
+            Two modes: with ``job_id`` set, this only polls an existing job's
+            status/results. Otherwise it creates a job and runs it — inline
+            by default, or in the background with ``async=true`` (returns
+            immediately with status ``pending``; poll with the ``job_id``).
+            """
             job_repo = self._require(self.job_repo, "job_repo")
             researcher = self._require(self.researcher, "researcher")
 
@@ -578,7 +596,11 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_get(params: GetInput) -> GetOutput:
-            """Fetch a single Tome by its UUID. Returns not_found if the ID is unknown."""
+            """Fetch a single Tome by its UUID.
+
+            Returns status ``not_found`` for an unknown ID and
+            ``invalid_tome_id`` for a malformed one, rather than raising.
+            """
             tome_repo = self._require(self.tome_repo, "tome_repo")
 
             raw_id = params.tome_id.strip()
@@ -608,7 +630,13 @@ class LibrarianServer:
 
         @self.mcp.tool()
         async def library_update(params: UpdateInput) -> UpdateOutput:
-            """Update one or more mutable fields of an existing Tome."""
+            """Update one or more mutable fields of an existing Tome.
+
+            Note: updating ``content`` does NOT regenerate the embedding —
+            semantic search keeps ranking the tome on its pre-update vector.
+            Re-ingest (optionally with ``supersedes_tome_ids``) when the
+            change should be reflected in search.
+            """
             tome_repo = self._require(self.tome_repo, "tome_repo")
 
             raw_id = params.tome_id.strip()
