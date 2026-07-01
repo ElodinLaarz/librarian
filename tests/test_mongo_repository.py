@@ -402,3 +402,108 @@ async def test_ensure_indexes_propagates_create_search_index_failure() -> None:
     with pytest.raises(StorageError) as ei:
         await repo.ensure_indexes()
     assert isinstance(ei.value.__cause__, OperationFailure)
+
+
+# ---------------------------------------------------------------------------
+# Startup wait for Atlas search-index readiness
+# ---------------------------------------------------------------------------
+
+
+class _SequentialAggregateIter:
+    """Async iterator over one pre-baked batch of documents."""
+
+    def __init__(self, items: list[dict]) -> None:
+        self._items = list(items)
+
+    def __aiter__(self) -> "_SequentialAggregateIter":
+        return self
+
+    async def __anext__(self) -> dict:
+        if not self._items:
+            raise StopAsyncIteration
+        return self._items.pop(0)
+
+
+def _build_repo_with_sequential_aggregate(batches: list[list[dict]]) -> MongoTomeRepository:
+    """Repo whose mocked aggregate returns each batch in turn (last one repeats).
+
+    Unlike ``_build_repo_with_mocked_collection`` — whose aggregate drains a
+    single shared list, so every later call sees nothing — this models a
+    server whose ``$listSearchIndexes`` output changes across polls.
+    """
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=False,
+        tls_cert_path="/dev/null",
+        database="test_library",
+    )
+    repo = MongoTomeRepository(settings, StubEmbeddingService())
+
+    collection = MagicMock()
+    collection.name = "tomes"
+    collection.database = MagicMock()
+    collection.database.create_collection = AsyncMock(return_value=None)
+    collection.create_index = AsyncMock(return_value=None)
+    collection.create_search_index = AsyncMock(return_value=None)
+
+    calls = {"n": 0}
+
+    def _aggregate(_pipeline: object) -> _SequentialAggregateIter:
+        index = min(calls["n"], len(batches) - 1)
+        calls["n"] += 1
+        return _SequentialAggregateIter(batches[index])
+
+    collection.aggregate = _aggregate
+    repo._collection = collection
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_wait_for_search_indexes_polls_until_queryable() -> None:
+    """The wait must keep polling while an index is still building."""
+    repo = _build_repo_with_sequential_aggregate(
+        [
+            [{"name": "vectors", "queryable": False}, {"name": "default", "queryable": True}],
+            [{"name": "vectors", "queryable": True}, {"name": "default", "queryable": True}],
+        ]
+    )
+    # Completes without raising once the second poll reports queryable.
+    await repo._wait_for_search_indexes(
+        ("vectors", "default"), timeout_s=5.0, poll_interval_s=0.01
+    )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_search_indexes_raises_storage_error_on_timeout() -> None:
+    """An index that never becomes queryable must fail startup loudly."""
+    repo = _build_repo_with_sequential_aggregate(
+        [[{"name": "vectors", "queryable": False}, {"name": "default", "queryable": True}]]
+    )
+    with pytest.raises(StorageError, match="vectors"):
+        await repo._wait_for_search_indexes(
+            ("vectors", "default"), timeout_s=0.05, poll_interval_s=0.01
+        )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_search_indexes_skips_when_status_not_reported() -> None:
+    """Backends that omit ``queryable`` cannot be polled — never hang startup."""
+    repo = _build_repo_with_sequential_aggregate([[{"name": "vectors"}, {"name": "default"}]])
+    # Returns immediately despite a timeout far shorter than one poll cycle.
+    await repo._wait_for_search_indexes(
+        ("vectors", "default"), timeout_s=0.05, poll_interval_s=10.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_indexes_waits_for_fresh_indexes_to_be_queryable() -> None:
+    """Full ensure_indexes flow: create both indexes, then block until ready."""
+    repo = _build_repo_with_sequential_aggregate(
+        [
+            [],  # initial enumeration: fresh DB, no search indexes yet
+            [{"name": "vectors", "queryable": False}, {"name": "default", "queryable": False}],
+            [{"name": "vectors", "queryable": True}, {"name": "default", "queryable": True}],
+        ]
+    )
+    await repo.ensure_indexes()
+    assert repo._collection.create_search_index.await_count == 2
