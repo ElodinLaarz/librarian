@@ -9,9 +9,17 @@ cleanly instead of being dropped mid-flight.
 from __future__ import annotations
 
 import asyncio
+import logging
+from pathlib import Path
 
 import pytest
 
+from src.config import (
+    DatabaseSettings,
+    EmbeddingSettings,
+    TidySettings,
+    VerificationSettings,
+)
 from src.server import LibrarianServer
 from tests.conftest import make_test_config
 
@@ -87,3 +95,60 @@ async def test_shutdown_swallows_task_exceptions(
         "boom during shutdown" in rec.getMessage() or "background" in rec.getMessage().lower()
         for rec in caplog.records
     ), "Expected an error log mentioning the failing background task"
+
+
+def _offline_fs_config(tmp_path: Path) -> object:
+    """A config the lifespan can fully start with zero external services."""
+    return make_test_config(
+        database=DatabaseSettings(uri=str(tmp_path), tls=False),
+        embedding=EmbeddingSettings(provider="dummy", dimensions=8),
+        verification=VerificationSettings(enabled=False),
+        tidy=TidySettings(enabled=False),
+    )
+
+
+async def test_lifespan_tears_down_when_body_raises(tmp_path: Path) -> None:
+    """An exception thrown into the running server must still release resources.
+
+    Regression guard: teardown used to sit after a bare ``yield`` with no
+    try/finally, so any exception skipped it entirely — leaking the Motor
+    client, the ingestor's httpx client, and background tasks.
+    """
+    server = LibrarianServer(_offline_fs_config(tmp_path))  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with server.lifespan(server.mcp):
+            assert server.tome_repo is not None
+            assert server.ingestor is not None
+            raise RuntimeError("boom")
+
+    assert server.tome_repo is None
+    assert server.job_repo is None
+    assert server.ingestor is None
+    assert server.tidier is None
+    assert server.researcher is None
+    assert server._embedding_service is None
+    assert server._bg_tasks == set()
+
+
+async def test_lifespan_logs_backend_and_embedding_provider(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Startup must announce which storage backend and embedding provider are live.
+
+    An operator reading the logs has to be able to tell whether tomes are
+    going to Mongo or to a filesystem directory (e.g. after a typo'd URI
+    silently selected the fallback), and which embedding model is active.
+    """
+    server = LibrarianServer(_offline_fs_config(tmp_path))  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.INFO):
+        async with server.lifespan(server.mcp):
+            pass
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("Storage backend: filesystem" in m for m in messages), messages
+    assert any(
+        "Embedding provider: DummyEmbeddingService" in m and "dimensions=8" in m for m in messages
+    ), messages
