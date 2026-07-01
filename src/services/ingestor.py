@@ -255,15 +255,17 @@ class Ingestor:
 
         # Mark superseded tomes (soft-delete) if specified
         if opts.supersedes_tome_ids and stored:
-            # When there are multiple stored tomes (from resharding), mark all
-            # old tomes as superseded by each new tome. For simplicity, mark them
-            # as superseded by the first stored tome.
-            # In practice, when supersedes_tome_ids is set, there should be one stored tome.
+            # When there are multiple stored tomes (from resharding), mark the
+            # old tomes as superseded by the first stored tome. In practice,
+            # when supersedes_tome_ids is set there should be one stored tome.
             new_tome_id = stored[0].id
+            supersede_failures: list[str] = []
             for old_tome_id_str in opts.supersedes_tome_ids:
                 try:
                     old_tome_id = UUID(old_tome_id_str)
-                    await self._tome_repo.mark_superseded(old_tome_id, new_tome_id)
+                    marked = await self._tome_repo.mark_superseded(old_tome_id, new_tome_id)
+                    if not marked:
+                        supersede_failures.append(f"{old_tome_id_str} (not found)")
                 except (ValueError, StorageError) as exc:
                     logging.warning(
                         "Failed to mark %s as superseded by %s: %s",
@@ -271,6 +273,16 @@ class Ingestor:
                         new_tome_id,
                         exc,
                     )
+                    supersede_failures.append(f"{old_tome_id_str} ({exc})")
+            if supersede_failures:
+                # The caller asked for supersession that did not happen — the
+                # old tomes are still live in search. Reporting STORED here
+                # would hide that, so degrade to PARTIAL with the reason.
+                any_rejected = True
+                reject_reasons.append(
+                    "Failed to mark tomes as superseded (they remain live in search): "
+                    + ", ".join(supersede_failures)
+                )
 
         status = IngestStatus.PARTIAL if any_rejected else IngestStatus.STORED
         final_reason = constants.JOIN_SEPARATOR.join(reject_reasons) if reject_reasons else None
@@ -345,10 +357,7 @@ class Ingestor:
             verification=verification_summary,
             created_at=datetime.now(UTC),
         )
-        try:
-            self._validate(tome, allow_short=opts.allow_short)
-        except ValueError as e:
-            raise e
+        self._validate(tome, allow_short=opts.allow_short)
         return tome
 
     async def consolidate(self, tomes: list[Tome], skip_verify: bool = False) -> list[Tome]:

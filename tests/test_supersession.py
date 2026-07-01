@@ -5,13 +5,16 @@ the old tome is marked with superseded_by field but not hard-deleted,
 and search filters it out by default (include_superseded=False).
 """
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
-from src.models.enums import SourceType
+from src.models.enums import IngestStatus, SourceType
 from src.models.tome import Tome
+from src.services.ingestor import IngestCallOptions
+from src.storage.errors import StorageError
 from src.storage.tome_repository import TomeRepository
+from tests.stubs import StubIngestor, StubTomeRepository
 
 
 @pytest.mark.asyncio
@@ -87,3 +90,47 @@ async def test_supersession_filtering(
     result_ids_with_superseded = [t.id for t, _ in results_with_superseded]
     assert tome_b.id in result_ids_with_superseded, "Should include B with include_superseded=True"
     assert tome_a.id in result_ids_with_superseded, "Should include A with include_superseded=True"
+
+
+@pytest.mark.asyncio
+async def test_ingest_reports_partial_when_supersede_target_missing(
+    ingestor: StubIngestor,
+) -> None:
+    """A supersede target that does not exist must degrade the status to partial.
+
+    Previously the failure was logged and swallowed: the response said
+    ``stored`` while the caller believed the old tome had been retired — it
+    remained live in every search.
+    """
+    output = await ingestor.ingest(
+        "Water boils at 100 C at sea level.",
+        IngestCallOptions(skip_verify=True, supersedes_tome_ids=[str(uuid4())]),
+    )
+    assert output.tomes, "the new content itself must still be stored"
+    assert output.status == IngestStatus.PARTIAL
+    assert output.reject_reason is not None
+    assert "not found" in output.reject_reason
+
+
+@pytest.mark.asyncio
+async def test_ingest_reports_partial_when_supersede_raises_storage_error(
+    ingestor: StubIngestor,
+    repo: StubTomeRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A storage failure during supersession must surface in the response."""
+
+    async def failing_mark_superseded(tome_id: UUID, by_tome_id: UUID) -> bool:
+        raise StorageError("mark_superseded backend down")
+
+    monkeypatch.setattr(repo, "mark_superseded", failing_mark_superseded)
+
+    output = await ingestor.ingest(
+        "Water boils at 100 C at sea level.",
+        IngestCallOptions(skip_verify=True, supersedes_tome_ids=[str(uuid4())]),
+    )
+    assert output.tomes, "the new content itself must still be stored"
+    assert output.status == IngestStatus.PARTIAL
+    assert output.reject_reason is not None
+    assert "superseded" in output.reject_reason
+    assert "backend down" in output.reject_reason
