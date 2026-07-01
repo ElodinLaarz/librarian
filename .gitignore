@@ -28,7 +28,6 @@ build/
 eggs/
 *.manifest
 *.spec
-.python-version
 .ipynb_checkpoints/
 
 # Virtual environments
