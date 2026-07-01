@@ -442,3 +442,120 @@ def test_no_pymongo_in_services() -> None:
         src = inspect.getsource(mod)
         assert "pymongo" not in src, f"{mod.__name__} leaks pymongo"
         assert "OSError" not in src, f"{mod.__name__} leaks OSError"
+
+
+# ── backfill: update / mark_superseded / list_all / count error paths ─────────
+
+
+async def test_mongo_update_returns_updated_tome(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    """Happy path for the previously-untested Mongo update()."""
+    from src.storage.mongo.mongo_tome import MongoTome
+
+    tome = _make_tome()
+    doc = MongoTome.from_tome(tome).model_dump(by_alias=True)
+    doc["category"] = "updated-category"
+    mongo_tome_repo._collection.find_one_and_update = AsyncMock(return_value=doc)
+
+    updated = await mongo_tome_repo.update(tome.id, category="updated-category")
+
+    assert updated is not None
+    assert updated.category == "updated-category"
+    call = mongo_tome_repo._collection.find_one_and_update.await_args
+    assert call.args[0] == {"_id": tome.id}
+    assert call.args[1] == {"$set": {"category": "updated-category"}}
+
+
+async def test_mongo_update_unknown_id_returns_none(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    mongo_tome_repo._collection.find_one_and_update = AsyncMock(return_value=None)
+    assert await mongo_tome_repo.update(uuid.uuid4(), category="x") is None
+
+
+async def test_mongo_update_pymongo_error_raises_storage_error(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    mongo_tome_repo._collection.find_one_and_update = AsyncMock(
+        side_effect=ConnectionFailure("down")
+    )
+    with pytest.raises(BackendUnavailableError):
+        await mongo_tome_repo.update(uuid.uuid4(), category="x")
+
+
+async def test_mongo_mark_superseded_pymongo_error_raises_storage_error(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    mongo_tome_repo._collection.update_one = AsyncMock(
+        side_effect=ServerSelectionTimeoutError("down")
+    )
+    with pytest.raises(BackendUnavailableError):
+        await mongo_tome_repo.mark_superseded(uuid.uuid4(), uuid.uuid4())
+
+
+async def test_mongo_list_all_pymongo_error_raises_storage_error(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    cursor = mock.MagicMock()
+    cursor.sort.return_value.skip.return_value.limit.return_value = _RaisingAsyncIter(
+        ConnectionFailure("down")
+    )
+    mongo_tome_repo._collection.find = mock.MagicMock(return_value=cursor)
+    with pytest.raises(BackendUnavailableError):
+        await mongo_tome_repo.list_all()
+
+
+async def test_mongo_count_pymongo_error_raises_storage_error(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    mongo_tome_repo._collection.count_documents = AsyncMock(
+        side_effect=ServerSelectionTimeoutError("down")
+    )
+    with pytest.raises(BackendUnavailableError):
+        await mongo_tome_repo.count()
+
+
+async def test_fs_update_write_failure_raises_storage_error(
+    fs_tome_repo: FsTomeRepository,
+) -> None:
+    tome = _make_tome()
+    await fs_tome_repo.insert(tome)
+    with (
+        mock.patch.object(Path, "write_text", side_effect=OSError("EIO")),
+        pytest.raises(StorageError),
+    ):
+        await fs_tome_repo.update(tome.id, category="x")
+
+
+async def test_fs_mark_superseded_write_failure_raises_storage_error(
+    fs_tome_repo: FsTomeRepository,
+) -> None:
+    tome = _make_tome()
+    await fs_tome_repo.insert(tome)
+    with (
+        mock.patch.object(Path, "write_text", side_effect=PermissionError("denied")),
+        pytest.raises(BackendUnavailableError),
+    ):
+        await fs_tome_repo.mark_superseded(tome.id, uuid.uuid4())
+
+
+async def test_fs_list_all_scan_failure_raises_storage_error(
+    fs_tome_repo: FsTomeRepository,
+) -> None:
+    """A directory-level failure (not per-file) must surface, not become []."""
+    with (
+        mock.patch.object(Path, "glob", side_effect=PermissionError("denied")),
+        pytest.raises(BackendUnavailableError),
+    ):
+        await fs_tome_repo.list_all()
+
+
+async def test_fs_count_scan_failure_raises_storage_error(
+    fs_tome_repo: FsTomeRepository,
+) -> None:
+    with (
+        mock.patch.object(Path, "glob", side_effect=PermissionError("denied")),
+        pytest.raises(BackendUnavailableError),
+    ):
+        await fs_tome_repo.count()

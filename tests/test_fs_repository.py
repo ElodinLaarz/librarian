@@ -341,3 +341,65 @@ async def test_find_all_near_duplicates_detects_semantic_only_groups(
 
     assert len(result.groups) == 1
     assert {tome.id for tome in result.groups[0]} == {t1.id, t2.id}
+
+
+# ── update() — previously 0% covered ─────────────────────────────────────────
+
+
+async def test_update_persists_fields_to_disk(repo: FsTomeRepository) -> None:
+    """Updated fields must survive a fresh read from disk."""
+    tome = _make_tome(category="science")
+    await repo.insert(tome)
+
+    updated = await repo.update(
+        tome.id,
+        category="history",
+        tags=["revised"],
+        source_url="https://example.com/src",
+        confidence=0.42,
+    )
+
+    assert updated is not None
+    assert updated.category == "history"
+
+    reread = await repo.get_by_id(tome.id)
+    assert reread is not None
+    assert reread.category == "history"
+    assert reread.tags == ["revised"]
+    assert reread.source_url == "https://example.com/src"
+    assert reread.confidence == pytest.approx(0.42)
+
+
+async def test_update_content_does_not_touch_embedding(repo: FsTomeRepository) -> None:
+    """Documents the current contract: content updates keep the old embedding.
+
+    Semantic search therefore ranks the tome on its pre-update vector. If
+    re-embedding on update is ever implemented, this test should flip.
+    """
+    tome = _make_tome()
+    await repo.insert(tome)
+    assert tome.embedding is not None
+
+    updated = await repo.update(tome.id, content="completely different content")
+
+    assert updated is not None
+    assert updated.content == "completely different content"
+    reread = await repo.get_by_id(tome.id)
+    assert reread is not None
+    assert reread.embedding is not None
+    np.testing.assert_array_almost_equal(reread.embedding, tome.embedding)
+
+
+async def test_update_unknown_id_returns_none(repo: FsTomeRepository) -> None:
+    assert await repo.update(uuid.uuid4(), category="anything") is None
+
+
+async def test_update_with_no_fields_returns_tome_unchanged(repo: FsTomeRepository) -> None:
+    tome = _make_tome(category="science")
+    await repo.insert(tome)
+
+    result = await repo.update(tome.id)
+
+    assert result is not None
+    assert result.category == "science"
+    assert result.content == tome.content
