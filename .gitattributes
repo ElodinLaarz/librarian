@@ -1,0 +1,5 @@
+# Markdown is checked by `mdformat --check` in CI, which emits LF; force LF on
+# checkout so the check is reproducible on Windows (core.autocrlf) clones.
+*.md text eol=lf
+# Shell scripts must stay LF to run inside the Linux containers / Git Bash.
+*.sh text eol=lf
