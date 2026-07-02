@@ -56,8 +56,8 @@ class SearchOutput(BaseModel):
     query_id: str
     from_cache: bool
     # 1:1 with ``tomes``. Exposed so that callers can request the full content
-    # of an individual hit (via a future ``library_get`` tool) when the
-    # returned snippet/truncated payload is insufficient.
+    # of an individual hit (via the ``library_get`` tool) when the returned
+    # snippet/truncated payload is insufficient.
     tome_ids: list[str] = Field(default_factory=list)
     # 1:1 with ``tomes``. ``True`` when the corresponding tome's ``content``
     # was truncated, snippeted, or dropped — i.e. the payload is no longer the

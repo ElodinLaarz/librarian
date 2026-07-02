@@ -403,3 +403,40 @@ async def test_update_with_no_fields_returns_tome_unchanged(repo: FsTomeReposito
     assert result is not None
     assert result.category == "science"
     assert result.content == tome.content
+
+
+# ── atomic writes ────────────────────────────────────────────────────────────
+
+
+async def test_atomic_write_leaves_no_temp_files(tmp_path: Path) -> None:
+    """Writes must go through temp-file + os.replace and clean up after themselves.
+
+    Regression guard for a race caught in CI: a research-job poll read a job
+    file mid-write (plain write_text truncates first), saw partial JSON, and
+    treated a live job as not_found.
+    """
+    from src.storage.filesystem.utils import atomic_write_text
+
+    target = tmp_path / "doc.json"
+    atomic_write_text(target, '{"v": 1}')
+    assert target.read_text() == '{"v": 1}'
+
+    # Overwrite an existing file (the mid-write race scenario).
+    atomic_write_text(target, '{"v": 2}')
+    assert target.read_text() == '{"v": 2}'
+
+    leftovers = [p for p in tmp_path.iterdir() if p.name != "doc.json"]
+    assert leftovers == [], f"stray temp files: {leftovers}"
+
+
+async def test_repo_writes_are_invisible_to_json_scans_while_in_flight(
+    repo: FsTomeRepository,
+) -> None:
+    """Temp files must never match the ``*.json`` glob used by list/search."""
+    tome = _make_tome()
+    await repo.insert(tome)
+    await repo.update(tome.id, category="rewritten")
+    await repo.mark_superseded(tome.id, uuid.uuid4())
+
+    files = list(repo._tomes_dir.iterdir())
+    assert [f.name for f in files] == [f"{tome.id}.json"]
