@@ -45,6 +45,7 @@ from src.services.verifier import Verifier
 from src.services.web_search import build_web_search_client
 from src.storage.filesystem.fs_research_job_repository import FsResearchJobRepository
 from src.storage.filesystem.fs_tome_repository import FsTomeRepository
+from src.storage.filesystem.utils import resolve_base_path
 from src.storage.mongo.client import build_motor_client
 from src.storage.mongo.mongo_research_job_repository import MongoResearchJobRepository
 from src.storage.mongo.mongo_tome_repository import MongoTomeRepository
@@ -58,6 +59,15 @@ EXAMPLE_CONFIG_FILENAME = "librarian.config.example.yaml"
 
 # Splits a search query into lexical terms used for snippet extraction.
 _QUERY_TERM_RE = re.compile(r"\w+", re.UNICODE)
+# Matches the userinfo (credentials) section of a connection URI.
+_URI_USERINFO_RE = re.compile(r"//[^@/]+@")
+
+
+def _redact_uri(uri: str) -> str:
+    """Strip userinfo credentials from a connection URI for safe logging."""
+    return _URI_USERINFO_RE.sub("//***@", uri)
+
+
 # Ellipsis appended when content is truncated. Kept as a constant so tests and
 # callers agree on the exact marker.
 _TRUNCATION_ELLIPSIS = "..."
@@ -283,82 +293,103 @@ class LibrarianServer:
 
     @asynccontextmanager
     async def lifespan(self, _server_mcp: FastMCP) -> AsyncIterator[None]:
-        """Initialise and tear down services around the server lifetime."""
-        self._embedding_service = await build_embedding_service(self.config.embedding)
+        """Initialise and tear down services around the server lifetime.
 
-        if self.config.database.uri.startswith("mongodb"):
-            # Build the single Motor client up front so both repos share one
-            # connection pool / TLS handshake (issue #25). Ownership lives on
-            # the server; repos receive it via ``client=`` and must NOT close
-            # it themselves.
-            self._mongo_client = build_motor_client(self.config.database)
-            self.tome_repo = MongoTomeRepository(
-                self.config.database,
-                self._embedding_service,
-                self.config.tidy,
-                client=self._mongo_client,
-            )
-            self.job_repo = MongoResearchJobRepository(
-                self.config.database,
-                client=self._mongo_client,
-            )
-            await self.tome_repo.ensure_indexes()
-        else:
-            self.tome_repo = FsTomeRepository(
-                self.config.database,
-                self._embedding_service,
-                self.config.tidy,
-            )
-            self.job_repo = FsResearchJobRepository(self.config.database)
-
-        web_client = build_web_search_client(self.config)
-        verifier = Verifier(self.config, web_client)
-        self.ingestor = Ingestor(self.config, self._embedding_service, verifier, self.tome_repo)
-        self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
-        self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
-
-        if not self.config.verification.enabled:
-            logging.info("Verification disabled; skipping claim extraction.")
-        elif self.config.verification.use_llm_claims:
+        The whole body — including startup — runs inside ``try``/``finally``:
+        every teardown step is None-guarded, so a failure at any point of
+        startup (or an exception thrown into the ``yield``) still releases
+        whatever was already built instead of leaking clients and tasks.
+        """
+        try:
+            self._embedding_service = await build_embedding_service(self.config.embedding)
             logging.info(
-                "LLM claim extraction enabled, model=%s (ollama=%s). "
-                "Run `ollama pull %s` if you have not already.",
-                self.config.verification.claim_model,
-                self.config.verification.ollama_base_url,
-                self.config.verification.claim_model,
+                "Embedding provider: %s (dimensions=%d)",
+                type(self._embedding_service).__name__,
+                self._embedding_service.dimensions,
             )
-        else:
-            logging.info("LLM claim extraction disabled; using heuristic sentence split.")
 
-        if self.config.tidy.enabled:
-            task = asyncio.create_task(self._tidy_loop())
-            self._track_background_task(task)
+            if self.config.database.uri.startswith("mongodb"):
+                # Build the single Motor client up front so both repos share one
+                # connection pool / TLS handshake (issue #25). Ownership lives on
+                # the server; repos receive it via ``client=`` and must NOT close
+                # it themselves.
+                self._mongo_client = build_motor_client(self.config.database)
+                self.tome_repo = MongoTomeRepository(
+                    self.config.database,
+                    self._embedding_service,
+                    self.config.tidy,
+                    client=self._mongo_client,
+                )
+                self.job_repo = MongoResearchJobRepository(
+                    self.config.database,
+                    client=self._mongo_client,
+                )
+                logging.info(
+                    "Storage backend: MongoDB database=%r via %s",
+                    self.config.database.database,
+                    _redact_uri(self.config.database.uri),
+                )
+                await self.tome_repo.ensure_indexes()
+            else:
+                self.tome_repo = FsTomeRepository(
+                    self.config.database,
+                    self._embedding_service,
+                    self.config.tidy,
+                )
+                self.job_repo = FsResearchJobRepository(self.config.database)
+                logging.info(
+                    "Storage backend: filesystem at %s",
+                    resolve_base_path(self.config.database.uri),
+                )
 
-        yield
+            web_client = build_web_search_client(self.config)
+            verifier = Verifier(self.config, web_client)
+            self.ingestor = Ingestor(self.config, self._embedding_service, verifier, self.tome_repo)
+            self.researcher = Researcher(self.config, web_client, self.ingestor, self.job_repo)
+            self.tidier = Tidier(self.ingestor, self.tome_repo, self.config.tidy)
 
-        # Cancel + await in-flight background tasks so they get a chance to
-        # unwind cleanly (issue #23) before we tear down their dependencies.
-        await self._shutdown_background_tasks(timeout=5.0)
+            if not self.config.verification.enabled:
+                logging.info("Verification disabled; skipping claim extraction.")
+            elif self.config.verification.use_llm_claims:
+                logging.info(
+                    "LLM claim extraction enabled, model=%s (ollama=%s). "
+                    "Run `ollama pull %s` if you have not already.",
+                    self.config.verification.claim_model,
+                    self.config.verification.ollama_base_url,
+                    self.config.verification.claim_model,
+                )
+            else:
+                logging.info("LLM claim extraction disabled; using heuristic sentence split.")
 
-        if self.job_repo:
-            self.job_repo.close()
-            self.job_repo = None
-        if self.tome_repo:
-            self.tome_repo.close()
-        # Repo .close() is a no-op for the shared client; the lifespan owns it
-        # and must tear it down here so the connection pool actually drains.
-        if self._mongo_client is not None:
-            self._mongo_client.close()
-            self._mongo_client = None
-        if self.ingestor is not None:
-            await self.ingestor.aclose()
-        if isinstance(self._embedding_service, OllamaEmbeddingService):
-            await self._embedding_service.aclose()
-        self._embedding_service = None
-        self.ingestor = None
-        self.tidier = None
-        self.tome_repo = None
-        self.researcher = None
+            if self.config.tidy.enabled:
+                task = asyncio.create_task(self._tidy_loop())
+                self._track_background_task(task)
+
+            yield
+        finally:
+            # Cancel + await in-flight background tasks so they get a chance to
+            # unwind cleanly (issue #23) before we tear down their dependencies.
+            await self._shutdown_background_tasks(timeout=5.0)
+
+            if self.job_repo:
+                self.job_repo.close()
+                self.job_repo = None
+            if self.tome_repo:
+                self.tome_repo.close()
+            # Repo .close() is a no-op for the shared client; the lifespan owns it
+            # and must tear it down here so the connection pool actually drains.
+            if self._mongo_client is not None:
+                self._mongo_client.close()
+                self._mongo_client = None
+            if self.ingestor is not None:
+                await self.ingestor.aclose()
+            if isinstance(self._embedding_service, OllamaEmbeddingService):
+                await self._embedding_service.aclose()
+            self._embedding_service = None
+            self.ingestor = None
+            self.tidier = None
+            self.tome_repo = None
+            self.researcher = None
 
     async def _tidy_loop(self) -> None:
         """Background loop for library tidying."""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ from src.storage.errors import (
 )
 from src.storage.filesystem.utils import resolve_base_path
 from src.storage.tome_repository import DuplicateScanResult, TomeRepository
+
+logger = logging.getLogger(__name__)
 
 
 def _cosine_similarity(a: NDArray[np.floating[Any]], b: NDArray[np.floating[Any]]) -> float:
@@ -84,6 +87,10 @@ class FsTomeRepository(TomeRepository):
                 tome = Tome.model_validate_json(path.read_text())
                 tomes.append(tome)
             except Exception:
+                # Preserve the "skip unreadable files" contract, but never
+                # silently: an operator must be able to tell corruption or a
+                # permission problem apart from an empty library.
+                logger.warning("Skipping unreadable tome file %s", path, exc_info=True)
                 continue
         return tomes
 
@@ -175,7 +182,9 @@ class FsTomeRepository(TomeRepository):
             return Tome.model_validate_json(content)
         except Exception:
             # JSON parse / schema mismatch — preserve previous "treat as
-            # absent" contract.
+            # absent" contract, but leave a trace so corruption is
+            # distinguishable from a genuinely missing tome.
+            logger.warning("Tome file %s is corrupt; treating as absent", path, exc_info=True)
             return None
 
     async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
@@ -292,15 +301,20 @@ class FsTomeRepository(TomeRepository):
         results by cosine similarity to each Tome's stored embedding.
         Tomes without an embedding are still included but scored 0.0.
         When include_superseded is False (default), filters out tomes marked as superseded.
+
+        Raises ``StorageError`` when the query cannot be embedded — returning
+        results anyway would rank every tome 0.0 in arbitrary order, which is
+        indistinguishable from a working search that found weak matches.
         """
         recency_weight = max(0.0, min(1.0, recency_weight))
         recency_half_life_days = max(0.0, recency_half_life_days)
-        query_vec: NDArray[np.float64] | None = None
         try:
             raw = await self._embedding_service.embed(query)
-            query_vec = np.array(raw, dtype=np.float64)
-        except Exception:
-            pass
+            query_vec: NDArray[np.float64] = np.array(raw, dtype=np.float64)
+        except Exception as exc:
+            raise StorageError(
+                f"search: failed to embed query via {type(self._embedding_service).__name__}"
+            ) from exc
 
         results: list[tuple[Tome, float]] = []
         try:
@@ -317,7 +331,7 @@ class FsTomeRepository(TomeRepository):
                 continue
 
             score = 0.0
-            if query_vec is not None and tome.embedding is not None:
+            if tome.embedding is not None:
                 score = _cosine_similarity(query_vec, np.array(tome.embedding, dtype=np.float64))
 
             results.append((tome, score))

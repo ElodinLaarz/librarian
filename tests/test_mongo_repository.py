@@ -505,3 +505,45 @@ async def test_ensure_indexes_waits_for_fresh_indexes_to_be_queryable() -> None:
     )
     await repo.ensure_indexes()
     assert repo._collection.create_search_index.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Vector-index dimension validation at startup
+# ---------------------------------------------------------------------------
+
+
+def _vectors_index_doc(num_dimensions: int) -> dict:
+    return {
+        "name": "vectors",
+        "queryable": True,
+        "latestDefinition": {
+            "fields": [{"type": "vector", "path": "embedding", "numDimensions": num_dimensions}]
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_ensure_indexes_raises_on_vector_dimension_mismatch() -> None:
+    """An embedding-model change against an existing index must fail startup.
+
+    Atlas silently stops indexing mismatched documents instead of erroring,
+    so without this check vector search quietly returns shrinking results.
+    The StubEmbeddingService used here reports 768 dimensions.
+    """
+    repo = _build_repo_with_sequential_aggregate(
+        [[_vectors_index_doc(384), {"name": "default", "queryable": True}]]
+    )
+    with pytest.raises(StorageError, match="numDimensions=384"):
+        await repo.ensure_indexes()
+    assert repo._collection.create_search_index.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_ensure_indexes_accepts_matching_vector_dimensions() -> None:
+    """Same dimensions as the configured model: startup proceeds normally."""
+    repo = _build_repo_with_sequential_aggregate(
+        [[_vectors_index_doc(768), {"name": "default", "queryable": True}]]
+    )
+    await repo.ensure_indexes()
+    # Both indexes already exist, so nothing is created.
+    assert repo._collection.create_search_index.await_count == 0

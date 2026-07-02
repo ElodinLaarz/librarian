@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from uuid import UUID
 
@@ -13,6 +14,8 @@ from src.storage.errors import (
 )
 from src.storage.filesystem.utils import resolve_base_path
 from src.storage.research_job_repository import ResearchJobRepository
+
+logger = logging.getLogger(__name__)
 
 
 class FsResearchJobRepository(ResearchJobRepository):
@@ -84,7 +87,9 @@ class FsResearchJobRepository(ResearchJobRepository):
             return ResearchJob.model_validate_json(content)
         except Exception:
             # JSON parse / schema mismatch — preserve previous "treat as
-            # absent" contract rather than raising.
+            # absent" contract rather than raising, but leave a trace so
+            # corruption is distinguishable from a genuinely missing job.
+            logger.warning("Job file %s is corrupt; treating as absent", path, exc_info=True)
             return None
 
     def all_jobs(self) -> list[ResearchJob]:
@@ -98,6 +103,7 @@ class FsResearchJobRepository(ResearchJobRepository):
             try:
                 jobs.append(ResearchJob.model_validate_json(path.read_text()))
             except Exception:
+                logger.warning("Skipping unreadable job file %s", path, exc_info=True)
                 continue
         return jobs
 

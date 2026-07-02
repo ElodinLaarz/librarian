@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from pydantic import ValidationError
 from pymongo.errors import (
     ConnectionFailure,
     DuplicateKeyError,
@@ -356,6 +357,64 @@ async def test_fs_job_insert_oserror_raises_storage_error(
         pytest.raises(StorageError),
     ):
         await fs_job_repo.insert(job)
+
+
+# ── query-embedding failures surface as StorageError ─────────────────────────
+
+
+class _ExplodingEmbeddingService(DummyEmbeddingService):
+    """Embedding service whose embed() always fails (provider outage)."""
+
+    async def embed(self, text: str) -> NDArray[np.float32]:
+        raise RuntimeError("embedding provider down")
+
+
+async def test_fs_search_embed_failure_raises_storage_error(tmp_path: Path) -> None:
+    """FS search must not silently degrade to 0.0 scores when embedding fails."""
+    settings = DatabaseSettings(uri=str(tmp_path), tomes_collection="tomes")
+    repo = FsTomeRepository(
+        settings,
+        _ExplodingEmbeddingService(EmbeddingSettings(dimensions=8)),
+        TidySettings(),
+    )
+    await repo.insert(_make_tome())
+    with pytest.raises(StorageError) as ei:
+        await repo.search("anything", min_confidence=0.0)
+    assert isinstance(ei.value.__cause__, RuntimeError)
+
+
+async def test_mongo_search_embed_failure_raises_storage_error(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    """Mongo search must wrap embedding failures instead of leaking them raw."""
+    mongo_tome_repo._embedding_service = _ExplodingEmbeddingService(EmbeddingSettings(dimensions=8))
+    with pytest.raises(StorageError) as ei:
+        await mongo_tome_repo.search("anything")
+    assert isinstance(ei.value.__cause__, RuntimeError)
+
+
+# ── corrupt documents surface as StorageError, not ValidationError ───────────
+
+
+async def test_mongo_get_by_id_corrupt_document_raises_storage_error(
+    mongo_tome_repo: MongoTomeRepository,
+) -> None:
+    """A schema-invalid Mongo document must not leak pydantic.ValidationError."""
+    mongo_tome_repo._collection.find_one = AsyncMock(
+        return_value={"_id": "not-a-uuid", "title": 42}
+    )
+    with pytest.raises(StorageError) as ei:
+        await mongo_tome_repo.get_by_id(uuid.uuid4())
+    assert isinstance(ei.value.__cause__, ValidationError)
+
+
+async def test_mongo_job_get_by_id_corrupt_document_raises_storage_error(
+    mongo_job_repo: MongoResearchJobRepository,
+) -> None:
+    mongo_job_repo._collection.find_one = AsyncMock(return_value={"_id": "garbage"})
+    with pytest.raises(StorageError) as ei:
+        await mongo_job_repo.get_by_id(uuid.uuid4())
+    assert isinstance(ei.value.__cause__, ValidationError)
 
 
 # ── service-layer structural assertions ──────────────────────────────────────

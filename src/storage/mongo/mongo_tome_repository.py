@@ -10,6 +10,7 @@ from uuid import UUID
 import numpy as np
 from bson.binary import Binary, BinaryVectorDtype
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from pydantic import ValidationError
 from pymongo.errors import (
     CollectionInvalid,
     ConnectionFailure,
@@ -71,6 +72,23 @@ def _is_atlas_search_unsupported(exc: OperationFailure) -> bool:
     return "$listsearchindexes" in message and (
         "unrecognized pipeline stage" in message or "unknown" in message
     )
+
+
+def _doc_to_tome(doc: Mapping[str, Any], context: str) -> Tome:
+    """Validate a raw Mongo document into a domain ``Tome``.
+
+    A document that no longer matches the schema (manual edits, a legacy
+    writer, a partial migration) is a storage-layer corruption problem:
+    surface it as ``StorageError`` instead of leaking pydantic's
+    ``ValidationError`` to services, which must never see backend or
+    serialization exception types.
+    """
+    try:
+        return MongoTome.model_validate(doc).to_tome()
+    except ValidationError as exc:
+        raise StorageError(
+            f"Corrupt tome document during {context} (_id={doc.get('_id')!r})"
+        ) from exc
 
 
 def _wrap_mongo(exc: PyMongoError, context: str) -> StorageError:
@@ -150,7 +168,7 @@ class MongoTomeRepository(TomeRepository):
             raise _wrap_mongo(exc, "get_by_id") from exc
         if not doc:
             return None
-        return MongoTome.model_validate(doc).to_tome()
+        return _doc_to_tome(doc, "get_by_id")
 
     async def mark_superseded(self, tome_id: UUID, by_tome_id: UUID) -> bool:
         """Mark tome_id as superseded by by_tome_id."""
@@ -210,7 +228,7 @@ class MongoTomeRepository(TomeRepository):
         results = []
         try:
             async for doc in cursor:
-                results.append(MongoTome.model_validate(doc).to_tome())
+                results.append(_doc_to_tome(doc, "list_all"))
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "list_all") from exc
         return results
@@ -271,7 +289,7 @@ class MongoTomeRepository(TomeRepository):
             raise _wrap_mongo(exc, "update") from exc
         if result is None:
             return None
-        return MongoTome.model_validate(result).to_tome()
+        return _doc_to_tome(result, "update")
 
     async def search(
         self,
@@ -291,7 +309,14 @@ class MongoTomeRepository(TomeRepository):
         """
         recency_weight = max(0.0, min(1.0, recency_weight))
         recency_half_life_days = max(0.0, recency_half_life_days)
-        query_embedding = await self._embedding_service.embed(query)
+        try:
+            query_embedding = await self._embedding_service.embed(query)
+        except Exception as exc:
+            # Repository callers only handle StorageError; an httpx / runtime
+            # failure from the embedding provider must not leak through.
+            raise StorageError(
+                f"search: failed to embed query via {type(self._embedding_service).__name__}"
+            ) from exc
         query_array = np.asarray(query_embedding, dtype=np.float32)
         # Atlas $vectorSearch raises OperationFailure for zero query vectors.
         # Fall back to lexical-only when the embedding is all zeros.
@@ -367,7 +392,7 @@ class MongoTomeRepository(TomeRepository):
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
-            results.append(MongoTome.model_validate(doc["document"]).to_tome())
+            results.append(_doc_to_tome(doc["document"], "search (lexical)"))
         return results
 
     async def _vector_search(
@@ -402,7 +427,7 @@ class MongoTomeRepository(TomeRepository):
 
         results: list[Tome] = []
         async for doc in self._collection.aggregate(pipeline):
-            results.append(MongoTome.model_validate(doc["document"]).to_tome())
+            results.append(_doc_to_tome(doc["document"], "search (vector)"))
         return results
 
     RRF_K = 60
@@ -500,7 +525,7 @@ class MongoTomeRepository(TomeRepository):
         duplicates = []
         try:
             async for doc in self._collection.aggregate(pipeline):
-                duplicates.append(MongoTome.model_validate(doc["document"]).to_tome())
+                duplicates.append(_doc_to_tome(doc["document"], "find_near_duplicates"))
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "find_near_duplicates") from exc
 
@@ -528,7 +553,7 @@ class MongoTomeRepository(TomeRepository):
         all_tomes: list[Tome] = []
         try:
             async for doc in cursor:
-                all_tomes.append(MongoTome.model_validate(doc).to_tome())
+                all_tomes.append(_doc_to_tome(doc, "find_all_near_duplicates"))
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "find_all_near_duplicates") from exc
 
@@ -584,11 +609,11 @@ class MongoTomeRepository(TomeRepository):
         except PyMongoError as exc:
             raise _wrap_mongo(exc, "ensure_indexes (standard indexes)") from exc
 
-        existing_search_indexes: list[str] = []
+        existing_search_indexes: dict[str, Mapping[str, Any]] = {}
 
         try:
             async for index in self._collection.aggregate([{"$listSearchIndexes": {}}]):
-                existing_search_indexes.append(index["name"])
+                existing_search_indexes[index["name"]] = index
         except OperationFailure as exc:
             if _is_atlas_search_unsupported(exc):
                 logger.warning(
@@ -604,6 +629,9 @@ class MongoTomeRepository(TomeRepository):
             raise _wrap_mongo(exc, "ensure_indexes (list search indexes)") from exc
 
         # 2. Define Vector Search Index
+        vectors_index = existing_search_indexes.get("vectors")
+        if vectors_index is not None:
+            self._check_vector_index_dimensions(vectors_index)
         if "vectors" not in existing_search_indexes:
             vector_model = SearchIndexModel(
                 definition={
@@ -650,6 +678,31 @@ class MongoTomeRepository(TomeRepository):
                 raise _wrap_mongo(exc, "create_search_index (default)") from exc
 
         await self._wait_for_search_indexes(("vectors", "default"))
+
+    def _check_vector_index_dimensions(self, index: Mapping[str, Any]) -> None:
+        """Fail fast when the existing vector index disagrees with the model.
+
+        Atlas does not error on a dimension mismatch — it silently stops
+        indexing documents whose embeddings do not fit the index, so after an
+        embedding-model change vector search quietly degrades to partial or
+        empty results. Startup is the one reliable place to catch that.
+        """
+        definition = index.get("latestDefinition") or index.get("definition") or {}
+        for field in definition.get("fields", []):
+            if field.get("type") == "vector" and field.get("path") == "embedding":
+                indexed = field.get("numDimensions")
+                configured = self._embedding_service.dimensions
+                if isinstance(indexed, int) and indexed != configured:
+                    raise StorageError(
+                        f"Atlas vector index 'vectors' was built for numDimensions={indexed}, "
+                        f"but the configured embedding model produces {configured}. Existing "
+                        "embeddings are incompatible with the new model: either restore the "
+                        "original embedding config, or drop the index and re-ingest."
+                    )
+                return
+        logger.debug(
+            "Existing 'vectors' index does not expose numDimensions; skipping dimension check"
+        )
 
     async def _wait_for_search_indexes(
         self,
