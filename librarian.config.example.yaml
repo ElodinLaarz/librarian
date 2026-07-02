@@ -79,7 +79,7 @@ verification:
   noop_confidence: 0.6
   ollama_base_url: http://localhost:11434
   # Ollama model used for claim extraction / verdicts.
-  claim_model: gemma4:e2b
+  claim_model: gemma2:2b
   use_llm_claims: true
   use_llm_verdict: true
   # Optional separate model for verdicts. Empty = reuse `claim_model`.
@@ -110,7 +110,7 @@ ingest:
     - History
     - Reference
     - Uncategorized
-  extraction_model: gemma4:e2b
+  extraction_model: gemma2:2b
   ollama_base_url: http://localhost:11434
 
 researcher:

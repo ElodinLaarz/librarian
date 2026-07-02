@@ -47,6 +47,11 @@ _ATLAS_SEARCH_UNSUPPORTED_CODE_NAMES = frozenset(
     }
 )
 
+# Upper bound on how long startup waits for freshly created Atlas search
+# indexes to become queryable. atlas-local builds them in seconds; real Atlas
+# on an empty collection takes well under a minute.
+_SEARCH_INDEX_READY_TIMEOUT_S = 120.0
+
 
 def _is_atlas_search_unsupported(exc: OperationFailure) -> bool:
     """Return True if the failure means the backend lacks Atlas Search at all.
@@ -539,6 +544,13 @@ class MongoTomeRepository(TomeRepository):
         silently swallowed (issue #27). The only legitimate skip is when the
         backend is plain mongod that lacks Atlas Search entirely; that case
         is detected via the server's codeName and logged as a warning.
+
+        Blocks until the Atlas search indexes report ``queryable`` (bounded
+        by ``_SEARCH_INDEX_READY_TIMEOUT_S``): Atlas builds search indexes
+        asynchronously after creation, and running $search/$vectorSearch
+        against a still-building index errors or silently returns nothing —
+        so without the wait, a freshly booted server rejects its first
+        ingests (dedup scan) and returns empty first searches.
         """
         # Ensure collection exists.
         try:
@@ -636,6 +648,54 @@ class MongoTomeRepository(TomeRepository):
                 raise StorageError("Failed to create Atlas lexical search index 'default'") from exc
             except PyMongoError as exc:
                 raise _wrap_mongo(exc, "create_search_index (default)") from exc
+
+        await self._wait_for_search_indexes(("vectors", "default"))
+
+    async def _wait_for_search_indexes(
+        self,
+        names: tuple[str, ...],
+        timeout_s: float = _SEARCH_INDEX_READY_TIMEOUT_S,
+        poll_interval_s: float = 1.0,
+    ) -> None:
+        """Block until the named Atlas search indexes report ``queryable``.
+
+        ``create_search_index`` returns as soon as the index is *registered*;
+        the actual build is asynchronous. Querying a still-building index
+        raises ``OperationFailure`` ($vectorSearch) or silently matches
+        nothing ($search), so serving requests before readiness turns into
+        rejected ingests and empty searches with no obvious cause. Backends
+        that do not report a ``queryable`` field cannot be polled; they are
+        skipped rather than hanging startup (mocked collections in unit
+        tests, some server versions).
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        pending = set(names)
+        while True:
+            queryable: dict[str, Any] = {}
+            try:
+                async for index in self._collection.aggregate([{"$listSearchIndexes": {}}]):
+                    name = index.get("name")
+                    if name in pending:
+                        queryable[name] = index.get("queryable")
+            except PyMongoError as exc:
+                raise _wrap_mongo(exc, "ensure_indexes (wait for search indexes)") from exc
+
+            if queryable and all(status is None for status in queryable.values()):
+                logger.debug(
+                    "Search indexes do not report queryable status; skipping readiness wait"
+                )
+                return
+
+            pending = {name for name in pending if not queryable.get(name)}
+            if not pending:
+                return
+            if loop.time() >= deadline:
+                raise StorageError(
+                    f"Atlas search indexes {sorted(pending)} did not become queryable "
+                    f"within {timeout_s:.0f}s of creation"
+                )
+            await asyncio.sleep(poll_interval_s)
 
     def close(self) -> None:
         """Close the MongoDB client connection if this repo owns it.
