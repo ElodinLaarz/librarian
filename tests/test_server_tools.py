@@ -780,3 +780,170 @@ async def test_library_update_persists_via_get() -> None:
     assert get_result.tome is not None
     assert get_result.tome.content == "updated content"
     assert get_result.tome.category == "physics"
+
+
+# ---------------------------------------------------------------------------
+# Backfill: previously-untested handler branches (coverage workstream)
+# ---------------------------------------------------------------------------
+
+
+async def test_library_tidy_handler_returns_numeric_report() -> None:
+    """The library_tidy MCP handler was never invoked by any test.
+
+    Guards the ``TidyOutput(**report)`` unpacking: if the Tidier report dict
+    shape drifts from the TidyOutput schema, this fails.
+    """
+    from src.models.tool_schemas import TidyInput
+    from src.services.tidier import Tidier
+    from tests.stubs import StubEmbeddingService, StubIngestor, StubVerifier
+
+    config = make_test_config()
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="Solo"))
+    ingestor = StubIngestor(
+        config, StubEmbeddingService(dimensions=config.embedding.dimensions), StubVerifier(), repo
+    )
+
+    server = _build_server_with_repo(repo)
+    server.tidier = Tidier(ingestor, repo, config.tidy)
+    library_tidy = _get_tool(server, "library_tidy")
+
+    out = await library_tidy(TidyInput())
+
+    assert out.scanned >= 0
+    assert out.groups_found >= 0
+    assert out.tomes_removed >= 0
+    assert out.elapsed_ms >= 0
+
+
+async def test_library_list_invalid_research_job_id_raises_value_error() -> None:
+    """A malformed research_job_id must raise, not silently return everything."""
+    from src.models.tool_schemas import ListInput
+
+    server = _build_server_with_repo(StubTomeRepository())
+    library_list = _get_tool(server, "library_list")
+
+    with pytest.raises(ValueError, match="research_job_id"):
+        await library_list(ListInput(research_job_id="not-a-uuid"))
+
+
+async def test_library_list_include_summary_false_blanks_summaries() -> None:
+    from src.models.tool_schemas import ListInput
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="A"))
+
+    server = _build_server_with_repo(repo)
+    library_list = _get_tool(server, "library_list")
+
+    out = await library_list(ListInput(include_summary=False))
+
+    assert out.tomes
+    assert all(t.summary == "" for t in out.tomes)
+
+
+async def test_library_search_include_summary_false_blanks_summaries() -> None:
+    from src.models.tool_schemas import SearchInput
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="A"))
+
+    server = _build_server_with_repo(repo)
+    library_search = _get_tool(server, "library_search")
+
+    out = await library_search(SearchInput(query="a", min_confidence=0.0, include_summary=False))
+
+    assert out.tomes
+    assert all(t.summary == "" for t in out.tomes)
+
+
+async def test_library_search_passes_filters_through_to_repo() -> None:
+    """The handler must forward top_k / min_confidence / category /
+    include_superseded to the repository rather than re-filtering itself."""
+    from unittest.mock import patch
+
+    from src.models.tool_schemas import SearchInput
+
+    repo = StubTomeRepository()
+    await repo.insert(_make_tome(title="A"))
+    server = _build_server_with_repo(repo)
+    library_search = _get_tool(server, "library_search")
+
+    with patch.object(repo, "search", wraps=repo.search) as mock_search:
+        await library_search(
+            SearchInput(
+                query="q",
+                top_k=7,
+                min_confidence=0.25,
+                category="science",
+                include_superseded=True,
+            )
+        )
+
+    mock_search.assert_awaited_once_with(
+        query="q",
+        top_k=7,
+        min_confidence=0.25,
+        category="science",
+        include_superseded=True,
+    )
+
+
+async def test_library_research_blank_topic_returns_invalid_input() -> None:
+    """No job_id and a whitespace topic must return invalid_input in-band."""
+    from unittest.mock import MagicMock
+
+    from src.models.tool_schemas import ResearchInput
+
+    server = _build_server_with_repo(StubTomeRepository())
+    # The handler requires these to be non-None, but the invalid-input branch
+    # returns before either is used.
+    server.job_repo = MagicMock()
+    server.researcher = MagicMock()
+    library_research = _get_tool(server, "library_research")
+
+    out = await library_research(ResearchInput(topic="   "))
+
+    assert out.status == "invalid_input"
+    assert out.error is not None
+
+
+async def test_library_research_sync_path_runs_job_to_completion() -> None:
+    """async_=False must run the job inline and return its final state."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.models.enums import ResearchJobStatus
+    from src.models.research_job import ResearchJob
+    from src.models.tool_schemas import ResearchInput
+
+    server = _build_server_with_repo(StubTomeRepository())
+
+    inserted: list[ResearchJob] = []
+
+    async def capture_insert(job: ResearchJob):
+        inserted.append(job)
+        return job.id
+
+    job_repo = MagicMock()
+    job_repo.insert = AsyncMock(side_effect=capture_insert)
+    server.job_repo = job_repo
+    researcher = MagicMock()
+    researcher.run_job = AsyncMock()
+    server.researcher = researcher
+    library_research = _get_tool(server, "library_research")
+
+    def make_completed(job_id):
+        return ResearchJob(
+            id=job_id,
+            topic="quantum ducks",
+            status=ResearchJobStatus.COMPLETED,
+        )
+
+    job_repo.get_by_id = AsyncMock(side_effect=lambda jid: make_completed(jid))
+
+    out = await library_research(ResearchInput(topic="quantum ducks", async_=False))
+
+    assert len(inserted) == 1
+    researcher.run_job.assert_awaited_once_with(inserted[0].id)
+    assert out.status == ResearchJobStatus.COMPLETED.value
+    assert server._bg_tasks == set(), "sync path must not schedule a background task"
