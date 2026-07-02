@@ -860,6 +860,8 @@ async def test_library_search_include_summary_false_blanks_summaries() -> None:
 async def test_library_search_passes_filters_through_to_repo() -> None:
     """The handler must forward top_k / min_confidence / category /
     include_superseded to the repository rather than re-filtering itself."""
+    from unittest.mock import patch
+
     from src.models.tool_schemas import SearchInput
 
     repo = StubTomeRepository()
@@ -867,30 +869,24 @@ async def test_library_search_passes_filters_through_to_repo() -> None:
     server = _build_server_with_repo(repo)
     library_search = _get_tool(server, "library_search")
 
-    captured: dict[str, object] = {}
-    original_search = repo.search
-
-    async def capturing_search(query, top_k=5, min_confidence=0.5, **kwargs):
-        captured.update({"query": query, "top_k": top_k, "min_confidence": min_confidence})
-        captured.update(kwargs)
-        return await original_search(query, top_k=top_k, min_confidence=min_confidence, **kwargs)
-
-    repo.search = capturing_search  # type: ignore[method-assign]
-
-    await library_search(
-        SearchInput(
-            query="q",
-            top_k=7,
-            min_confidence=0.25,
-            category="science",
-            include_superseded=True,
+    with patch.object(repo, "search", wraps=repo.search) as mock_search:
+        await library_search(
+            SearchInput(
+                query="q",
+                top_k=7,
+                min_confidence=0.25,
+                category="science",
+                include_superseded=True,
+            )
         )
-    )
 
-    assert captured["top_k"] == 7
-    assert captured["min_confidence"] == 0.25
-    assert captured["category"] == "science"
-    assert captured["include_superseded"] is True
+    mock_search.assert_awaited_once_with(
+        query="q",
+        top_k=7,
+        min_confidence=0.25,
+        category="science",
+        include_superseded=True,
+    )
 
 
 async def test_library_research_blank_topic_returns_invalid_input() -> None:
