@@ -149,8 +149,18 @@ def _make_live_config(database: str) -> LibrarianConfig:
 
 
 def _tool(server: LibrarianServer, name: str) -> Any:
-    """Look up a registered MCP tool handler by name."""
-    return next(t.fn for t in server.mcp._tool_manager.list_tools() if t.name == name)
+    """Look up a registered MCP tool handler by name.
+
+    FastMCP keeps handler callables in the private ``_tool_manager`` — there is
+    no public server-side registry — so this helper isolates that access to one
+    place and fails with an explicit message if a tool name ever drifts.
+    """
+    tools = server.mcp._tool_manager.list_tools()
+    for tool in tools:
+        if tool.name == name:
+            return tool.fn
+    registered = sorted(t.name for t in tools)
+    raise AssertionError(f"tool {name!r} is not registered; available: {registered}")
 
 
 # ── main E2E walk ───────────────────────────────────────────────────────────
@@ -272,7 +282,9 @@ async def test_e2e_live_mongo_full_production_path() -> None:
             # Leak-proof teardown: drop the unique test database (and its Atlas
             # search indexes) via the lifespan-owned Motor client, even if an
             # assertion above failed. The lifespan's own __aexit__ handles
-            # client / repo / background-task cleanup.
+            # client / repo / background-task cleanup. Guarded rather than
+            # asserted so a lifespan init failure surfaces instead of being
+            # masked by an AssertionError from the finally block.
             client = server._mongo_client
-            assert client is not None, "lifespan did not build a Mongo client"
-            await client.drop_database(database)
+            if client is not None:
+                await client.drop_database(database)

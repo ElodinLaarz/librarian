@@ -519,13 +519,18 @@ async def test_mongo_count_pymongo_error_raises_storage_error(
 async def test_fs_update_write_failure_raises_storage_error(
     fs_tome_repo: FsTomeRepository,
 ) -> None:
+    """A generic OSError exercises ``_wrap_os``'s fallback branch: plain
+    ``StorageError``, not ``BackendUnavailableError`` (reserved for
+    connectivity-style failures like the PermissionError in the
+    mark_superseded test below)."""
     tome = _make_tome()
     await fs_tome_repo.insert(tome)
     with (
         mock.patch.object(Path, "write_text", side_effect=OSError("EIO")),
-        pytest.raises(StorageError),
+        pytest.raises(StorageError) as excinfo,
     ):
         await fs_tome_repo.update(tome.id, category="x")
+    assert not isinstance(excinfo.value, BackendUnavailableError)
 
 
 async def test_fs_mark_superseded_write_failure_raises_storage_error(
