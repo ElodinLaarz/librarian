@@ -90,6 +90,19 @@ class IngestInput(BaseModel):
             "LLM/recursive text splitter."
         ),
     )
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Explicit confidence for the stored tomes. Replaces the "
+            "verification-derived or unverified-default confidence; the "
+            "verification reject gate still applies. Use for first-hand "
+            "knowledge ingested with skip_verify, which otherwise stores at "
+            "the unverified default and can fall below downstream "
+            "min_confidence search filters."
+        ),
+    )
 
 
 class IngestOutput(BaseModel):

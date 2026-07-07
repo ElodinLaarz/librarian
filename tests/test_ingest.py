@@ -434,6 +434,71 @@ async def test_skip_verify_bypasses_stub_verifier(config: LibrarianConfig) -> No
     assert output.tomes[0].confidence == pytest.approx(constants.DEFAULT_UNVERIFIED_CONFIDENCE)
 
 
+async def test_confidence_override_applies_with_skip_verify() -> None:
+    """An explicit confidence replaces the unverified default on skip_verify ingests."""
+    repo = StubTomeRepository()
+    ingestor, _, _ = make_stub_ingestor(repo=repo)
+
+    output = await ingestor.ingest(
+        "First-hand session note.",
+        IngestCallOptions(skip_verify=True, confidence=0.85),
+    )
+
+    assert output.status == IngestStatus.STORED
+    assert output.tomes[0].confidence == pytest.approx(0.85)
+
+
+async def test_confidence_override_replaces_verification_confidence(
+    config: LibrarianConfig,
+) -> None:
+    """When verification runs and passes, an explicit confidence still wins."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.95),
+        repo,
+    )
+    output = await ingestor.ingest(
+        "Verified content.",
+        IngestCallOptions(confidence=0.6),
+    )
+    assert output.status == IngestStatus.STORED
+    assert output.tomes[0].confidence == pytest.approx(0.6)
+
+
+async def test_confidence_override_does_not_rescue_rejected_content(
+    config: LibrarianConfig,
+) -> None:
+    """The verification reject gate applies before the override — no rescue."""
+    repo = StubTomeRepository()
+    ingestor = Ingestor(
+        config,
+        StubEmbeddingService(dimensions=config.embedding.dimensions),
+        StubVerifier(confidence=0.01),
+        repo,
+    )
+    output = await ingestor.ingest(
+        "Content the verifier rejects.",
+        IngestCallOptions(confidence=0.99),
+    )
+    assert output.status == IngestStatus.REJECTED
+    assert repo.all_tomes() == []
+
+
+async def test_confidence_override_is_clamped_to_valid_range() -> None:
+    """Out-of-range overrides are clamped at the service layer."""
+    repo = StubTomeRepository()
+    ingestor, _, _ = make_stub_ingestor(repo=repo)
+
+    output = await ingestor.ingest(
+        "Note with out-of-range confidence.",
+        IngestCallOptions(skip_verify=True, confidence=1.5),
+    )
+
+    assert output.tomes[0].confidence == pytest.approx(1.0)
+
+
 # ── reshard safety ────────────────────────────────────────────────────────────
 
 

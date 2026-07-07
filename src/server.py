@@ -538,6 +538,7 @@ class LibrarianServer:
                 tags_hint=params.tags,
                 source_url=params.source_url,
                 force_format=params.force_format,
+                confidence=params.confidence,
                 supersedes_tome_ids=params.supersedes_tome_ids,
             )
             return await ingestor.ingest(params.content, opts)

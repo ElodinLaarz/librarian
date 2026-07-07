@@ -21,7 +21,12 @@ from pathlib import Path
 
 # ── Config resolution ────────────────────────────────────────────────────────
 
-REPO = Path(os.environ.get("LIBRARIAN_REPO", Path.home() / "github/librarian"))
+# This script lives in <repo>/scripts/, so the repo root is derivable from the
+# script's own location. The old default (~/github/librarian) silently broke
+# config resolution on any machine with a different checkout path; the env var
+# remains as an explicit override.
+_DEFAULT_REPO = Path(__file__).resolve().parents[1]
+REPO = Path(os.environ.get("LIBRARIAN_REPO") or _DEFAULT_REPO)
 sys.path.insert(0, str(REPO))
 
 _CONFIG_CANDIDATES = [
