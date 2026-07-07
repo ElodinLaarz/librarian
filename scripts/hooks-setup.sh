@@ -31,7 +31,7 @@ echo "==> Installing Librarian hooks for Gemini CLI…"
 
 echo ""
 echo "All hooks installed. Summary:"
-echo "  Claude Code  ~/.claude/settings.json  (UserPromptSubmit hook)"
+echo "  Claude Code  ~/.claude/settings.json  (UserPromptSubmit + PostToolUse hooks)"
 echo "  Cursor       ~/.cursor/rules/librarian.mdc"
 echo "  Antigravity  ~/.gemini/GEMINI.md"
 echo "  Gemini CLI   ~/.gemini/settings.json (AfterAgent/AfterTool hooks)"
