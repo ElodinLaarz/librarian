@@ -101,6 +101,17 @@ class IngestCallOptions:
     # job topic).
     extra_tags: list[str] | None = None
     force_format: DetectedFormat | None = None
+    confidence: float | None = None
+    """Explicit confidence for the stored tomes, in [0.0, 1.0].
+
+    When set, it replaces both the verification-derived confidence and
+    ``ingest.unverified_confidence``. The verification reject gate still
+    applies — an override sets the stored value, it does not rescue content
+    that verification rejected. Intended for first-hand knowledge ingested
+    with ``skip_verify`` (agent session notes, memory mirrors), which would
+    otherwise land at the unverified default and can fall below downstream
+    ``min_confidence`` retrieval filters.
+    """
     allow_short: bool = False
     """When True, _validate skips the minimum-shard-size floor.
 
@@ -319,6 +330,9 @@ class Ingestor:
             # disabled" so search consumers can distinguish it from a real run
             # with zero claims (e.g. offline verifier).
             verification_summary = VerificationSummary(skipped=True)
+
+        if opts.confidence is not None:
+            confidence = min(1.0, max(0.0, opts.confidence))
 
         (category, tags), (title, summary), embedding = await asyncio.gather(
             self._classify_and_tag(text, opts.category_hint, opts.tags_hint),

@@ -70,6 +70,21 @@ def test_expected_tools_are_registered() -> None:
     assert "library_update" in tool_names
 
 
+def test_ingest_input_confidence_bounds() -> None:
+    """IngestInput.confidence must accept [0, 1] and reject out-of-range values."""
+    from pydantic import ValidationError
+
+    from src.models.tool_schemas import IngestInput
+
+    assert IngestInput(content="x").confidence is None
+    assert IngestInput(content="x", confidence=0.0).confidence == 0.0
+    assert IngestInput(content="x", confidence=1.0).confidence == 1.0
+    with pytest.raises(ValidationError):
+        IngestInput(content="x", confidence=1.5)
+    with pytest.raises(ValidationError):
+        IngestInput(content="x", confidence=-0.1)
+
+
 def test_no_unexpected_tools_registered() -> None:
     """Guard against accidental extra tool registrations."""
     mcp = _build_mcp()
