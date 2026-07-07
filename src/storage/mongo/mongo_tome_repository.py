@@ -499,6 +499,13 @@ class MongoTomeRepository(TomeRepository):
             return []
 
         effective_threshold = threshold if threshold is not None else self._tidy_settings.threshold
+        # The configured threshold is a raw cosine similarity (the filesystem
+        # backend compares numpy cosine against it directly). Atlas
+        # $vectorSearch returns vectorSearchScore = (1 + cosine) / 2 for
+        # cosine indexes, so convert into score space before matching —
+        # otherwise this backend dedupes at a materially looser bar than
+        # configured (cosine 0.90 when the setting says 0.95).
+        score_threshold = (1.0 + effective_threshold) / 2.0
         query_vector = Binary.from_vector(
             np.asarray(tome.embedding, dtype=np.float32).tolist(), BinaryVectorDtype.FLOAT32
         )
@@ -516,7 +523,7 @@ class MongoTomeRepository(TomeRepository):
             {"$project": {"score": {"$meta": "vectorSearchScore"}, "document": "$$ROOT"}},
             {
                 "$match": {
-                    "score": {"$gte": effective_threshold},
+                    "score": {"$gte": score_threshold},
                     "document._id": {"$ne": tome.id},
                 }
             },
