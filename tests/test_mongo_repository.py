@@ -293,6 +293,52 @@ async def test_ensure_indexes_skips_when_atlas_search_unsupported(
     assert repo._collection.create_search_index.await_count == 0
 
 
+@pytest.mark.asyncio
+async def test_find_near_duplicates_converts_cosine_threshold_to_atlas_score() -> None:
+    """The cosine threshold must be converted into Atlas vectorSearchScore space.
+
+    Atlas $vectorSearch returns (1 + cosine) / 2 for cosine indexes, while the
+    configured tidy threshold is a raw cosine (the filesystem backend compares
+    numpy cosine directly). Matching the raw threshold against the normalized
+    score made the Mongo backend dedupe at cosine 0.90 when configured for
+    0.95. Network-free: captures the aggregation pipeline off a mocked
+    collection and inspects the $match stage.
+    """
+    repo = _build_repo_with_mocked_collection(aggregate_documents=[])
+    captured: list[list[dict]] = []
+    original_aggregate = repo._collection.aggregate
+
+    def _capturing_aggregate(pipeline: list[dict]) -> object:
+        captured.append(pipeline)
+        return original_aggregate(pipeline)
+
+    repo._collection.aggregate = _capturing_aggregate
+
+    tome = Tome(
+        id=uuid.uuid4(),
+        title="Doc",
+        content="Content",
+        summary="Summary",
+        category="test",
+        source_type=SourceType.MANUAL,
+        tags=["tag"],
+        embedding=np.array([0.1] * 768, dtype=np.float32),
+        confidence=0.9,
+    )
+
+    await repo.find_near_duplicates(tome, threshold=0.9)
+    match_stage = next(stage["$match"] for stage in captured[0] if "$match" in stage)
+    assert match_stage["score"]["$gte"] == pytest.approx((1.0 + 0.9) / 2.0)
+
+    # Default path: the configured tidy threshold (0.95) converts the same way.
+    captured.clear()
+    await repo.find_near_duplicates(tome)
+    match_stage = next(stage["$match"] for stage in captured[0] if "$match" in stage)
+    assert match_stage["score"]["$gte"] == pytest.approx(
+        (1.0 + repo._tidy_settings.threshold) / 2.0
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared Motor client across Mongo repositories (issue #25)
 # ---------------------------------------------------------------------------
