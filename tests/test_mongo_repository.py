@@ -365,6 +365,53 @@ def test_build_motor_client_sets_timeout_defaults() -> None:
         client.close()
 
 
+def test_build_motor_client_omits_tls_kwarg_when_disabled() -> None:
+    """With ``tls: false`` the factory must not pass ``tls`` to the driver at all.
+
+    Forcing ``tls=False`` overrides the scheme-based default, which breaks
+    ``mongodb+srv://`` URIs (Atlas implies TLS and closes every plain
+    connection). Regression guard for the Atlas migration fix.
+    """
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=False,
+        tls_cert_path="/dev/null",
+        database="test_library",
+    )
+    captured: dict[str, object] = {}
+
+    def _capture(uri: str, **kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch("src.storage.mongo.client.AsyncIOMotorClient", side_effect=_capture):
+        build_motor_client(settings)
+
+    assert "tls" not in captured
+    assert "tlsCertificateKeyFile" not in captured
+
+
+def test_build_motor_client_passes_tls_kwargs_when_enabled() -> None:
+    """With ``tls: true`` the factory must pass ``tls`` and the expanded cert path."""
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=True,
+        tls_cert_path="~/certs/mongo.pem",
+        database="test_library",
+    )
+    captured: dict[str, object] = {}
+
+    def _capture(uri: str, **kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch("src.storage.mongo.client.AsyncIOMotorClient", side_effect=_capture):
+        build_motor_client(settings)
+
+    assert captured["tls"] is True
+    assert captured["tlsCertificateKeyFile"] == os.path.expanduser("~/certs/mongo.pem")
+
+
 def test_build_list_filter_empty_when_no_args() -> None:
     """Default ``list_all`` call must produce a no-op Mongo filter."""
     assert (

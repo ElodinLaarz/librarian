@@ -46,8 +46,9 @@ def build_motor_client(
     if settings.tls:
         kwargs["tls"] = True
         kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
-    else:
-        kwargs["tls"] = False
+    # When ``tls`` is not explicitly enabled, omit the kwarg entirely so the
+    # driver's scheme-based default applies: ``mongodb+srv://`` URIs imply TLS,
+    # and forcing ``tls=False`` makes Atlas close every connection.
 
     kwargs.update(extra)
 
