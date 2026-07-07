@@ -365,6 +365,41 @@ def test_build_motor_client_sets_timeout_defaults() -> None:
         client.close()
 
 
+def test_build_motor_client_omits_tls_kwargs_when_disabled() -> None:
+    """With ``tls: false`` the factory must not pass any TLS kwarg at all.
+
+    PyMongo kwargs override URI semantics, and ``mongodb+srv://`` (Atlas)
+    implies TLS — an explicit ``tls=False`` kwarg would break the handshake.
+    The driver must be left to infer TLS from the URI scheme.
+    """
+    settings = DatabaseSettings(
+        uri="mongodb+srv://user:pass@cluster0.example.mongodb.net/",
+        tls=False,
+        tls_cert_path="",
+        database="test_library",
+    )
+    with patch("src.storage.mongo.client.AsyncIOMotorClient") as mock_client:
+        build_motor_client(settings)
+    kwargs = mock_client.call_args.kwargs
+    assert "tls" not in kwargs
+    assert "tlsCertificateKeyFile" not in kwargs
+
+
+def test_build_motor_client_passes_tls_kwargs_when_enabled() -> None:
+    """With ``tls: true`` the factory must pass tls + expanded cert path."""
+    settings = DatabaseSettings(
+        uri=TEST_MONGO_URI,
+        tls=True,
+        tls_cert_path="~/certs/client.pem",
+        database="test_library",
+    )
+    with patch("src.storage.mongo.client.AsyncIOMotorClient") as mock_client:
+        build_motor_client(settings)
+    kwargs = mock_client.call_args.kwargs
+    assert kwargs["tls"] is True
+    assert kwargs["tlsCertificateKeyFile"] == os.path.expanduser("~/certs/client.pem")
+
+
 def test_build_list_filter_empty_when_no_args() -> None:
     """Default ``list_all`` call must produce a no-op Mongo filter."""
     assert (

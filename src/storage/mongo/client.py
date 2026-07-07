@@ -43,11 +43,13 @@ def build_motor_client(
         "connectTimeoutMS": DEFAULT_CONNECT_TIMEOUT_MS,
         "socketTimeoutMS": DEFAULT_SOCKET_TIMEOUT_MS,
     }
+    # Only pass TLS kwargs when explicitly enabled. PyMongo kwargs override URI
+    # semantics, and `mongodb+srv://` URIs (Atlas) imply TLS — an explicit
+    # tls=False here would break the Atlas handshake. With no kwarg the driver
+    # infers TLS from the URI scheme: plain `mongodb://` stays plaintext.
     if settings.tls:
         kwargs["tls"] = True
         kwargs["tlsCertificateKeyFile"] = os.path.expanduser(settings.tls_cert_path)
-    else:
-        kwargs["tls"] = False
 
     kwargs.update(extra)
 
