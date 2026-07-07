@@ -32,7 +32,7 @@ The backend is selected by `database.uri` (or `LIBRARIAN_DATABASE_URI`):
 - A URI starting with `mongodb` selects **MongoDB** (Atlas-capable, e.g. the `mongodb/mongodb-atlas-local` container from `docker-compose.yml`). All indexes — standard secondary indexes **and** the Atlas Vector Search + lexical search indexes — are created automatically at startup and the server waits for them to become queryable; there is no manual index setup. If an existing vector index was built for a different embedding dimensionality than the configured model, startup fails with a migration hint instead of letting search silently degrade.
 - Any other value selects the **filesystem** backend: tomes are stored as JSON files and search is a brute-force cosine scan (no lexical component). `file:///abs/path` and plain paths are used as-is; an empty string or `localhost` maps to `~/.librarian_mcp`. Beware: a typo'd Mongo URI (e.g. `mongo://…`) therefore silently selects the filesystem backend — the active backend is logged at startup, so check the log line `Storage backend: …` if tomes seem to vanish.
 
-See [docs/e2e.md](docs/e2e.md) for the repeatable end-to-end runbook (Docker path, no-Docker filesystem path, and the live e2e test).
+See [docs/e2e.md](docs/e2e.md) for the repeatable end-to-end runbook (Docker path, no-Docker filesystem path, and the live e2e test), and [docs/claude-code-hooks.md](docs/claude-code-hooks.md) for wiring the Claude Code memory loop (search-on-prompt context injection + auto-mirroring of Claude Code file memories into the library).
 
 ## Embedding providers
 
