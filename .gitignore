@@ -1,5 +1,6 @@
 # Personal AI assistant context files
 CLAUDE.md
+!CLAUDE.md
 GEMINI.md
 .claude/
 .gemini/
